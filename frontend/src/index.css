@@ -52,11 +52,37 @@ body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 .ffilter { cursor: pointer; }
 .bf-npv { font-variant-numeric: tabular-nums; color: #3f3f46; min-width: 54px; text-align: right; }
 .caveat { font-size: 11px; color: #92400e; background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; padding: 6px 8px; margin-top: 6px; line-height: 1.4; }
+.cull-line { color: #b91c1c; display: flex; align-items: center; gap: 8px; }
 .fcat-block { margin-bottom: 6px; }
 .fcat { font-weight: 600; font-size: 11px; color: #52525b; margin: 5px 0 2px; text-transform: uppercase; letter-spacing: 0.03em; }
 .ffilter input { flex: none; }
 
-.production { left: 254px; right: 276px; bottom: 12px; min-height: 120px; padding: 8px 10px; }
+/* Floating, draggable, resizable bottom window (Production / Gunbarrel). */
+.floatwin {
+  position: fixed;
+  width: 860px;
+  height: 460px;
+  min-width: 460px;
+  min-height: 240px;
+  max-width: 96vw;
+  max-height: 88vh;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid #d4d4d8;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+  resize: both;
+  overflow: hidden;
+}
+.win-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 6px 10px; cursor: move; user-select: none;
+  background: #f4f4f5; border-bottom: 1px solid #e4e4e7; border-radius: 8px 8px 0 0;
+}
+.win-title { font-size: 12px; font-weight: 600; color: #3f3f46; }
+.win-body { flex: 1; overflow: auto; padding: 8px 12px; }
 .prod-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
 .prod-head strong { font-size: 12px; }
 .seg.sm { margin: 0; }
@@ -66,6 +92,11 @@ body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 .prod-load button:disabled { opacity: 0.6; cursor: default; }
 button.link { background: none; border: none; color: #2563eb; cursor: pointer; font-size: 12px; text-decoration: underline; padding: 0; }
 .well-tag { font-size: 11.5px; color: #111827; display: inline-flex; align-items: center; gap: 6px; }
+.tabs { margin-bottom: 8px; max-width: 220px; }
+.gb-wrap { display: flex; flex-direction: column; gap: 4px; }
+.gb-grid { display: flex; flex-wrap: wrap; gap: 8px; align-content: flex-start; }
+.gb-legend { margin-left: 8px; color: #52525b; }
+.gb-legend span { margin-right: 8px; }
 
 .maplibregl-popup-content { font-size: 12px; padding: 8px 10px; }
 .mtt-name { font-weight: 600; margin-bottom: 4px; }

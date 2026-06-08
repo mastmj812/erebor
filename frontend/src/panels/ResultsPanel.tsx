@@ -1,5 +1,5 @@
 import { colorForFormation } from "../map/formations";
-import { useMapStore, type DiscountRate, type SelectionGroup } from "../store";
+import { useMapStore, type DiscountRate, type SelectionStick } from "../store";
 
 const CAT_ORDER = ["PDP", "PUD", "RES"] as const;
 const CAT_LABEL: Record<string, string> = { PDP: "PDP", PUD: "PUD", RES: "RESOURCE" };
@@ -18,27 +18,36 @@ export function ResultsPanel() {
   const sel = useMapStore((s) => s.selection);
   const excluded = useMapStore((s) => s.excludedFormations);
   const toggleFormation = useMapStore((s) => s.toggleFormation);
+  const excludedSticks = useMapStore((s) => s.excludedSticks);
+  const clearCulls = useMapStore((s) => s.clearCulls);
   const rate = useMapStore((s) => s.discountRate);
   const setDiscountRate = useMapStore((s) => s.setDiscountRate);
   const metric = useMapStore((s) => s.valueMetric);
   const setValueMetric = useMapStore((s) => s.setValueMetric);
   if (!sel) return null;
 
-  const key = `${metric}${rate}` as keyof SelectionGroup;
-  const exSet = new Set(excluded);
+  const valKey = `${metric}${rate}` as keyof SelectionStick;
+  const exForm = new Set(excluded);
+  const exStick = new Set(excludedSticks);
+
   const cats: Record<string, { count: number; value: number }> = {
     PDP: { count: 0, value: 0 }, PUD: { count: 0, value: 0 }, RES: { count: 0, value: 0 },
   };
-  // Formations per category, for the split checklist.
   const catForms: Record<string, Map<string, { count: number; value: number }>> = {
     PDP: new Map(), PUD: new Map(), RES: new Map(),
   };
-  for (const g of sel.groups) {
-    const v = Number(g[key]);
-    catForms[g.category].set(g.formation, { count: g.count, value: v });
-    if (!exSet.has(g.formation)) {
-      cats[g.category].count += g.count;
-      cats[g.category].value += v;
+  let culled = 0;
+  const pads = new Set<string>();
+  for (const s of sel.sticks) {
+    if (exStick.has(s.stick_id)) { culled++; continue; } // culled -> contributes to nothing
+    const v = Number(s[valKey]);
+    const fm = catForms[s.category].get(s.formation) ?? { count: 0, value: 0 };
+    fm.count++; fm.value += v;
+    catForms[s.category].set(s.formation, fm);
+    if (!exForm.has(s.formation)) {
+      cats[s.category].count++;
+      cats[s.category].value += v;
+      if (s.pad_name) pads.add(`${s.category}|${s.pad_name}`);
     }
   }
   const total = cats.PDP.value + cats.PUD.value + cats.RES.value;
@@ -51,10 +60,16 @@ export function ResultsPanel() {
     <div className="panel results">
       <h3>Selection ({sel.rule})</h3>
       <div className="count">
-        {includedCount.toLocaleString()} of {sel.count.toLocaleString()} sticks
-        {excluded.length ? ` · ${excluded.length} formation${excluded.length > 1 ? "s" : ""} excluded` : ""}
+        {includedCount.toLocaleString()} of {sel.count.toLocaleString()} sticks in rollup
+        {excluded.length ? ` · ${excluded.length} formation${excluded.length > 1 ? "s" : ""} off` : ""}
         {sel.truncated ? " · capped 20k" : ""}
       </div>
+      {culled > 0 && (
+        <div className="count cull-line">
+          ✂ {culled} well{culled > 1 ? "s" : ""} culled
+          <button className="link" onClick={() => clearCulls()}>clear culls</button>
+        </div>
+      )}
 
       <h3 style={{ marginTop: 8 }}>Value basis</h3>
       <div className="seg">
@@ -65,9 +80,6 @@ export function ResultsPanel() {
         {RATES.map((r) => (
           <button key={r} className={rate === r ? "active" : ""} onClick={() => setDiscountRate(r)}>{r}%</button>
         ))}
-      </div>
-      <div className="count" style={{ marginTop: 2 }}>
-        {metric === "npv" ? "NPV = value net of well cost" : "PV = value before well cost"}, discounted {rate}%/yr
       </div>
 
       <h3 style={{ marginTop: 8 }}>{metricLabel}{rate} rollup</h3>
@@ -87,7 +99,7 @@ export function ResultsPanel() {
           </tr>
         </tbody>
       </table>
-      <div className="count">{fmtInt(futureLoc)} future locations (PUD + RESOURCE)</div>
+      <div className="count">{fmtInt(futureLoc)} future locations (PUD + RESOURCE) · {pads.size} pads</div>
 
       <h3 style={{ marginTop: 10 }}>Formations (include / exclude)</h3>
       {CAT_ORDER.map((c) => {
@@ -98,7 +110,7 @@ export function ResultsPanel() {
             <div className="fcat">{CAT_LABEL[c]}</div>
             <div className="byform">
               {rows.map(([f, v]) => {
-                const on = !exSet.has(f);
+                const on = !exForm.has(f);
                 return (
                   <label className="item ffilter" key={f} style={{ opacity: on ? 1 : 0.4 }}>
                     <input type="checkbox" checked={on} onChange={() => toggleFormation(f)} />
@@ -113,7 +125,7 @@ export function ResultsPanel() {
           </div>
         );
       })}
-      <div className="count">Excluding a formation drops it from every bucket (depth limit).</div>
+      <div className="count">Cull individual wells by clicking markers in the Gunbarrel tab.</div>
 
       <h3 style={{ marginTop: 10 }}>Assumptions</h3>
       <div className="count">

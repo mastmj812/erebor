@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api import basemap, health, layers, production, select, tiles
+from app.api import basemap, gunbarrel, health, layers, production, select, tiles
 from app.config import settings
 
 logging.basicConfig(
@@ -27,3 +27,4 @@ app.include_router(tiles.router, prefix="/api")
 app.include_router(layers.router, prefix="/api")
 app.include_router(select.router, prefix="/api")
 app.include_router(production.router, prefix="/api")
+app.include_router(gunbarrel.router, prefix="/api")

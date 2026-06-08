@@ -16,7 +16,6 @@ from __future__ import annotations
 import io
 import json
 import zipfile
-from collections import Counter
 from typing import Any, Literal
 
 import shapefile  # pyshp
@@ -45,7 +44,8 @@ def select_in_aoi(
     pred = _RULE_PREDICATE[rule]
     sql = text(f"""
         WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g)
-        SELECT w.stick_id, w.category, UPPER(w.formation) AS formation, w.pad_name,
+        SELECT w.stick_id, w.unique_id, w.category, UPPER(w.formation) AS formation,
+               w.pad_name, w.ll_ft,
                w.npv5, w.npv10, w.npv15, w.npv20, w.npv25,
                w.pv5, w.pv10, w.pv15, w.pv20, w.pv25,
                w.oil_eur, w.gas_eur,
@@ -60,26 +60,14 @@ def select_in_aoi(
     truncated = len(rows) > MAX_STICKS
     use = rows[:MAX_STICKS]
 
-    by_cat: Counter = Counter()
-    by_pad: Counter = Counter()
-    # Per (category, formation): count + summed NPVs (each discount rate) + EUR.
-    # The frontend filters/re-sums these by the formation checklist + discount
-    # rate, so toggling is instant and the value stays a live screen.
-    groups: dict[tuple[str, str], dict[str, float]] = {}
-    _SUM_COLS = (
+    # Per-stick rows: the frontend computes the value rollup from these, applying
+    # the formation filter AND the manual well-cull set, so both are instant.
+    _COLS = (
+        "stick_id", "unique_id", "category", "formation", "pad_name", "ll_ft",
         "npv5", "npv10", "npv15", "npv20", "npv25",
-        "pv5", "pv10", "pv15", "pv20", "pv25",
-        "oil_eur", "gas_eur",
+        "pv5", "pv10", "pv15", "pv20", "pv25", "oil_eur", "gas_eur",
     )
-    for r in use:
-        by_cat[r["category"]] += 1
-        if r["pad_name"]:
-            by_pad[(r["category"], r["pad_name"])] += 1
-        key = (r["category"], r["formation"] or "UNKNOWN")
-        g = groups.setdefault(key, {"count": 0, **{c: 0.0 for c in _SUM_COLS}})
-        g["count"] += 1
-        for c in _SUM_COLS:
-            g[c] += float(r[c] or 0.0)
+    sticks = [{c: r[c] for c in _COLS} for r in use]
 
     deck = use[0] if use else {}
     distinct_decks = len({
@@ -92,15 +80,6 @@ def select_in_aoi(
         "rule": rule,
         "count": len(use),
         "truncated": truncated,
-        "by_category": {k: by_cat.get(k, 0) for k in ("PDP", "PUD", "RES")},
-        "groups": [
-            {"category": c, "formation": f, **vals}
-            for (c, f), vals in sorted(groups.items(), key=lambda kv: -kv[1]["count"])
-        ],
-        "by_pad": [
-            {"category": c, "pad_name": p, "count": n}
-            for (c, p), n in sorted(by_pad.items(), key=lambda kv: -kv[1])
-        ],
         "price_deck": {
             "wti_price": deck.get("wti_price"),
             "hh_price": deck.get("hh_price"),
@@ -109,7 +88,7 @@ def select_in_aoi(
             "hh_diff": deck.get("hh_diff"),
             "distinct_decks": distinct_decks,
         },
-        "stick_ids": [r["stick_id"] for r in use],
+        "sticks": sticks,
     }
 
 

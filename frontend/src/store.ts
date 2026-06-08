@@ -33,11 +33,21 @@ export interface WellProduction {
   arps_tail: { ip_day: number[]; oil: number[]; gas: number[]; water: number[] };
   has_forecast?: boolean;
 }
+export type BottomTab = "production" | "gunbarrel";
+export interface GunbarrelWell {
+  stick_id: number; unique_id: string; category: string; formation: string;
+  tvd: number; ll_ft: number | null; offset_ft: number;
+}
+export interface GunbarrelPad { pad_name: string; well_count: number; wells: GunbarrelWell[] }
+export interface GunbarrelData { pad_count: number; pads: GunbarrelPad[] }
 
-export interface SelectionGroup {
+export interface SelectionStick {
+  stick_id: number;
+  unique_id: string;
   category: string;
   formation: string;
-  count: number;
+  pad_name: string | null;
+  ll_ft: number | null;
   npv5: number; npv10: number; npv15: number; npv20: number; npv25: number;
   pv5: number; pv10: number; pv15: number; pv20: number; pv25: number;
   oil_eur: number; gas_eur: number;
@@ -50,11 +60,8 @@ export interface SelectionResult {
   count: number;
   truncated: boolean;
   rule: SelectionRule;
-  by_category: Record<string, number>;
-  groups: SelectionGroup[];
-  by_pad: { category: string; pad_name: string; count: number }[];
   price_deck: PriceDeck;
-  stick_ids: number[];
+  sticks: SelectionStick[];
 }
 
 interface MapState {
@@ -67,14 +74,19 @@ interface MapState {
   selection: SelectionResult | null;
   aoi: GeoJSON.Geometry | null;
   excludedFormations: string[]; // UPPER formation names dropped from the rollup
+  excludedSticks: number[];     // manually culled stick_ids (dropped from rollup/plot/export)
   discountRate: DiscountRate;
   valueMetric: ValueMetric;
   production: ProductionAggregate | null;
   productionLoading: boolean;
+  productionStale: boolean;     // culls changed since production was loaded
   productionPhase: Phase;
   chartMode: ChartMode;
   aggMode: AggMode;
   wellOverlay: WellProduction | null;
+  bottomTab: BottomTab;
+  gunbarrel: GunbarrelData | null;
+  gunbarrelLoading: boolean;
   setBasin: (b: "delaware" | "midland") => void;
   toggleCategory: (c: Category) => void;
   toggleOverlay: (k: OverlayKey) => void;
@@ -83,6 +95,8 @@ interface MapState {
   setSelectionRule: (r: SelectionRule) => void;
   setSelection: (s: SelectionResult | null, aoi: GeoJSON.Geometry | null) => void;
   toggleFormation: (f: string) => void;
+  toggleStick: (id: number) => void;
+  clearCulls: () => void;
   setDiscountRate: (r: DiscountRate) => void;
   setValueMetric: (m: ValueMetric) => void;
   setProduction: (p: ProductionAggregate | null) => void;
@@ -91,6 +105,9 @@ interface MapState {
   setChartMode: (m: ChartMode) => void;
   setAggMode: (m: AggMode) => void;
   setWellOverlay: (w: WellProduction | null) => void;
+  setBottomTab: (t: BottomTab) => void;
+  setGunbarrel: (g: GunbarrelData | null) => void;
+  setGunbarrelLoading: (b: boolean) => void;
 }
 
 export const useMapStore = create<MapState>((set, get) => ({
@@ -103,16 +120,21 @@ export const useMapStore = create<MapState>((set, get) => ({
   selection: null,
   aoi: null,
   excludedFormations: [],
+  excludedSticks: [],
   discountRate: 10,
   valueMetric: "npv",
   production: null,
   productionLoading: false,
+  productionStale: false,
   productionPhase: "oil",
   chartMode: "rate",
   aggMode: "avg",
   wellOverlay: null,
+  bottomTab: "production",
+  gunbarrel: null,
+  gunbarrelLoading: false,
   setBasin: (b) =>
-    set({ basin: b, selection: null, aoi: null, excludedFormations: [], production: null, wellOverlay: null }),
+    set({ basin: b, selection: null, aoi: null, excludedFormations: [], excludedSticks: [], production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleCategory: (c) =>
     set((s) => ({
       categories: s.categories.includes(c)
@@ -132,23 +154,35 @@ export const useMapStore = create<MapState>((set, get) => ({
   },
   setDrawMode: (m) => set({ drawMode: m }),
   setSelectionRule: (r) => set({ selectionRule: r }),
-  // A new selection starts with all formations included and clears production.
+  // A new selection starts with all formations included, no culls, clears derived data.
   setSelection: (s, aoi) =>
-    set({ selection: s, aoi, excludedFormations: [], production: null, wellOverlay: null }),
+    set({ selection: s, aoi, excludedFormations: [], excludedSticks: [], production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleFormation: (f) =>
     set((s) => ({
       excludedFormations: s.excludedFormations.includes(f)
         ? s.excludedFormations.filter((x) => x !== f)
         : [...s.excludedFormations, f],
     })),
+  toggleStick: (id) =>
+    set((s) => ({
+      excludedSticks: s.excludedSticks.includes(id)
+        ? s.excludedSticks.filter((x) => x !== id)
+        : [...s.excludedSticks, id],
+      productionStale: s.production ? true : s.productionStale,
+    })),
+  clearCulls: () =>
+    set((s) => ({ excludedSticks: [], productionStale: s.production ? true : s.productionStale })),
   setDiscountRate: (r) => set({ discountRate: r }),
   setValueMetric: (m) => set({ valueMetric: m }),
-  setProduction: (p) => set({ production: p }),
+  setProduction: (p) => set({ production: p, productionStale: false }),
   setProductionLoading: (b) => set({ productionLoading: b }),
   setProductionPhase: (p) => set({ productionPhase: p }),
   setChartMode: (m) => set({ chartMode: m }),
   setAggMode: (m) => set({ aggMode: m }),
   setWellOverlay: (w) => set({ wellOverlay: w }),
+  setBottomTab: (t) => set({ bottomTab: t }),
+  setGunbarrel: (g) => set({ gunbarrel: g }),
+  setGunbarrelLoading: (b) => set({ gunbarrelLoading: b }),
 }));
 
 export function basinBbox(meta: BasinMeta[], basin: string): [number, number, number, number] | null {

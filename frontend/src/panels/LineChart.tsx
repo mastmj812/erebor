@@ -54,12 +54,20 @@ export function LineChart({
       <text x={pad.l + iw / 2} y={height - 2} textAnchor="middle" fill="#52525b">{xlabel}</text>
       <text x={12} y={pad.t + ih / 2} textAnchor="middle" fill="#52525b"
         transform={`rotate(-90 12 ${pad.t + ih / 2})`}>{ylabel}</text>
-      {/* series */}
+      {/* series — visible line + a fat transparent "hit" line so hovering near
+          the curve shows a tooltip with the formation (or well name). */}
       {series.map((s, i) => {
         const pts = s.xs.map((x, j) => `${sx(x).toFixed(1)},${sy(s.ys[j] ?? 0).toFixed(1)}`).join(" ");
         return (
-          <polyline key={i} points={pts} fill="none" stroke={s.color}
-            strokeWidth={s.width ?? 1.5} strokeDasharray={s.dashed ? "4 3" : undefined} />
+          <g key={i}>
+            <polyline points={pts} fill="none" stroke={s.color}
+              strokeWidth={s.width ?? 1.5} strokeDasharray={s.dashed ? "4 3" : undefined}
+              style={{ pointerEvents: "none" }} />
+            <polyline points={pts} fill="none" stroke="transparent" strokeWidth={12}
+              style={{ pointerEvents: "stroke", cursor: "pointer" }}>
+              <title>{s.label}</title>
+            </polyline>
+          </g>
         );
       })}
     </svg>

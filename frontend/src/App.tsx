@@ -1,7 +1,7 @@
 import { MapView } from "./MapView";
+import { BottomPanel } from "./panels/BottomPanel";
 import { Controls } from "./panels/Controls";
 import { Legend } from "./panels/Legend";
-import { ProductionPanel } from "./panels/ProductionPanel";
 import { ResultsPanel } from "./panels/ResultsPanel";
 
 export function App() {
@@ -11,7 +11,7 @@ export function App() {
       <Controls />
       <Legend />
       <ResultsPanel />
-      <ProductionPanel />
+      <BottomPanel />
     </div>
   );
 }

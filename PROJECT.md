@@ -59,7 +59,18 @@ Open http://localhost:5180.
   formation checklist + discount-rate selector that recompute the rollup live (and drive the map
   filter); per-bucket + combined NPV, future-location count, price-deck assumptions, screening
   caveat. ✅
-- Phase 4 — gunbarrel + production plots. ⏳
+- **Phase 4 — gunbarrel + production plots.** Bottom panel with Production/Gunbarrel tabs.
+  Production: per-formation aggregate (sum or avg/well) + click-a-stick per-well overlay; Novi
+  forecast stitched to the Arps tail to 50 yr (shared `decline` package). Gunbarrel: offset-vs-TVD
+  small-multiples per DSU pad, markers colored by formation. Respects the formation filter.
+  PDP production is forecast-only for now (PDP isn't in Novi's forecast; actuals-from-curated.production
+  deferred). ✅
+- **Phase 4.5 — manual well culling.** Click a marker in the Gunbarrel to cull/restore an
+  individual well (Novi inventory too close to existing wells). Culled wells drop from the value
+  rollup, map highlight, production curves, and (Phase 5) export. `/select` returns per-stick
+  economic rows; the rollup is computed client-side applying formation excludes + the cull set;
+  `/production/aggregate` takes an excluded-well list. Culled markers render hollow; culled count +
+  "clear culls"; resets on new AOI. ✅
 - Phase 5 — export (authoritative). ⏳
 
 ## Endpoints (backend)

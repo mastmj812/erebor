@@ -4,11 +4,12 @@ export async function fetchProductionAggregate(
   aoi: GeoJSON.Geometry,
   basin: string,
   rule: SelectionRule,
+  exclude: string[] = [],
 ): Promise<ProductionAggregate> {
   const r = await fetch("/api/production/aggregate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ aoi, basin, rule }),
+    body: JSON.stringify({ aoi, basin, rule, exclude }),
   });
   if (!r.ok) throw new Error(`aggregate failed: ${r.status}`);
   return r.json();

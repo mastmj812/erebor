@@ -160,6 +160,7 @@ export function MapView() {
   const selection = useMapStore((s) => s.selection);
   const aoi = useMapStore((s) => s.aoi);
   const excludedFormations = useMapStore((s) => s.excludedFormations);
+  const excludedSticks = useMapStore((s) => s.excludedSticks);
 
   // -------- init map (once) --------
   useEffect(() => {
@@ -279,6 +280,7 @@ export function MapView() {
   }, [drawMode]);
 
   // -------- selection -> feature-state highlight --------
+  // Highlight only sticks actually in the rollup: not formation-excluded and not culled.
   useEffect(() => {
     if (!styleLoaded) return;
     const map = mapRef.current;
@@ -287,13 +289,16 @@ export function MapView() {
       map.removeFeatureState({ source: INTEL_SOURCE, sourceLayer: sl });
     }
     if (selection) {
-      for (const id of selection.stick_ids) {
+      const exForm = new Set(excludedFormations);
+      const exStick = new Set(excludedSticks);
+      for (const s of selection.sticks) {
+        if (exForm.has(s.formation) || exStick.has(s.stick_id)) continue;
         for (const sl of [POINTS_SRC_LAYER, LINES_SRC_LAYER]) {
-          map.setFeatureState({ source: INTEL_SOURCE, sourceLayer: sl, id }, { selected: true });
+          map.setFeatureState({ source: INTEL_SOURCE, sourceLayer: sl, id: s.stick_id }, { selected: true });
         }
       }
     }
-  }, [selection, styleLoaded]);
+  }, [selection, excludedFormations, excludedSticks, styleLoaded]);
 
   // -------- committed AOI outline --------
   useEffect(() => {

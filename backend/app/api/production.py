@@ -63,6 +63,7 @@ class AggBody(BaseModel):
     aoi: dict
     basin: Literal["delaware", "midland"]
     rule: Rule = "intersects"
+    exclude: list[str] = []  # manually-culled well names (unique_id) to drop
 
 
 def _sel_cte(pred: str) -> str:
@@ -72,6 +73,7 @@ def _sel_cte(pred: str) -> str:
           SELECT w.unique_id, UPPER(w.formation) AS formation
           FROM curated.intel_locations w, aoi
           WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL AND {pred}
+            AND w.unique_id <> ALL((:exclude)::text[])
         )
     """
 
@@ -79,7 +81,7 @@ def _sel_cte(pred: str) -> str:
 @router.post("/aggregate")
 def aggregate(body: AggBody, session: Session = Depends(get_session)) -> dict:
     pred = _PRED[body.rule]
-    params = {"aoi": json.dumps(body.aoi), "basin": body.basin}
+    params = {"aoi": json.dumps(body.aoi), "basin": body.basin, "exclude": body.exclude}
 
     # 1) forecast (ML stream) summed per (formation, ip_day) -> ~29.5 yr
     fc_rows = session.execute(

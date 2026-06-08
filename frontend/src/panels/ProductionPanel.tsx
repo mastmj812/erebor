@@ -12,8 +12,7 @@ function cumsum(vals: number[]): number[] {
 }
 const yrs = (days: number[]) => days.map((d) => d / 365);
 
-export function ProductionPanel() {
-  const sel = useMapStore((s) => s.selection);
+export function ProductionView({ width, height }: { width?: number; height?: number }) {
   const aoi = useMapStore((s) => s.aoi);
   const basin = useMapStore((s) => s.basin);
   const rule = useMapStore((s) => s.selectionRule);
@@ -24,17 +23,21 @@ export function ProductionPanel() {
   const mode = useMapStore((s) => s.chartMode);
   const agg = useMapStore((s) => s.aggMode);
   const overlay = useMapStore((s) => s.wellOverlay);
+  const sel = useMapStore((s) => s.selection);
+  const excludedSticks = useMapStore((s) => s.excludedSticks);
+  const stale = useMapStore((s) => s.productionStale);
   const st = useMapStore;
-
-  // Show the panel whenever there's a selection OR a clicked-well overlay, so
-  // single-well inspection works even without a drawn AOI.
-  if (!sel && !overlay) return null;
 
   const load = async () => {
     if (!aoi) return;
     st.getState().setProductionLoading(true);
     try {
-      const p = await fetchProductionAggregate(aoi, basin, rule);
+      // Map culled stick_ids -> well names so the backend drops them from the curves.
+      const byId = new Map((sel?.sticks ?? []).map((s) => [s.stick_id, s.unique_id]));
+      const exclude = excludedSticks
+        .map((id) => byId.get(id))
+        .filter((n): n is string => !!n);
+      const p = await fetchProductionAggregate(aoi, basin, rule, exclude);
       st.getState().setProduction(p);
     } catch (e) {
       console.error(e);
@@ -80,7 +83,7 @@ export function ProductionPanel() {
   const unit = agg === "avg" ? `${baseUnit}/well` : baseUnit;
 
   return (
-    <div className="panel production">
+    <>
       <div className="prod-head">
         <strong>Production — Novi forecast</strong>
         <div className="seg sm">
@@ -97,6 +100,9 @@ export function ProductionPanel() {
           <button className={agg === "avg" ? "active" : ""} onClick={() => st.getState().setAggMode("avg")}>avg/well</button>
           <button className={agg === "sum" ? "active" : ""} onClick={() => st.getState().setAggMode("sum")}>sum</button>
         </div>
+        {prod && stale && (
+          <button className="link" onClick={() => void load()}>↻ culls changed — reload</button>
+        )}
         {overlay && (
           <span className="well-tag">
             ● {overlay.name}
@@ -109,6 +115,8 @@ export function ProductionPanel() {
       {prod || overlay ? (
         <LineChart
           series={series}
+          width={Math.max(360, (width ?? 820) - 8)}
+          height={Math.max(200, (height ?? 380) - 48)}
           xlabel="years on production"
           ylabel={`${mode === "rate" ? "rate" : "cum"} (${unit})`}
         />
@@ -120,6 +128,6 @@ export function ProductionPanel() {
           <span className="count">or click a stick on the map to overlay a single well</span>
         </div>
       )}
-    </div>
+    </>
   );
 }

@@ -154,3 +154,70 @@ async def select_shapefile(
     result = select_in_aoi(session, aoi, basin, rule)
     result["aoi"] = aoi
     return result
+
+
+# ---------------------------------------------------------------------------
+# Multi-deal shapefile: return each polygon as a separate deal (one at a time)
+# ---------------------------------------------------------------------------
+_LABEL_PREFS = ["deal_name", "dealname", "deal", "name", "prospect", "label", "title", "deal_id", "id"]
+
+
+def _pick_label_field(fields: list[str]) -> str | None:
+    low = {f.lower(): f for f in fields}
+    for p in _LABEL_PREFS:
+        if p in low:
+            return low[p]
+    return fields[0] if fields else None
+
+
+def _reproject_geom(gj: dict, tf: Transformer) -> dict | None:
+    def ring(r):
+        return [list(tf.transform(x, y)) for x, y in r]
+    if gj.get("type") == "Polygon":
+        return {"type": "Polygon", "coordinates": [ring(r) for r in gj["coordinates"]]}
+    if gj.get("type") == "MultiPolygon":
+        return {"type": "MultiPolygon", "coordinates": [[ring(r) for r in poly] for poly in gj["coordinates"]]}
+    return None
+
+
+def _parse_deals(data: bytes) -> list[dict]:
+    """Parse a deals .zip into one entry per polygon (reprojected to 4326)."""
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        names = z.namelist()
+        shp = next((n for n in names if n.lower().endswith(".shp")), None)
+        if not shp:
+            raise HTTPException(400, "No .shp found in the uploaded zip.")
+        stem = shp[:-4].lower()
+
+        def member(ext: str) -> io.BytesIO | None:
+            for n in names:
+                if n.lower() == stem + ext:
+                    return io.BytesIO(z.read(n))
+            return None
+
+        prj = member(".prj")
+        src_crs = CRS.from_wkt(prj.read().decode("utf-8", "replace")) if prj else CRS.from_epsg(4326)
+        tf = Transformer.from_crs(src_crs, CRS.from_epsg(4326), always_xy=True)
+        reader = shapefile.Reader(shp=member(".shp"), dbf=member(".dbf"), shx=member(".shx"))
+        field_names = [f[0] for f in reader.fields if f[0] != "DeletionFlag"]
+        label_field = _pick_label_field(field_names)
+
+        deals: list[dict] = []
+        for i, sr in enumerate(reader.iterShapeRecords()):
+            geom = _reproject_geom(sr.shape.__geo_interface__, tf)
+            if geom is None:
+                continue
+            rec = sr.record.as_dict()
+            lbl = rec.get(label_field) if label_field else None
+            label = str(lbl).strip() if lbl not in (None, "") else f"Deal {i + 1}"
+            deals.append({"index": i, "label": label, "geometry": geom})
+
+    if not deals:
+        raise HTTPException(400, "Shapefile contains no polygon geometry.")
+    return deals
+
+
+@router.post("/deals")
+async def upload_deals(file: UploadFile = File(...)) -> dict:
+    """Parse a multi-polygon deals shapefile; the frontend picks one to select."""
+    return {"deals": _parse_deals(await file.read())}

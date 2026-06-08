@@ -71,7 +71,10 @@ Open http://localhost:5180.
   economic rows; the rollup is computed client-side applying formation excludes + the cull set;
   `/production/aggregate` takes an excluded-well list. Culled markers render hollow; culled count +
   "clear culls"; resets on new AOI. ✅
-- Phase 5 — export (authoritative). ⏳
+- **Phase 5 — export (authoritative).** `POST /api/export` streams a ZIP (locations.csv,
+  production_monthly.csv, arps.csv, summary.csv, README) of the current selection minus excluded
+  formations + culled wells. Green "Export selection (.zip)" button in the results panel. Summary
+  reconciles with the in-app rollup. See SCHEMA.md §8. ✅
 
 ## Endpoints (backend)
 

@@ -1,22 +1,24 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useMapStore } from "../store";
 import { GunbarrelView } from "./GunbarrelView";
 import { ProductionView } from "./ProductionPanel";
 
-// Measure an element (ResizeObserver) so the charts can fill the window as it
-// resizes. Seeded with a sensible default before first layout.
+// Measure an element (ResizeObserver) so the charts fill the window as it resizes.
+// Uses a CALLBACK ref so the observer attaches whenever the node mounts — the
+// body div only appears once a selection exists, after the component first mounts.
 function useElementSize() {
-  const ref = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 820, height: 380 });
-  useEffect(() => {
-    if (!ref.current) return;
+  const roRef = useRef<ResizeObserver | null>(null);
+  const ref = useCallback((node: HTMLDivElement | null) => {
+    roRef.current?.disconnect();
+    if (!node) return;
     const ro = new ResizeObserver((entries) => {
       const cr = entries[0].contentRect;
       setSize({ width: cr.width, height: cr.height });
     });
-    ro.observe(ref.current);
-    return () => ro.disconnect();
+    ro.observe(node);
+    roRef.current = ro;
   }, []);
   return [ref, size] as const;
 }

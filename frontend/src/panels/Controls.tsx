@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 
-import { selectByPolygon, uploadShapefile } from "../api/select";
+import { selectByPolygon, uploadDeals } from "../api/select";
 import { CATEGORIES } from "../map/sticksLayers";
 import { useMapStore, type OverlayKey, type SelectionRule } from "../store";
 
@@ -31,6 +31,8 @@ export function Controls() {
   const rule = useMapStore((s) => s.selectionRule);
   const setSelectionRule = useMapStore((s) => s.setSelectionRule);
   const setSelection = useMapStore((s) => s.setSelection);
+  const deals = useMapStore((s) => s.deals);
+  const setDeals = useMapStore((s) => s.setDeals);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -54,14 +56,29 @@ export function Controls() {
     }
   };
 
+  // Pick one deal (polygon) from the uploaded shapefile as the AOI.
+  const pickDeal = async (index: number) => {
+    const d = useMapStore.getState().deals?.find((x) => x.index === index);
+    if (!d) return;
+    try {
+      setBusy("Selecting deal…");
+      const result = await selectByPolygon(d.geometry, basin, rule);
+      setSelection(result, d.geometry);
+    } catch (e) {
+      alert(`Deal selection failed: ${e}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const onUpload = async (file: File) => {
     try {
-      setBusy("Uploading shapefile…");
-      const result = await uploadShapefile(file, basin, rule);
-      const { aoi, ...sel } = result;
-      setSelection(sel, aoi);
+      setBusy("Reading deals…");
+      const ds = await uploadDeals(file);
+      setDeals(ds);
+      if (ds.length === 1) void pickDeal(ds[0].index); // single-polygon shapefile
     } catch (e) {
-      alert(`Shapefile selection failed: ${e}`);
+      alert(`Deals upload failed: ${e}`);
     } finally {
       setBusy(null);
       if (fileRef.current) fileRef.current.value = "";
@@ -98,9 +115,25 @@ export function Controls() {
         style={{ fontSize: 12, width: "100%" }}
         onChange={(e) => { const f = e.target.files?.[0]; if (f) void onUpload(f); }}
       />
-      <div style={{ fontSize: 11, color: "#71717a", margin: "4px 0 8px" }}>
-        Upload a deal shapefile (.zip with .shp/.dbf/.prj)
+      <div style={{ fontSize: 11, color: "#71717a", margin: "4px 0 6px" }}>
+        Upload a deals shapefile (.zip) — then pick one deal below.
       </div>
+      {deals && deals.length > 0 && (
+        <div className="row" style={{ marginBottom: 8 }}>
+          <label htmlFor="deal-pick" style={{ fontSize: 12 }}>Deal:</label>
+          <select
+            id="deal-pick"
+            style={{ flex: 1, fontSize: 12 }}
+            defaultValue=""
+            onChange={(e) => { if (e.target.value !== "") void pickDeal(Number(e.target.value)); }}
+          >
+            <option value="" disabled>{deals.length} deals — pick one…</option>
+            {deals.map((d) => (
+              <option key={d.index} value={d.index}>{d.label}</option>
+            ))}
+          </select>
+        </div>
+      )}
 
       <h3>Selection rule</h3>
       <div className="seg">

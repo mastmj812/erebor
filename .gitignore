@@ -19,3 +19,6 @@ Thumbs.db
 
 # TS build cache
 *.tsbuildinfo
+
+# local test artifacts
+docs/discovery/*.zip

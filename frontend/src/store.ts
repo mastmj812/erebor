@@ -52,6 +52,11 @@ export interface SelectionStick {
   pv5: number; pv10: number; pv15: number; pv20: number; pv25: number;
   oil_eur: number; gas_eur: number;
 }
+export interface DealFeature {
+  index: number;
+  label: string;
+  geometry: GeoJSON.Geometry;
+}
 export interface PriceDeck {
   wti_price: number | null; hh_price: number | null; ngl_price: number | null;
   wti_diff: number | null; hh_diff: number | null; distinct_decks: number;
@@ -73,6 +78,7 @@ interface MapState {
   selectionRule: SelectionRule;
   selection: SelectionResult | null;
   aoi: GeoJSON.Geometry | null;
+  deals: DealFeature[] | null; // uploaded multi-deal shapefile (pick one)
   excludedFormations: string[]; // UPPER formation names dropped from the rollup
   excludedSticks: number[];     // manually culled stick_ids (dropped from rollup/plot/export)
   discountRate: DiscountRate;
@@ -94,6 +100,7 @@ interface MapState {
   setDrawMode: (m: DrawMode) => void;
   setSelectionRule: (r: SelectionRule) => void;
   setSelection: (s: SelectionResult | null, aoi: GeoJSON.Geometry | null) => void;
+  setDeals: (d: DealFeature[] | null) => void;
   toggleFormation: (f: string) => void;
   toggleStick: (id: number) => void;
   clearCulls: () => void;
@@ -119,6 +126,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   selectionRule: "intersects",
   selection: null,
   aoi: null,
+  deals: null,
   excludedFormations: [],
   excludedSticks: [],
   discountRate: 10,
@@ -134,7 +142,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   gunbarrel: null,
   gunbarrelLoading: false,
   setBasin: (b) =>
-    set({ basin: b, selection: null, aoi: null, excludedFormations: [], excludedSticks: [], production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+    set({ basin: b, selection: null, aoi: null, deals: null, excludedFormations: [], excludedSticks: [], production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleCategory: (c) =>
     set((s) => ({
       categories: s.categories.includes(c)
@@ -157,6 +165,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   // A new selection starts with all formations included, no culls, clears derived data.
   setSelection: (s, aoi) =>
     set({ selection: s, aoi, excludedFormations: [], excludedSticks: [], production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+  setDeals: (d) => set({ deals: d }),
   toggleFormation: (f) =>
     set((s) => ({
       excludedFormations: s.excludedFormations.includes(f)

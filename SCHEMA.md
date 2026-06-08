@@ -177,3 +177,26 @@ Implemented in `engineering_db` (`sql/11_raw_novi_intel.sql`, `sql/12_curated_in
 
 Discovery/verification scripts live in `erebor/docs/discovery/`. Snowflake-API cutover (~July 2026)
 replaces only `etl/novi_intel/` — these tables/views and the app stay unchanged.
+
+---
+
+## 8. Export schema (Phase 5)
+
+`POST /api/export` ({aoi, basin, rule, exclude_wells, exclude_formations}) streams a **ZIP** of the
+current selection — AOI ∩ rule, minus excluded formations and manually-culled wells. Contents:
+
+- **`locations.csv`** — one row per included stick. Key columns first: `unique_id` (PUD/RES = Novi
+  well name; PDP = API10), `api10` (joins PDP to `curated.wells`), `category`, `formation`,
+  `operator`, `county`, `pad_name`, `basin`; then geology/completion (`tvd`, `md`, `ll_ft`,
+  `prop_load`), reserves (`*_eur`, `*_ip`), economics (`npv5–25`, `pv5–25`, `*_be`, `irr_pct`
+  [normalized %] + `irr_pct_raw`, `pp_months`, `ttpt`, `dc_cost`, `dcet_cost`, `norm_*`), and the
+  flat deck (`wti_price`, `hh_price`, `ngl_price`, `wti_diff`, `hh_diff`). Join key: `unique_id`.
+- **`production_monthly.csv`** — `novi_wellname, ip_day, oil, gas, water` (Novi ML forecast, per-day
+  rate at 30-day steps to ~29.5 yr) for included **PUD/RES** wells. PDP not present (warehouse actuals).
+- **`arps.csv`** — segmented decline params per well/stream; final exponential segment runs to
+  `day_stop=18250` (50 yr) to extend the forecast tail downstream.
+- **`summary.csv`** — rollup by `category × formation`: `count`, `npv5–25`, `pv5–25`, `oil_eur`,
+  `gas_eur`. Reconciles with the in-app screen (counts sum to the included-stick count).
+- **`README.txt`** — the above + price deck + filter state + the screen-not-valuation caveat.
+
+Verified: counts reconcile (e.g. a 285-stick selection → summary rows sum to 285); zip opens cleanly.

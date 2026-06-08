@@ -1,3 +1,6 @@
+import { useState } from "react";
+
+import { exportSelection } from "../api/export";
 import { colorForFormation } from "../map/formations";
 import { useMapStore, type DiscountRate, type SelectionStick } from "../store";
 
@@ -24,7 +27,27 @@ export function ResultsPanel() {
   const setDiscountRate = useMapStore((s) => s.setDiscountRate);
   const metric = useMapStore((s) => s.valueMetric);
   const setValueMetric = useMapStore((s) => s.setValueMetric);
+  const aoi = useMapStore((s) => s.aoi);
+  const basin = useMapStore((s) => s.basin);
+  const rule = useMapStore((s) => s.selectionRule);
+  const [exporting, setExporting] = useState(false);
   if (!sel) return null;
+
+  const doExport = async () => {
+    if (!aoi) return;
+    setExporting(true);
+    try {
+      const byId = new Map(sel.sticks.map((s) => [s.stick_id, s.unique_id]));
+      const culledNames = excludedSticks
+        .map((id) => byId.get(id))
+        .filter((n): n is string => !!n);
+      await exportSelection(aoi, basin, rule, culledNames, excluded);
+    } catch (e) {
+      alert(`Export failed: ${e}`);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const valKey = `${metric}${rate}` as keyof SelectionStick;
   const exForm = new Set(excluded);
@@ -70,6 +93,10 @@ export function ResultsPanel() {
           <button className="link" onClick={() => clearCulls()}>clear culls</button>
         </div>
       )}
+
+      <button className="export-btn" disabled={exporting} onClick={() => void doExport()}>
+        {exporting ? "Exporting…" : "⬇ Export selection (.zip)"}
+      </button>
 
       <h3 style={{ marginTop: 8 }}>Value basis</h3>
       <div className="seg">

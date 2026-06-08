@@ -1,5 +1,5 @@
 import type { GeoJsonPolygon } from "../map/drawing";
-import type { SelectionResult, SelectionRule } from "../store";
+import type { DealFeature, SelectionResult, SelectionRule } from "../store";
 
 export async function selectByPolygon(
   aoi: GeoJsonPolygon | GeoJSON.Geometry,
@@ -13,6 +13,14 @@ export async function selectByPolygon(
   });
   if (!r.ok) throw new Error(`select failed: ${r.status}`);
   return r.json();
+}
+
+export async function uploadDeals(file: File): Promise<DealFeature[]> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const r = await fetch("/api/select/deals", { method: "POST", body: fd });
+  if (!r.ok) throw new Error(`deals upload failed: ${await r.text()}`);
+  return (await r.json()).deals;
 }
 
 export async function uploadShapefile(

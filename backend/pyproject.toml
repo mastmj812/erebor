@@ -1,0 +1,24 @@
+[project]
+name = "erebor-backend"
+version = "0.1.0"
+description = "erebor — Novi Intelligence deal-valuation app backend"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy>=2.0.34",
+    "psycopg[binary]>=3.2",
+    "pydantic-settings>=2.4",
+    # Shared decline-curve math (Phase 4); installed editable from the monorepo.
+    "decline",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[tool.setuptools]
+packages = ["app"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

@@ -1,0 +1,18 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+
+# Secrets / env
+.env
+*.local
+
+# OS
+.DS_Store
+Thumbs.db

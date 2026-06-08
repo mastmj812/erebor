@@ -1,0 +1,22 @@
+[project]
+name = "decline"
+version = "0.1.0"
+description = "Shared Arps/Duong decline-curve evaluation + EUR integration (pure numpy/scipy). Extracted from permian_type_curve so erebor (and, later, permian_type_curve) share one implementation."
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.1",
+    "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["decline"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

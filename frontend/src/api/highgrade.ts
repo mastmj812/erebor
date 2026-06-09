@@ -19,7 +19,7 @@ export type HighgradeMetric =
   | "npv5" | "npv10" | "npv15" | "npv20" | "npv25"
   | "pv5" | "pv10" | "pv15" | "pv20" | "pv25"
   | "oil_eur" | "gas_eur" | "well_count";
-export type HighgradeAgg = "sum" | "avg";
+export type HighgradeAgg = "sum" | "avg" | "per_acre";
 
 export interface HighgradeFilters {
   formation?: string[];

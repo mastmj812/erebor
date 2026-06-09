@@ -80,6 +80,12 @@ export function HighgradePanel() {
     return () => { live = false; };
   }, [basin]);
 
+  // per_acre is only offered for the $-metrics; drop it if the metric changes away.
+  useEffect(() => {
+    const isMoney = metric.startsWith("npv") || metric.startsWith("pv");
+    if (!isMoney) setAgg((a) => (a === "per_acre" ? "sum" : a));
+  }, [metric]);
+
   const toggleCat = (field: CategoricalField, value: string) =>
     setCats((c) => {
       const has = c[field].includes(value);
@@ -144,6 +150,9 @@ export function HighgradePanel() {
         <div className="seg sm" style={{ marginBottom: 10 }}>
           <button className={agg === "sum" ? "active" : ""} onClick={() => setAgg("sum")}>Sum</button>
           <button className={agg === "avg" ? "active" : ""} onClick={() => setAgg("avg")}>Avg / well</button>
+          {money && (
+            <button className={agg === "per_acre" ? "active" : ""} onClick={() => setAgg("per_acre")}>Per acre</button>
+          )}
         </div>
       )}
 
@@ -215,7 +224,7 @@ export function HighgradePanel() {
           <div><strong>{highgrade.pad_count.toLocaleString()}</strong> pads · <strong>{highgrade.well_count.toLocaleString()}</strong> wells</div>
           <div className="count" style={{ margin: "2px 0 0" }}>
             {METRICS.find((m) => m.value === highgrade.metric)?.label}
-            {highgrade.metric !== "well_count" ? ` · ${highgrade.agg}` : ""}: {fmt(highgrade.value_min, money)} … {fmt(highgrade.value_max, money)}
+            {highgrade.metric !== "well_count" ? ` · ${aggLabel(highgrade.agg)}` : ""}: {fmt(highgrade.value_min, money)} … {fmt(highgrade.value_max, money)}
           </div>
           {highgrade.pads_missing_geom > 0 && (
             <div className="count" style={{ margin: "2px 0 0", color: "#92400e" }}>
@@ -285,6 +294,9 @@ function RangeRow({
   );
 }
 
+function aggLabel(agg: string): string {
+  return agg === "per_acre" ? "$/acre" : agg;
+}
 function fmt(v: number | null, money: boolean): string {
   if (v == null || !Number.isFinite(v)) return "—";
   if (money) return `$${Math.round(v).toLocaleString()}`;

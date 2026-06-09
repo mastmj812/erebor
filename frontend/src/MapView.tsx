@@ -235,8 +235,8 @@ export function MapView() {
         const f = e.features?.[0];
         if (!f) return;
         map.getCanvas().style.cursor = "pointer";
-        const metric = useMapStore.getState().highgrade?.metric ?? "";
-        popupRef.current!.setLngLat(e.lngLat).setHTML(padPopupHtml(f.properties, metric)).addTo(map);
+        const hg = useMapStore.getState().highgrade;
+        popupRef.current!.setLngLat(e.lngLat).setHTML(padPopupHtml(f.properties, hg?.metric ?? "", hg?.agg ?? "")).addTo(map);
       };
       map.on("mousemove", HG_FILL, onPadMove);
       map.on("mouseleave", HG_FILL, () => { map.getCanvas().style.cursor = ""; popupRef.current?.remove(); });
@@ -434,17 +434,20 @@ function esc(s: unknown): string {
   );
 }
 
-function padPopupHtml(p: Record<string, unknown>, metric: string): string {
+function padPopupHtml(p: Record<string, unknown>, metric: string, agg: string): string {
   const money = metric.startsWith("npv") || metric.startsWith("pv");
+  const perAcre = agg === "per_acre";
   const v = p.value;
-  const valStr = v == null ? "—" : money ? fmtMoney(v) : fmtInt(v);
+  const valStr = v == null ? "—" : money ? `${fmtMoney(v)}${perAcre ? "/ac" : ""}` : fmtInt(v);
   const metricLabel = metric === "well_count" ? "Wells" : metric.toUpperCase();
+  const acresRow = p.acres == null ? "" : `<tr><td>Acres</td><td>${fmtInt(p.acres)}</td></tr>`;
   return `
     <div>
       <div class="mtt-name">${esc(p.pad_name)}</div>
       <table class="mtt-table">
         <tr><td>${esc(metricLabel)}</td><td>${valStr}</td></tr>
         <tr><td>Wells</td><td>${fmtInt(p.n_wells)}</td></tr>
+        ${acresRow}
       </table>
     </div>`;
 }

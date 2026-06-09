@@ -13,7 +13,10 @@ export function HighgradeLegend() {
 
   const money = highgrade.metric.startsWith("npv") || highgrade.metric.startsWith("pv");
   const label = METRIC_LABELS[highgrade.metric] ?? highgrade.metric;
-  const aggLabel = highgrade.metric === "well_count" ? "" : ` (${highgrade.agg}/pad)`;
+  const aggLabel =
+    highgrade.metric === "well_count" ? ""
+    : highgrade.agg === "per_acre" ? " ($/acre)"
+    : ` (${highgrade.agg}/pad)`;
 
   return (
     <div className="panel hg-legend">

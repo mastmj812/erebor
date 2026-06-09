@@ -47,7 +47,7 @@ Metric = Literal[
     "pv5", "pv10", "pv15", "pv20", "pv25",
     "oil_eur", "gas_eur", "well_count",
 ]
-Agg = Literal["sum", "avg"]
+Agg = Literal["sum", "avg", "per_acre"]
 
 # Base predicate: PUD inventory only, in the requested basin, with a real pad.
 _PUD_BASE = "category = 'PUD' AND basin = :basin"
@@ -100,7 +100,9 @@ class PadsBody(BaseModel):
 def _value_expr(metric: str, agg: str) -> str:
     if metric == "well_count":
         return "count(*)"
-    fn = "sum" if agg == "sum" else "avg"
+    # per_acre's numerator is the per-pad sum; the /acre division happens in `joined`,
+    # where the pad geometry (hence acreage) is available.
+    fn = "avg" if agg == "avg" else "sum"
     return f"{fn}({metric})"  # metric validated against the Metric literal
 
 
@@ -133,10 +135,18 @@ def _build_filters(filters: HighgradeFilters) -> tuple[list[str], dict, list]:
 
 @router.post("/pads")
 def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
+    # per_acre divides the per-pad sum by the DSU acreage; only meaningful for the
+    # $-denominated metrics. Coerce anything else back to a plain sum defensively.
+    agg = body.agg
+    if agg == "per_acre" and not body.metric.startswith(("npv", "pv")):
+        agg = "sum"
+
     where, params, expanding = _build_filters(body.filters)
     params["basin"] = body.basin
     filt_sql = ("AND " + " AND ".join(where)) if where else ""
-    value_expr = _value_expr(body.metric, body.agg)
+    value_expr = _value_expr(body.metric, agg)
+    # In per_acre mode the final value is sum/acre; otherwise it passes through.
+    final_value = "a.value / NULLIF(p.acres, 0)" if agg == "per_acre" else "a.value"
 
     sql = text(f"""
         WITH agg AS (
@@ -150,13 +160,15 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
         pad_geom AS (
             -- one geometry per pad_name; raw_novi_intel.pads has duplicate pad rows
             -- (Delaware 4, Midland 126) that would otherwise multiply the join.
-            SELECT DISTINCT ON (pad_name) pad_name, geom
+            -- Geodesic area (geography) -> acres, valid across TX + NM with no zone choice.
+            SELECT DISTINCT ON (pad_name) pad_name, geom,
+                   ST_Area(geom::geography) / 4046.8564224 AS acres
             FROM raw_novi_intel.pads
             WHERE basin = :basin AND pad_name IS NOT NULL AND geom IS NOT NULL
             ORDER BY pad_name, pad_id
         ),
         joined AS (
-            SELECT a.pad_name, a.value, a.n_wells, p.geom
+            SELECT a.pad_name, {final_value} AS value, a.n_wells, p.acres, p.geom
             FROM agg a
             LEFT JOIN pad_geom p ON p.pad_name = a.pad_name
         )
@@ -173,7 +185,8 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
                         'type', 'Feature',
                         'geometry', ST_AsGeoJSON(geom)::json,
                         'properties', json_build_object(
-                            'pad_name', pad_name, 'value', value, 'n_wells', n_wells
+                            'pad_name', pad_name, 'value', value, 'n_wells', n_wells,
+                            'acres', round(acres::numeric, 1)
                         )
                     )) FILTER (WHERE geom IS NOT NULL), '[]'::json)
             )
@@ -184,4 +197,4 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
         sql = sql.bindparams(*expanding)
 
     result = json.loads(session.execute(sql, params).scalar())
-    return {"basin": body.basin, "metric": body.metric, "agg": body.agg, **result}
+    return {"basin": body.basin, "metric": body.metric, "agg": agg, **result}

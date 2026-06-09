@@ -10,7 +10,7 @@ import {
   type HighgradeMetric,
 } from "../api/highgrade";
 import { colorForFormation } from "../map/formations";
-import { useMapStore } from "../store";
+import { useMapStore, type OverlayKey } from "../store";
 
 const METRICS: { value: HighgradeMetric; label: string }[] = [
   { value: "npv5", label: "NPV @ 5%" },
@@ -36,6 +36,13 @@ const TIER_FIELDS: { field: CategoricalField; label: string }[] = [
   { field: "complet_t", label: "Completion tier" },
 ];
 
+// map overlays surfaced on the Highgrade tab (same toggle mechanism as the Map tab's
+// Controls panel; the layers are mode-agnostic so they render in Highgrade mode too).
+const HG_OVERLAYS: { key: OverlayKey; label: string }[] = [
+  { key: "blocks", label: "Blocks (TX/NM grid)" },
+  { key: "sections", label: "Sections (numbered, z≥11)" },
+];
+
 // numeric range sliders (min/max entry, seeded with the facet bounds)
 const RANGE_FIELDS: { col: string; label: string; money?: boolean }[] = [
   { col: "rqs", label: "Rock-quality score" },
@@ -58,6 +65,8 @@ export function HighgradePanel() {
   const setBasin = useMapStore((s) => s.setBasin);
   const highgrade = useMapStore((s) => s.highgrade);
   const setHighgrade = useMapStore((s) => s.setHighgrade);
+  const overlays = useMapStore((s) => s.overlays);
+  const toggleOverlay = useMapStore((s) => s.toggleOverlay);
 
   const [facets, setFacets] = useState<HighgradeFacets | null>(null);
   const [cats, setCats] = useState<Record<CategoricalField, string[]>>({ ...EMPTY_CATS });
@@ -155,6 +164,14 @@ export function HighgradePanel() {
           )}
         </div>
       )}
+
+      <h3 style={{ marginTop: 4 }}>Overlays</h3>
+      {HG_OVERLAYS.map(({ key, label }) => (
+        <div className="row" key={key}>
+          <input id={`hg-ov-${key}`} type="checkbox" checked={overlays[key]} onChange={() => toggleOverlay(key)} />
+          <label htmlFor={`hg-ov-${key}`}>{label}</label>
+        </div>
+      ))}
 
       {!facets && !error && <div className="count">Loading filters…</div>}
 

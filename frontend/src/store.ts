@@ -8,6 +8,7 @@ export interface BasinMeta {
   bbox: [number, number, number, number];
 }
 
+export type AppMode = "map" | "highgrade";
 export type OverlayKey = "pads" | "grid" | "outline" | "blocks" | "sections";
 export type DrawMode = "off" | "lasso" | "box";
 export type SelectionRule = "intersects" | "midpoint";
@@ -69,7 +70,22 @@ export interface SelectionResult {
   sticks: SelectionStick[];
 }
 
+// Highgrade tab: per-pad screening result (choropleth) from POST /highgrade/pads.
+export interface HighgradeResult {
+  basin: string;
+  metric: string;
+  agg: string;
+  pad_count: number;
+  pads_missing_geom: number;
+  well_count: number;
+  value_min: number | null;
+  value_max: number | null;
+  pads: GeoJSON.FeatureCollection;
+}
+
 interface MapState {
+  appMode: AppMode;
+  highgrade: HighgradeResult | null;
   basin: "delaware" | "midland";
   categories: Category[];
   overlays: Record<OverlayKey, boolean>;
@@ -93,6 +109,8 @@ interface MapState {
   bottomTab: BottomTab;
   gunbarrel: GunbarrelData | null;
   gunbarrelLoading: boolean;
+  setAppMode: (m: AppMode) => void;
+  setHighgrade: (h: HighgradeResult | null) => void;
   setBasin: (b: "delaware" | "midland") => void;
   toggleCategory: (c: Category) => void;
   toggleOverlay: (k: OverlayKey) => void;
@@ -118,6 +136,8 @@ interface MapState {
 }
 
 export const useMapStore = create<MapState>((set, get) => ({
+  appMode: "map",
+  highgrade: null,
   basin: "delaware",
   categories: [...CATEGORIES],
   overlays: { pads: false, grid: false, outline: true, blocks: false, sections: false },
@@ -141,8 +161,10 @@ export const useMapStore = create<MapState>((set, get) => ({
   bottomTab: "production",
   gunbarrel: null,
   gunbarrelLoading: false,
+  setAppMode: (m) => set({ appMode: m }),
+  setHighgrade: (h) => set({ highgrade: h }),
   setBasin: (b) =>
-    set({ basin: b, selection: null, aoi: null, deals: null, excludedFormations: [], excludedSticks: [], production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+    set({ basin: b, highgrade: null, selection: null, aoi: null, deals: null, excludedFormations: [], excludedSticks: [], production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleCategory: (c) =>
     set((s) => ({
       categories: s.categories.includes(c)

@@ -21,11 +21,15 @@ import {
   tileUrl,
 } from "./map/sticksLayers";
 import { DrawingController, bboxToPolygon, type GeoJsonPolygon } from "./map/drawing";
+import { choroplethFillColor } from "./map/highgradeColors";
 import { selectByPolygon } from "./api/select";
 import { fetchWellProduction } from "./api/production";
 import { basinBbox, useMapStore, type OverlayKey } from "./store";
 
 const AOI_SOURCE = "aoi";
+const HG_SOURCE = "hg-pads";
+const HG_FILL = "hg-pads-fill";
+const HG_LINE = "hg-pads-line";
 const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
 
 let pmtilesRegistered = false;
@@ -161,6 +165,8 @@ export function MapView() {
   const aoi = useMapStore((s) => s.aoi);
   const excludedFormations = useMapStore((s) => s.excludedFormations);
   const excludedSticks = useMapStore((s) => s.excludedSticks);
+  const appMode = useMapStore((s) => s.appMode);
+  const highgrade = useMapStore((s) => s.highgrade);
 
   // -------- init map (once) --------
   useEffect(() => {
@@ -212,6 +218,28 @@ export function MapView() {
         id: "aoi-line", type: "line", source: AOI_SOURCE,
         paint: { "line-color": "#2563eb", "line-width": 2, "line-dasharray": [2, 1] },
       });
+
+      // Highgrade pad choropleth (hidden until the Highgrade tab is active).
+      map.addSource(HG_SOURCE, { type: "geojson", data: EMPTY_FC });
+      map.addLayer({
+        id: HG_FILL, type: "fill", source: HG_SOURCE,
+        layout: { visibility: "none" },
+        paint: { "fill-color": "#94a3b8", "fill-opacity": 0.72 },
+      });
+      map.addLayer({
+        id: HG_LINE, type: "line", source: HG_SOURCE,
+        layout: { visibility: "none" },
+        paint: { "line-color": "#1f2937", "line-width": 0.4, "line-opacity": 0.5 },
+      });
+      const onPadMove = (e: MapMouseEvent & { features?: MapGeoJSONFeature[] }) => {
+        const f = e.features?.[0];
+        if (!f) return;
+        map.getCanvas().style.cursor = "pointer";
+        const metric = useMapStore.getState().highgrade?.metric ?? "";
+        popupRef.current!.setLngLat(e.lngLat).setHTML(padPopupHtml(f.properties, metric)).addTo(map);
+      };
+      map.on("mousemove", HG_FILL, onPadMove);
+      map.on("mouseleave", HG_FILL, () => { map.getCanvas().style.cursor = ""; popupRef.current?.remove(); });
 
       // Draw controller: lasso / box -> run selection.
       const drawer = new DrawingController(map, {
@@ -357,6 +385,37 @@ export function MapView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [overlays, styleLoaded]);
 
+  // -------- app mode: show pad choropleth + hide sticks in Highgrade --------
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const hg = appMode === "highgrade";
+    for (const id of [POINTS_LAYER, LINES_LAYER]) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", hg ? "none" : "visible");
+    }
+    for (const id of [HG_FILL, HG_LINE]) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", hg ? "visible" : "none");
+    }
+  }, [appMode, styleLoaded]);
+
+  // -------- highgrade result -> choropleth data + color scale --------
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const src = map.getSource(HG_SOURCE) as maplibregl.GeoJSONSource | undefined;
+    if (!src) return;
+    if (highgrade) {
+      // Drop pads with a null metric value (can't be placed on the color scale).
+      const features = (highgrade.pads.features ?? []).filter((f) => f.properties?.value != null);
+      src.setData({ type: "FeatureCollection", features });
+      map.setPaintProperty(HG_FILL, "fill-color", choroplethFillColor(highgrade.value_min, highgrade.value_max));
+    } else {
+      src.setData(EMPTY_FC);
+    }
+  }, [highgrade, styleLoaded]);
+
   return <div ref={containerRef} className="map-root" />;
 }
 
@@ -373,6 +432,21 @@ function esc(s: unknown): string {
   return String(s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c,
   );
+}
+
+function padPopupHtml(p: Record<string, unknown>, metric: string): string {
+  const money = metric.startsWith("npv") || metric.startsWith("pv");
+  const v = p.value;
+  const valStr = v == null ? "—" : money ? fmtMoney(v) : fmtInt(v);
+  const metricLabel = metric === "well_count" ? "Wells" : metric.toUpperCase();
+  return `
+    <div>
+      <div class="mtt-name">${esc(p.pad_name)}</div>
+      <table class="mtt-table">
+        <tr><td>${esc(metricLabel)}</td><td>${valStr}</td></tr>
+        <tr><td>Wells</td><td>${fmtInt(p.n_wells)}</td></tr>
+      </table>
+    </div>`;
 }
 
 function popupHtml(p: Record<string, unknown>): string {

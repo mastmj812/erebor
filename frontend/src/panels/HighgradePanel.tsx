@@ -1,0 +1,295 @@
+import { useEffect, useState } from "react";
+
+import {
+  fetchFacets,
+  fetchHighgradePads,
+  type CategoricalField,
+  type HighgradeAgg,
+  type HighgradeFacets,
+  type HighgradeFilters,
+  type HighgradeMetric,
+} from "../api/highgrade";
+import { colorForFormation } from "../map/formations";
+import { useMapStore } from "../store";
+
+const METRICS: { value: HighgradeMetric; label: string }[] = [
+  { value: "npv5", label: "NPV @ 5%" },
+  { value: "npv10", label: "NPV @ 10%" },
+  { value: "npv15", label: "NPV @ 15%" },
+  { value: "npv20", label: "NPV @ 20%" },
+  { value: "npv25", label: "NPV @ 25%" },
+  { value: "pv5", label: "PV @ 5%" },
+  { value: "pv10", label: "PV @ 10%" },
+  { value: "pv15", label: "PV @ 15%" },
+  { value: "pv20", label: "PV @ 20%" },
+  { value: "pv25", label: "PV @ 25%" },
+  { value: "oil_eur", label: "Oil EUR" },
+  { value: "gas_eur", label: "Gas EUR" },
+  { value: "well_count", label: "Well count" },
+];
+
+// tier multi-selects (4 chips each, Tier-1..4)
+const TIER_FIELDS: { field: CategoricalField; label: string }[] = [
+  { field: "rqt", label: "Rock quality tier" },
+  { field: "spacing_t", label: "Spacing tier" },
+  { field: "deplet_t", label: "Depletion tier" },
+  { field: "complet_t", label: "Completion tier" },
+];
+
+// numeric range sliders (min/max entry, seeded with the facet bounds)
+const RANGE_FIELDS: { col: string; label: string; money?: boolean }[] = [
+  { col: "rqs", label: "Rock-quality score" },
+  { col: "spacing_s", label: "Spacing score" },
+  { col: "deplet_s", label: "Depletion score" },
+  { col: "complet_s", label: "Completion score" },
+  { col: "npv25", label: "NPV @ 25% ($)", money: true },
+  { col: "oil_eur", label: "Oil EUR (bbl)" },
+  { col: "ll_ft", label: "Lateral length (ft)" },
+];
+
+const EMPTY_CATS: Record<CategoricalField, string[]> = {
+  formation: [], operator: [], spacing_t: [], deplet_t: [], complet_t: [], rqt: [],
+};
+
+type RangeMap = Record<string, [number | null, number | null]>;
+
+export function HighgradePanel() {
+  const basin = useMapStore((s) => s.basin);
+  const setBasin = useMapStore((s) => s.setBasin);
+  const highgrade = useMapStore((s) => s.highgrade);
+  const setHighgrade = useMapStore((s) => s.setHighgrade);
+
+  const [facets, setFacets] = useState<HighgradeFacets | null>(null);
+  const [cats, setCats] = useState<Record<CategoricalField, string[]>>({ ...EMPTY_CATS });
+  const [ranges, setRanges] = useState<RangeMap>({});
+  const [metric, setMetric] = useState<HighgradeMetric>("npv25");
+  const [agg, setAgg] = useState<HighgradeAgg>("sum");
+  const [opSearch, setOpSearch] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Load facets on mount + basin change; reset the form (filters are basin-specific).
+  useEffect(() => {
+    let live = true;
+    setFacets(null);
+    setCats({ ...EMPTY_CATS });
+    setRanges({});
+    fetchFacets(basin)
+      .then((f) => { if (live) setFacets(f); })
+      .catch((e) => { if (live) setError(String(e)); });
+    return () => { live = false; };
+  }, [basin]);
+
+  const toggleCat = (field: CategoricalField, value: string) =>
+    setCats((c) => {
+      const has = c[field].includes(value);
+      return { ...c, [field]: has ? c[field].filter((v) => v !== value) : [...c[field], value] };
+    });
+
+  const setRange = (col: string, idx: 0 | 1, raw: string) =>
+    setRanges((r) => {
+      const cur = r[col] ?? [null, null];
+      const next: [number | null, number | null] = [...cur] as [number | null, number | null];
+      next[idx] = raw === "" ? null : Number(raw);
+      const cleared = next[0] == null && next[1] == null;
+      const out = { ...r };
+      if (cleared) delete out[col];
+      else out[col] = next;
+      return out;
+    });
+
+  const apply = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const filters: HighgradeFilters = {};
+      (Object.keys(cats) as CategoricalField[]).forEach((f) => {
+        if (cats[f].length) filters[f] = cats[f];
+      });
+      const rangeEntries = Object.entries(ranges).filter(([, [lo, hi]]) => lo != null || hi != null);
+      if (rangeEntries.length) filters.ranges = Object.fromEntries(rangeEntries);
+      const res = await fetchHighgradePads({ basin, filters, metric, agg });
+      setHighgrade(res);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reset = () => {
+    setCats({ ...EMPTY_CATS });
+    setRanges({});
+    setHighgrade(null);
+  };
+
+  const isWellCount = metric === "well_count";
+  const money = metric.startsWith("npv") || metric.startsWith("pv");
+
+  return (
+    <div className="panel highgrade">
+      <div className="seg">
+        <button className={basin === "delaware" ? "active" : ""} onClick={() => setBasin("delaware")}>Delaware</button>
+        <button className={basin === "midland" ? "active" : ""} onClick={() => setBasin("midland")}>Midland</button>
+      </div>
+      <div className="count">Screen undeveloped (PUD) inventory → highlight target pads.</div>
+
+      <h3>Metric (per pad)</h3>
+      <div className="row" style={{ marginBottom: 6 }}>
+        <select value={metric} onChange={(e) => setMetric(e.target.value as HighgradeMetric)} style={{ flex: 1, fontSize: 12 }}>
+          {METRICS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+        </select>
+      </div>
+      {!isWellCount && (
+        <div className="seg sm" style={{ marginBottom: 10 }}>
+          <button className={agg === "sum" ? "active" : ""} onClick={() => setAgg("sum")}>Sum</button>
+          <button className={agg === "avg" ? "active" : ""} onClick={() => setAgg("avg")}>Avg / well</button>
+        </div>
+      )}
+
+      {!facets && !error && <div className="count">Loading filters…</div>}
+
+      {facets && (
+        <>
+          {TIER_FIELDS.map(({ field, label }) => (
+            <ChipGroup
+              key={field}
+              label={label}
+              options={facets.categorical[field]}
+              selected={cats[field]}
+              onToggle={(v) => toggleCat(field, v)}
+            />
+          ))}
+
+          <ChipGroup
+            label="Formation"
+            options={facets.categorical.formation}
+            selected={cats.formation}
+            onToggle={(v) => toggleCat("formation", v)}
+            swatch={colorForFormation}
+          />
+
+          <h3>Operator {cats.operator.length > 0 && <span className="hg-n">({cats.operator.length})</span>}</h3>
+          <input
+            placeholder="Search operators…"
+            value={opSearch}
+            onChange={(e) => setOpSearch(e.target.value)}
+            style={{ width: "100%", fontSize: 12, marginBottom: 4 }}
+          />
+          <div className="hg-oplist">
+            {facets.categorical.operator
+              .filter((o) => o.toLowerCase().includes(opSearch.toLowerCase()))
+              .map((o) => (
+                <label key={o} className="hg-oprow">
+                  <input type="checkbox" checked={cats.operator.includes(o)} onChange={() => toggleCat("operator", o)} />
+                  <span>{o}</span>
+                </label>
+              ))}
+          </div>
+
+          <h3 style={{ marginTop: 10 }}>Ranges</h3>
+          {RANGE_FIELDS.map(({ col, label, money: m }) => (
+            <RangeRow
+              key={col}
+              label={label}
+              bounds={facets.numeric[col]}
+              value={ranges[col] ?? [null, null]}
+              money={m}
+              onChange={(idx, raw) => setRange(col, idx, raw)}
+            />
+          ))}
+
+          <div className="seg" style={{ marginTop: 12 }}>
+            <button className="active" disabled={busy} onClick={() => void apply()}>
+              {busy ? "Screening…" : "Apply"}
+            </button>
+            <button disabled={busy} onClick={reset}>Reset</button>
+          </div>
+        </>
+      )}
+
+      {error && <div className="caveat" style={{ color: "#991b1b", background: "#fef2f2", borderColor: "#fecaca" }}>{error}</div>}
+
+      {highgrade && (
+        <div className="hg-summary">
+          <div><strong>{highgrade.pad_count.toLocaleString()}</strong> pads · <strong>{highgrade.well_count.toLocaleString()}</strong> wells</div>
+          <div className="count" style={{ margin: "2px 0 0" }}>
+            {METRICS.find((m) => m.value === highgrade.metric)?.label}
+            {highgrade.metric !== "well_count" ? ` · ${highgrade.agg}` : ""}: {fmt(highgrade.value_min, money)} … {fmt(highgrade.value_max, money)}
+          </div>
+          {highgrade.pads_missing_geom > 0 && (
+            <div className="count" style={{ margin: "2px 0 0", color: "#92400e" }}>
+              {highgrade.pads_missing_geom.toLocaleString()} matching pads have no polygon (not drawn)
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChipGroup({
+  label, options, selected, onToggle, swatch,
+}: {
+  label: string;
+  options: string[];
+  selected: string[];
+  onToggle: (v: string) => void;
+  swatch?: (name: string) => string;
+}) {
+  if (!options || options.length === 0) return null;
+  return (
+    <div className="hg-chipgroup">
+      <h3>{label} {selected.length === 0 ? <span className="hg-n">(all)</span> : <span className="hg-n">({selected.length})</span>}</h3>
+      <div className="hg-chips">
+        {options.map((o) => (
+          <button
+            key={o}
+            className={`hg-chip${selected.includes(o) ? " on" : ""}`}
+            onClick={() => onToggle(o)}
+          >
+            {swatch && <span className="swatch" style={{ background: swatch(o), width: 9, height: 9, marginRight: 4 }} />}
+            {o}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RangeRow({
+  label, bounds, value, money, onChange,
+}: {
+  label: string;
+  bounds: { min: number | null; max: number | null } | undefined;
+  value: [number | null, number | null];
+  money?: boolean;
+  onChange: (idx: 0 | 1, raw: string) => void;
+}) {
+  const ph = (v: number | null) => (v == null ? "" : money ? Math.round(v).toString() : trim(v));
+  return (
+    <div className="hg-range">
+      <div className="hg-range-label">{label}</div>
+      <div className="hg-range-inputs">
+        <input
+          type="number" inputMode="decimal" placeholder={`min ${ph(bounds?.min ?? null)}`}
+          value={value[0] ?? ""} onChange={(e) => onChange(0, e.target.value)}
+        />
+        <span>–</span>
+        <input
+          type="number" inputMode="decimal" placeholder={`max ${ph(bounds?.max ?? null)}`}
+          value={value[1] ?? ""} onChange={(e) => onChange(1, e.target.value)}
+        />
+      </div>
+    </div>
+  );
+}
+
+function fmt(v: number | null, money: boolean): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  if (money) return `$${Math.round(v).toLocaleString()}`;
+  return Math.round(v).toLocaleString();
+}
+function trim(v: number): string {
+  return Math.abs(v) >= 1000 ? Math.round(v).toLocaleString() : v.toPrecision(3);
+}

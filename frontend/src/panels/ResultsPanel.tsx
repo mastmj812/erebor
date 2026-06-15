@@ -31,7 +31,12 @@ export function ResultsPanel() {
   const basin = useMapStore((s) => s.basin);
   const rule = useMapStore((s) => s.selectionRule);
   const [exporting, setExporting] = useState(false);
+  // null = use the default name; user edits make it sticky for the session.
+  const [filenameEdit, setFilenameEdit] = useState<string | null>(null);
   if (!sel) return null;
+
+  const defaultFilename = `erebor_${basin}_${new Date().toISOString().slice(0, 10)}`;
+  const filename = filenameEdit ?? defaultFilename;
 
   const doExport = async () => {
     if (!aoi) return;
@@ -41,7 +46,7 @@ export function ResultsPanel() {
       const culledNames = excludedSticks
         .map((id) => byId.get(id))
         .filter((n): n is string => !!n);
-      await exportSelection(aoi, basin, rule, culledNames, excluded);
+      await exportSelection(aoi, basin, rule, culledNames, excluded, filename);
     } catch (e) {
       alert(`Export failed: ${e}`);
     } finally {
@@ -94,8 +99,17 @@ export function ResultsPanel() {
         </div>
       )}
 
+      <label className="export-name">
+        <input
+          type="text"
+          value={filename}
+          onChange={(e) => setFilenameEdit(e.target.value)}
+          spellCheck={false}
+        />
+        <span className="ext">.xlsx</span>
+      </label>
       <button className="export-btn" disabled={exporting} onClick={() => void doExport()}>
-        {exporting ? "Exporting…" : "⬇ Export selection (.zip)"}
+        {exporting ? "Exporting…" : "⬇ Export workbook (.xlsx)"}
       </button>
 
       <h3 style={{ marginTop: 8 }}>Value basis</h3>
@@ -162,7 +176,7 @@ export function ResultsPanel() {
       <div className="caveat">
         Screening number from Novi’s economics on one flat deck — not the authoritative valuation.
         Convention: value PDP at <b>PV</b> (capex sunk), PUD/RESOURCE at <b>NPV</b> (net of drilling
-        cost). Run your model on the Phase-5 export.
+        cost). Run your model on the workbook export.
       </div>
     </div>
   );

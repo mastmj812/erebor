@@ -71,10 +71,17 @@ Open http://localhost:5180.
   economic rows; the rollup is computed client-side applying formation excludes + the cull set;
   `/production/aggregate` takes an excluded-well list. Culled markers render hollow; culled count +
   "clear culls"; resets on new AOI. ✅
-- **Phase 5 — export (authoritative).** `POST /api/export` streams a ZIP (locations.csv,
-  production_monthly.csv, arps.csv, summary.csv, README) of the current selection minus excluded
-  formations + culled wells. Green "Export selection (.zip)" button in the results panel. Summary
-  reconciles with the in-app rollup. See SCHEMA.md §8. ✅
+- **Phase 5 — export (authoritative).** `POST /api/export` returns a multi-tab xlsx workbook of
+  the current selection minus excluded formations + culled wells: Summary (category × formation
+  rollup, reconciles with the in-app rollup), Assumptions (selection metadata + price deck +
+  caveat), per-formation `{F} — meta` / `{F} — forecast` sheet pairs (per-well table; ip_day grid
+  with formation-AVERAGE and per-well rate + 30-day-volume columns), and an Arps params appendix.
+  PUD/RES only — PDP sticks are counted on Assumptions but excluded (no Novi forecast; actuals
+  live in the warehouse). Editable filename input in the results panel (default
+  `erebor_{basin}_{date}`, sanitized server-side, `.xlsx` enforced). Builder is a pure module
+  (`app/exports/data.py` + `app/exports/xlsx_builder.py`) reusable outside HTTP — the future
+  server-hosted "graduate DSU to finance" action calls the same pair. Replaced the original
+  ZIP-of-CSVs export (2026-06-12). ✅
 
 ## Endpoints (backend)
 

@@ -5,8 +5,8 @@ Pure function of ``ExportData`` -> xlsx bytes; no DB, no HTTP. Sheet set:
   Summary            category x formation rollup (reconciles with the app)
   Assumptions        selection metadata + price deck + caveat
   {F} — meta         per-well table for formation F (PUD/RES only)
-  {F} — forecast     ip_day grid: formation AVERAGE block, then per-well
-                     blocks; each stream as daily rate + 30-day volume
+  {F} — forecast     ip_day grid: formation AVERAGE block only; each stream
+                     as daily rate + 30-day volume
   Arps params        segmented decline params (source of the 50-yr tail)
 
 Built in regular (in-memory) openpyxl mode — a typical selection is a few
@@ -205,10 +205,9 @@ def _write_meta(
 
 def _write_forecast(ws, grid: list[int], streams: list[WellStream]) -> None:
     header = ["ip_day"]
-    for label in ("AVG", *(s.name for s in streams)):
-        for stream in _STREAMS:
-            header.append(f"{label} {stream}_rate")
-            header.append(f"{label} {stream}_vol")
+    for stream in _STREAMS:
+        header.append(f"AVG {stream}_rate")
+        header.append(f"AVG {stream}_vol")
     ws.append(header)
     _bold_row(ws, 1, len(header))
 
@@ -219,11 +218,6 @@ def _write_forecast(ws, grid: list[int], streams: list[WellStream]) -> None:
             avg = sum(getattr(s, stream)[i] for s in streams) / n_wells
             row.append(avg)
             row.append(avg * STEP)
-        for s in streams:
-            for stream in _STREAMS:
-                rate = float(getattr(s, stream)[i])
-                row.append(rate)
-                row.append(rate * STEP)
         ws.append(row)
 
     ws.freeze_panes = "B2"

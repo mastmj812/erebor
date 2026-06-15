@@ -120,31 +120,30 @@ def test_sheet_names_and_order(wb):
 
 def test_forecast_sheet_shape_and_math(wb, data):
     ws = wb["WOLFCAMP A — forecast"]
-    n_wells = 2
     assert ws.max_row == len(data.grid) + 1
-    assert ws.max_column == 1 + 6 * (n_wells + 1)
+    assert ws.max_column == 1 + 6  # ip_day + AVG {oil,gas,water} x {rate,vol}
     assert ws.freeze_panes == "B2"
     header = [c.value for c in ws[1]]
-    assert header[0] == "ip_day"
-    assert header[1] == "AVG oil_rate"
-    assert header[2] == "AVG oil_vol"
-    assert header[7] == "WELL A 1H oil_rate"
+    assert header == [
+        "ip_day",
+        "AVG oil_rate", "AVG oil_vol",
+        "AVG gas_rate", "AVG gas_vol",
+        "AVG water_rate", "AVG water_vol",
+    ]
 
-    # Sample row (ip_day 30): AVG == mean of the well rate cells; vol == rate*30.
+    # Sample row (ip_day 30): AVG == mean of the two wells; vol == rate*30.
     row = [c.value for c in ws[2]]
     assert row[0] == 30
-    w1_oil, w2_oil = row[7], row[13]
-    assert (w1_oil, w2_oil) == (100.0, 140.0)
-    assert row[1] == pytest.approx((w1_oil + w2_oil) / 2)
-    for rate_idx in range(1, len(row) - 1, 2):
+    assert row[1] == pytest.approx((100.0 + 140.0) / 2)  # AVG oil_rate
+    for rate_idx in (1, 3, 5):
         assert row[rate_idx + 1] == pytest.approx(row[rate_idx] * 30)
 
     # Tail rows: arps exponential starts at q_start (t=0) and decays.
     tail_row = [c.value for c in ws[5]]  # ip_day 120 == segment day_start
     assert tail_row[0] == 120
-    assert tail_row[7] == pytest.approx(50.0)
+    assert tail_row[1] == pytest.approx(50.0)  # both wells q_start oil = 50 -> avg 50
     later_row = [c.value for c in ws[20]]
-    assert 0 < later_row[7] < 50.0
+    assert 0 < later_row[1] < 50.0
 
 
 def test_meta_sheet(wb, data):

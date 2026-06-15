@@ -95,6 +95,14 @@ body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 button.link { background: none; border: none; color: #2563eb; cursor: pointer; font-size: 12px; text-decoration: underline; padding: 0; }
 .well-tag { font-size: 11.5px; color: #111827; display: inline-flex; align-items: center; gap: 6px; }
 .tabs { margin-bottom: 8px; max-width: 220px; }
+
+/* Production chart zoom sliders */
+.chart-wrap { display: flex; flex-direction: column; }
+.chart-row { display: flex; align-items: stretch; }
+.chart-xzoom { display: flex; }
+.zoom-slider { accent-color: #2563eb; cursor: pointer; margin: 0; }
+.zoom-slider.zoom-y { width: 14px; writing-mode: vertical-lr; direction: rtl; }
+.zoom-slider.zoom-x { flex: 1; height: 14px; }
 .gb-wrap { display: flex; flex-direction: column; gap: 4px; }
 .gb-grid { display: flex; flex-wrap: wrap; gap: 8px; align-content: flex-start; }
 .gb-legend { margin-left: 8px; color: #52525b; }

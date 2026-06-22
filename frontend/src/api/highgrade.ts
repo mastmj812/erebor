@@ -1,4 +1,4 @@
-import type { HighgradeResult } from "../store";
+import type { GunbarrelPad, HighgradeResult } from "../store";
 
 // Categorical filter fields (multi-select) returned by /facets.categorical.
 export type CategoricalField =
@@ -50,5 +50,22 @@ export async function fetchHighgradePads(body: {
     body: JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`highgrade pads failed: ${r.status}`);
+  return r.json();
+}
+
+// Per-DSU gunbarrel: all PUD+PDP wells in one pad, each tagged in_filter against
+// the (last-applied) screen so off-filter PUDs and all PDPs render muted.
+export async function fetchHighgradeGunbarrel(body: {
+  basin: string;
+  pad_name: string;
+  filters: HighgradeFilters;
+  metric: HighgradeMetric;
+}): Promise<GunbarrelPad> {
+  const r = await fetch("/api/highgrade/gunbarrel", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`highgrade gunbarrel failed: ${r.status}`);
   return r.json();
 }

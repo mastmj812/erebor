@@ -240,6 +240,11 @@ export function MapView() {
       };
       map.on("mousemove", HG_FILL, onPadMove);
       map.on("mouseleave", HG_FILL, () => { map.getCanvas().style.cursor = ""; popupRef.current?.remove(); });
+      // Click a DSU -> open its per-unit gunbarrel (PUD + PDP, offset vs TVD).
+      map.on("click", HG_FILL, (e: MapMouseEvent & { features?: MapGeoJSONFeature[] }) => {
+        const pad = e.features?.[0]?.properties?.pad_name as string | undefined;
+        if (pad) { popupRef.current?.remove(); useMapStore.getState().openHgGunbarrel(pad); }
+      });
 
       // Draw controller: lasso / box -> run selection.
       const drawer = new DrawingController(map, {

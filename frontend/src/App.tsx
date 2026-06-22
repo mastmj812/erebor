@@ -1,6 +1,7 @@
 import { MapView } from "./MapView";
 import { BottomPanel } from "./panels/BottomPanel";
 import { Controls } from "./panels/Controls";
+import { HighgradeGunbarrelModal } from "./panels/HighgradeGunbarrelModal";
 import { HighgradeLegend } from "./panels/HighgradeLegend";
 import { HighgradePanel } from "./panels/HighgradePanel";
 import { Legend } from "./panels/Legend";
@@ -25,6 +26,7 @@ export function App() {
         <>
           <HighgradePanel />
           <HighgradeLegend />
+          <HighgradeGunbarrelModal />
         </>
       )}
     </div>

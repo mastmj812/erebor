@@ -65,6 +65,8 @@ export function HighgradePanel() {
   const setBasin = useMapStore((s) => s.setBasin);
   const highgrade = useMapStore((s) => s.highgrade);
   const setHighgrade = useMapStore((s) => s.setHighgrade);
+  const setHighgradeFilters = useMapStore((s) => s.setHighgradeFilters);
+  const closeHgGunbarrel = useMapStore((s) => s.closeHgGunbarrel);
   const overlays = useMapStore((s) => s.overlays);
   const toggleOverlay = useMapStore((s) => s.toggleOverlay);
 
@@ -125,6 +127,8 @@ export function HighgradePanel() {
       if (rangeEntries.length) filters.ranges = Object.fromEntries(rangeEntries);
       const res = await fetchHighgradePads({ basin, filters, metric, agg });
       setHighgrade(res);
+      // Record the applied screen so a per-DSU gunbarrel can grey off-filter wells.
+      setHighgradeFilters(filters);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -136,6 +140,8 @@ export function HighgradePanel() {
     setCats({ ...EMPTY_CATS });
     setRanges({});
     setHighgrade(null);
+    setHighgradeFilters(null);
+    closeHgGunbarrel();
   };
 
   const isWellCount = metric === "well_count";

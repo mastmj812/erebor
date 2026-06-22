@@ -19,6 +19,7 @@ authoritative value) — consistent with the rest of erebor.
 from __future__ import annotations
 
 import json
+import math
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
@@ -31,6 +32,11 @@ from app.db import get_session
 router = APIRouter(prefix="/highgrade", tags=["highgrade"])
 
 _BASIN = Query(..., pattern="^(delaware|midland)$")
+
+# Local planar approximation for the single-pad gunbarrel projection (see below).
+M_PER_DEG_LAT = 110540.0
+M_PER_DEG_LON = 111320.0
+FT_PER_M = 3.28084
 
 # Whitelists — every column/metric that can reach SQL is validated against these,
 # so list/range filters and the metric expression are never free-text-interpolated.
@@ -198,3 +204,106 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
 
     result = json.loads(session.execute(sql, params).scalar())
     return {"basin": body.basin, "metric": body.metric, "agg": agg, **result}
+
+
+# ---------------------------------------------------------------------------
+# gunbarrel (per-DSU cross-section)
+# ---------------------------------------------------------------------------
+class GunbarrelBody(BaseModel):
+    basin: Literal["delaware", "midland"]
+    pad_name: str
+    filters: HighgradeFilters = Field(default_factory=HighgradeFilters)
+    metric: Metric = "npv25"
+
+
+@router.post("/gunbarrel")
+def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> dict:
+    """Gunbarrel cross-section for ONE DSU.
+
+    Returns every PUD + PDP well in the unit (RES excluded), projecting each
+    lateral's midpoint onto the axis perpendicular to the pad's mean azimuth
+    (offset, ft) paired with TVD — same math as /api/gunbarrel. Every well is
+    returned regardless of the active screen; instead each carries `in_filter`
+    (true only for a PUD that passes the current Highgrade filters), so the
+    client renders off-filter PUDs and all PDPs muted rather than hiding them.
+    Each well also carries `metric_value` for the currently-selected screen
+    metric (null for the count metric, which has no per-well value).
+
+    PUD/RES carry a real pad_name; PDP's is a placeholder, so PDP wells are
+    pulled by spatially containing their lateral midpoint in this DSU polygon.
+    """
+    where, params, expanding = _build_filters(body.filters)
+    # in_filter is true only for a PUD matching every active filter clause; PDP
+    # (and any off-filter PUD) -> false. `category` is always the PUD gate, so a
+    # PDP can never be in_filter even when the filter set is empty.
+    in_filter_expr = "CASE WHEN " + " AND ".join(["category = 'PUD'", *where]) + " THEN true ELSE false END"
+    # metric is validated against the Metric literal; well_count has no per-well value.
+    metric_expr = "NULL" if body.metric == "well_count" else f"w.{body.metric}"
+    params["basin"] = body.basin
+    params["pad_name"] = body.pad_name
+
+    sql = text(f"""
+        WITH pad AS (
+            -- one polygon per pad_name (raw_novi_intel.pads has duplicate rows)
+            SELECT geom FROM raw_novi_intel.pads
+            WHERE basin = :basin AND pad_name = :pad_name AND geom IS NOT NULL
+            ORDER BY pad_id LIMIT 1
+        )
+        SELECT w.stick_id, w.unique_id, w.category, UPPER(w.formation) AS formation,
+               w.tvd, w.ll_ft, {in_filter_expr} AS in_filter,
+               {metric_expr} AS metric_value,
+               ST_X(ST_LineInterpolatePoint(w.wellstick_geom, 0.5)) AS mx,
+               ST_Y(ST_LineInterpolatePoint(w.wellstick_geom, 0.5)) AS my,
+               ST_X(ST_StartPoint(w.wellstick_geom)) AS sx,
+               ST_Y(ST_StartPoint(w.wellstick_geom)) AS sy,
+               ST_X(ST_EndPoint(w.wellstick_geom))   AS ex,
+               ST_Y(ST_EndPoint(w.wellstick_geom))   AS ey
+        FROM curated.intel_locations w
+        LEFT JOIN pad ON true
+        WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL AND w.tvd IS NOT NULL
+          AND (
+            (w.category = 'PUD' AND w.pad_name = :pad_name)
+            OR (w.category = 'PDP' AND pad.geom IS NOT NULL
+                AND ST_Contains(pad.geom, ST_LineInterpolatePoint(w.wellstick_geom, 0.5)))
+          )
+    """)
+    if expanding:
+        sql = sql.bindparams(*expanding)
+    ws = session.execute(sql, params).mappings().all()
+    if not ws:
+        return {"pad_name": body.pad_name, "well_count": 0, "wells": []}
+
+    lat0 = sum(w["my"] for w in ws) / len(ws)
+    lon0 = sum(w["mx"] for w in ws) / len(ws)
+    k = math.cos(math.radians(lat0))
+
+    def to_m(lon, lat):
+        return ((lon - lon0) * M_PER_DEG_LON * k, (lat - lat0) * M_PER_DEG_LAT)
+
+    # Pad mean lateral direction (sum of heel->toe vectors) -> perpendicular axis.
+    dx = dy = 0.0
+    mids = []
+    for w in ws:
+        sxm, sym = to_m(w["sx"], w["sy"])
+        exm, eym = to_m(w["ex"], w["ey"])
+        dx += exm - sxm
+        dy += eym - sym
+        mids.append(to_m(w["mx"], w["my"]))
+    norm = math.hypot(dx, dy)
+    perp = (1.0, 0.0) if norm < 1e-9 else (-(dy / norm), dx / norm)
+    cx = sum(m[0] for m in mids) / len(mids)
+    cy = sum(m[1] for m in mids) / len(mids)
+
+    wells = []
+    for w, (mxm, mym) in zip(ws, mids):
+        offset_ft = ((mxm - cx) * perp[0] + (mym - cy) * perp[1]) * FT_PER_M
+        wells.append({
+            "stick_id": w["stick_id"], "unique_id": w["unique_id"],
+            "category": w["category"], "formation": w["formation"],
+            "tvd": float(w["tvd"]),
+            "ll_ft": float(w["ll_ft"]) if w["ll_ft"] is not None else None,
+            "offset_ft": round(offset_ft, 1), "in_filter": bool(w["in_filter"]),
+            "metric_value": float(w["metric_value"]) if w["metric_value"] is not None else None,
+        })
+    wells.sort(key=lambda x: x["offset_ft"])
+    return {"pad_name": body.pad_name, "well_count": len(wells), "wells": wells}

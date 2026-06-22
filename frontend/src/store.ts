@@ -1,5 +1,6 @@
 import { create } from "zustand";
 
+import type { HighgradeFilters } from "./api/highgrade";
 import { CATEGORIES, type Category } from "./map/sticksLayers";
 
 export interface BasinMeta {
@@ -38,6 +39,8 @@ export type BottomTab = "production" | "gunbarrel";
 export interface GunbarrelWell {
   stick_id: number; unique_id: string; category: string; formation: string;
   tvd: number; ll_ft: number | null; offset_ft: number;
+  in_filter?: boolean;          // set only by the Highgrade per-DSU gunbarrel
+  metric_value?: number | null; // value of the selected screen metric (Highgrade)
 }
 export interface GunbarrelPad { pad_name: string; well_count: number; wells: GunbarrelWell[] }
 export interface GunbarrelData { pad_count: number; pads: GunbarrelPad[] }
@@ -86,6 +89,10 @@ export interface HighgradeResult {
 interface MapState {
   appMode: AppMode;
   highgrade: HighgradeResult | null;
+  highgradeFilters: HighgradeFilters | null; // last-applied screen, drives the per-DSU gunbarrel
+  hgGunbarrelPad: string | null;             // clicked DSU (modal open when non-null)
+  hgGunbarrel: GunbarrelPad | null;          // loaded per-DSU wells
+  hgGunbarrelLoading: boolean;
   basin: "delaware" | "midland";
   categories: Category[];
   overlays: Record<OverlayKey, boolean>;
@@ -111,6 +118,10 @@ interface MapState {
   gunbarrelLoading: boolean;
   setAppMode: (m: AppMode) => void;
   setHighgrade: (h: HighgradeResult | null) => void;
+  setHighgradeFilters: (f: HighgradeFilters | null) => void;
+  openHgGunbarrel: (padName: string) => void;
+  setHgGunbarrel: (g: GunbarrelPad | null) => void;
+  closeHgGunbarrel: () => void;
   setBasin: (b: "delaware" | "midland") => void;
   toggleCategory: (c: Category) => void;
   toggleOverlay: (k: OverlayKey) => void;
@@ -138,6 +149,10 @@ interface MapState {
 export const useMapStore = create<MapState>((set, get) => ({
   appMode: "map",
   highgrade: null,
+  highgradeFilters: null,
+  hgGunbarrelPad: null,
+  hgGunbarrel: null,
+  hgGunbarrelLoading: false,
   basin: "delaware",
   categories: [...CATEGORIES],
   overlays: { pads: false, grid: false, outline: true, blocks: false, sections: false },
@@ -161,10 +176,14 @@ export const useMapStore = create<MapState>((set, get) => ({
   bottomTab: "production",
   gunbarrel: null,
   gunbarrelLoading: false,
-  setAppMode: (m) => set({ appMode: m }),
+  setAppMode: (m) => set({ appMode: m, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false }),
   setHighgrade: (h) => set({ highgrade: h }),
+  setHighgradeFilters: (f) => set({ highgradeFilters: f }),
+  openHgGunbarrel: (padName) => set({ hgGunbarrelPad: padName, hgGunbarrel: null, hgGunbarrelLoading: true }),
+  setHgGunbarrel: (g) => set({ hgGunbarrel: g, hgGunbarrelLoading: false }),
+  closeHgGunbarrel: () => set({ hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false }),
   setBasin: (b) =>
-    set({ basin: b, highgrade: null, selection: null, aoi: null, deals: null, excludedFormations: [], excludedSticks: [], production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+    set({ basin: b, highgrade: null, highgradeFilters: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, selection: null, aoi: null, deals: null, excludedFormations: [], excludedSticks: [], production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleCategory: (c) =>
     set((s) => ({
       categories: s.categories.includes(c)

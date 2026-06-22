@@ -148,6 +148,31 @@ button.link { background: none; border: none; color: #2563eb; cursor: pointer; f
 .hg-range-inputs span { color: #a1a1aa; }
 .hg-summary { margin-top: 10px; border-top: 1px solid #e4e4e7; padding-top: 8px; font-size: 12.5px; }
 
+/* Per-DSU gunbarrel: draggable, resizable floating window (Highgrade tab). */
+.hg-gb-win { width: 720px; height: 460px; z-index: 8; }
+.hg-gb-close {
+  background: none; border: none; font-size: 20px; line-height: 1;
+  color: #71717a; cursor: pointer; padding: 0 4px;
+}
+.hg-gb-close:hover { color: #27272a; }
+.hg-gb-foot {
+  padding: 8px 14px; border-top: 1px solid #e4e4e7;
+  color: #52525b; font-size: 12px;
+}
+
+/* Gunbarrel marker hover tooltip. */
+.gb-chart { line-height: 0; }
+.gb-tip {
+  position: fixed; z-index: 30; pointer-events: none;
+  background: rgba(24, 24, 27, 0.94); color: #fafafa;
+  border-radius: 5px; padding: 5px 8px; font-size: 11px; line-height: 1.35;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3); white-space: nowrap;
+}
+.gb-tip-name { font-weight: 600; margin-bottom: 2px; }
+.gb-tip-tbl td:first-child { color: #a1a1aa; padding-right: 10px; }
+.gb-tip-tbl td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.gb-tip-status { margin-top: 3px; color: #fcd34d; text-transform: uppercase; letter-spacing: 0.03em; font-size: 10px; }
+
 /* Highgrade color legend (bottom-left). */
 .hg-legend { bottom: 12px; left: 12px; width: 230px; }
 .hg-bar { height: 12px; border-radius: 3px; border: 1px solid #d4d4d8; }

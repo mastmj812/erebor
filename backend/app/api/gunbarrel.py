@@ -52,15 +52,20 @@ def gunbarrel(body: GbBody, session: Session = Depends(get_session)) -> dict:
             WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g),
             sel AS (
               SELECT w.stick_id, w.unique_id, w.category, UPPER(w.formation) AS formation,
+                     fb.formation_blueox, fb.basin_blueox, fb.formation_blueox_source,
                      w.tvd, w.ll_ft, w.wellstick_geom AS geom,
                      ST_LineInterpolatePoint(w.wellstick_geom, 0.5) AS mid,
                      CASE WHEN w.pad_name IS NULL OR w.pad_name IN ('PDP', 'No Pad Name')
                           THEN NULL ELSE w.pad_name END AS real_pad
-              FROM curated.intel_locations w, aoi
+              FROM curated.intel_locations w
+              LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = w.stick_id,
+                   aoi
               WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL
                 AND w.tvd IS NOT NULL AND {pred}
             )
-            SELECT sel.stick_id, sel.unique_id, sel.category, sel.formation, sel.tvd, sel.ll_ft,
+            SELECT sel.stick_id, sel.unique_id, sel.category, sel.formation,
+                   sel.formation_blueox, sel.basin_blueox, sel.formation_blueox_source,
+                   sel.tvd, sel.ll_ft,
                    COALESCE(sel.real_pad, p.pad_name) AS pad_name,
                    ST_X(sel.mid) AS mx, ST_Y(sel.mid) AS my,
                    ST_X(ST_StartPoint(sel.geom)) AS sx, ST_Y(ST_StartPoint(sel.geom)) AS sy,
@@ -114,7 +119,11 @@ def gunbarrel(body: GbBody, session: Session = Depends(get_session)) -> dict:
             wells.append({
                 "stick_id": w["stick_id"],
                 "unique_id": w["unique_id"], "category": w["category"],
-                "formation": w["formation"], "tvd": float(w["tvd"]),
+                "formation": w["formation"],
+                "formation_blueox": w["formation_blueox"],
+                "basin_blueox": w["basin_blueox"],
+                "formation_blueox_source": w["formation_blueox_source"],
+                "tvd": float(w["tvd"]),
                 "ll_ft": float(w["ll_ft"]) if w["ll_ft"] is not None else None,
                 "offset_ft": round(offset_ft, 1),
             })

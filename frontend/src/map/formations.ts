@@ -98,3 +98,55 @@ export function groupedFormations(): Record<FormationGroup, FormationDef[]> {
   for (const f of FORMATIONS) groups[f.group].push(f);
   return groups;
 }
+
+// ===========================================================================
+// Blue Ox standardized formation (formation_blueox codes from
+// curated.intel_formation_blueox). Basin-aware code->color, ported from
+// permian_type_curve (anduin). Intel covers only Delaware + Midland (no CBP);
+// shared codes keep one color across basins. Used by the gun-barrel spot-check.
+// ===========================================================================
+
+export type BasinBlueox = "delaware" | "midland";
+
+const SHARED_BLUEOX: Record<string, string> = {
+  WCA_1: "#f97316", WCB_1: "#22c55e", WCB_2: "#ec4899", WCC: "#8b5cf6",
+  WCD: "#0ea5e9", STRN: "#78716c", BRNT: "#2563eb", MISS: "#dc2626",
+  WDFD: "#4d7c0f", OTHER: "#9ca3af",
+};
+
+export const BLUEOX_COLORS: Record<BasinBlueox, Record<string, string>> = {
+  delaware: {
+    ...SHARED_BLUEOX,
+    AVA_0: "#06b6d4", AVA_1: "#f43f5e", AVA_2: "#84cc16",
+    BS1_S: "#eab308", BS2_C: "#a855f7", BS2_S: "#14b8a6",
+    BS3_C: "#fb923c", BS3_S: "#d946ef", WCXY: "#65a30d", WCA_2: "#e11d48",
+  },
+  midland: {
+    ...SHARED_BLUEOX,
+    US: "#06b6d4", MS: "#f43f5e", JM: "#a855f7",
+    LSSH: "#eab308", DEAN: "#14b8a6", MRMC: "#d946ef",
+  },
+};
+
+export function colorForBlueox(
+  basin: string | null | undefined,
+  code: string | null | undefined,
+): string {
+  if (!basin || !code) return OTHER_COLOR;
+  return BLUEOX_COLORS[basin as BasinBlueox]?.[code] ?? OTHER_COLOR;
+}
+
+// formation_blueox_source -> color, for the gun-barrel "color by source" toggle.
+// Ordered most-trusted -> least for the legend.
+export const BLUEOX_SOURCES: { key: string; label: string; color: string }[] = [
+  { key: "pdp_join", label: "PDP (actual well)", color: "#10b981" },
+  { key: "crosswalk", label: "crosswalk", color: "#3b82f6" },
+  { key: "inferred", label: "inferred (KNN)", color: "#f59e0b" },
+  { key: "(null)", label: "unmapped", color: OTHER_COLOR },
+];
+
+const _SOURCE_COLOR = new Map(BLUEOX_SOURCES.map((s) => [s.key, s.color]));
+
+export function colorForSource(source: string | null | undefined): string {
+  return _SOURCE_COLOR.get(source ?? "(null)") ?? OTHER_COLOR;
+}

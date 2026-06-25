@@ -38,6 +38,9 @@ export interface WellProduction {
 export type BottomTab = "production" | "gunbarrel";
 export interface GunbarrelWell {
   stick_id: number; unique_id: string; category: string; formation: string;
+  formation_blueox: string | null;        // Blue Ox bench code (intel_formation_blueox)
+  basin_blueox: string | null;            // delaware | midland
+  formation_blueox_source: string | null; // pdp_join | inferred | crosswalk | null
   tvd: number; ll_ft: number | null; offset_ft: number;
   in_filter?: boolean;          // set only by the Highgrade per-DSU gunbarrel
   metric_value?: number | null; // value of the selected screen metric (Highgrade)

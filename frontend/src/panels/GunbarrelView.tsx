@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { fetchGunbarrel } from "../api/gunbarrel";
-import { colorForFormation } from "../map/formations";
+import { BLUEOX_SOURCES, colorForBlueox, colorForFormation, colorForSource } from "../map/formations";
 import { useMapStore, type GunbarrelPad, type GunbarrelWell } from "../store";
 
 const M = { l: 46, r: 10, t: 18, b: 26 };
@@ -71,6 +71,10 @@ function GbTooltip({ w, x, y, muted, interactive, metricLabel, formatMetric }: {
         <tbody>
           <tr><td>Category</td><td>{w.category}</td></tr>
           <tr><td>Formation</td><td>{w.formation}</td></tr>
+          <tr><td>Blue Ox</td><td>
+            {w.formation_blueox ?? "—"}
+            {w.formation_blueox_source ? ` (${w.formation_blueox_source})` : ""}
+          </td></tr>
           <tr><td>TVD</td><td>{Math.round(w.tvd).toLocaleString()} ft</td></tr>
           <tr><td>Offset</td><td>{Math.round(w.offset_ft).toLocaleString()} ft</td></tr>
           {w.ll_ft != null && <tr><td>Lateral</td><td>{Math.round(w.ll_ft).toLocaleString()} ft</td></tr>}
@@ -85,12 +89,16 @@ function GbTooltip({ w, x, y, muted, interactive, metricLabel, formatMetric }: {
 // Reusable single-pad cross-section. `isMuted` decides which wells render greyed;
 // `onToggle` (optional) makes markers clickable (Map-tab culling). `exForm` drops
 // formation-excluded wells entirely (Map-tab rollup); pass an empty set to keep all.
-export function PadChart({ pad, exForm, isMuted, onToggle, width, height, metricLabel, formatMetric }: {
+export function PadChart({ pad, exForm, isMuted, onToggle, width, height, metricLabel, formatMetric, colorOf }: {
   pad: GunbarrelPad; exForm: Set<string>;
   isMuted: (w: GunbarrelWell) => boolean;
   onToggle?: (id: number) => void; width: number; height: number;
   metricLabel?: string; formatMetric?: (v: number) => string;
+  // Marker fill. Defaults to the legacy name-based palette (keeps the Highgrade
+  // per-DSU modal unchanged); the main gun-barrel passes a Blue Ox / source fn.
+  colorOf?: (w: GunbarrelWell) => string;
 }) {
+  const colorFn = colorOf ?? ((w: GunbarrelWell) => colorForFormation(w.formation));
   const [hover, setHover] = useState<{ w: GunbarrelWell; x: number; y: number } | null>(null);
   const wells = pad.wells.filter((w) => !exForm.has(w.formation));
   if (!wells.length) return null;
@@ -120,7 +128,7 @@ export function PadChart({ pad, exForm, isMuted, onToggle, width, height, metric
           const cx = sx(w.offset_ft), cy = sy(w.tvd);
           return (
             <Marker key={w.stick_id} cat={w.category} cx={cx} cy={cy}
-              color={colorForFormation(w.formation)} muted={isMuted(w)}
+              color={colorFn(w)} muted={isMuted(w)}
               onClick={onToggle ? () => onToggle(w.stick_id) : undefined}
               onHover={(e) => setHover({ w, x: e.clientX, y: e.clientY })}
               onLeave={() => setHover(null)} />
@@ -147,6 +155,9 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
   const gb = useMapStore((s) => s.gunbarrel);
   const loading = useMapStore((s) => s.gunbarrelLoading);
   const st = useMapStore;
+  // Spot-check coloring: Blue Ox bench code, or the resolution source
+  // (pdp_join / crosswalk / inferred) so the inferred sub-bench calls stand out.
+  const [colorMode, setColorMode] = useState<"bench" | "source">("bench");
 
   if (!sel || !aoi) return <div className="count">Draw or upload an AOI to see the gunbarrel.</div>;
 
@@ -184,22 +195,66 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
 
   const exForm = new Set(excluded);
   const exStick = new Set(excludedSticks);
+  const colorOf = (w: GunbarrelWell) =>
+    colorMode === "source"
+      ? colorForSource(w.formation_blueox_source)
+      : colorForBlueox(w.basin_blueox, w.formation_blueox);
+
+  // Swatch legend for the active color mode, limited to what's loaded.
+  const allWells = gb.pads.flatMap((p) => p.wells);
+  const legend: { label: string; color: string }[] =
+    colorMode === "source"
+      ? BLUEOX_SOURCES.filter((s) =>
+          allWells.some((w) => (w.formation_blueox_source ?? "(null)") === s.key),
+        ).map((s) => ({ label: s.label, color: s.color }))
+      : Array.from(
+          new Map(
+            allWells
+              .filter((w) => w.formation_blueox)
+              .map((w) => [
+                `${w.basin_blueox}:${w.formation_blueox}`,
+                {
+                  label: w.formation_blueox as string,
+                  color: colorForBlueox(w.basin_blueox, w.formation_blueox),
+                },
+              ]),
+          ).values(),
+        ).sort((a, b) => a.label.localeCompare(b.label));
+
+  const modeBtn = (on: boolean): React.CSSProperties => ({
+    marginLeft: 4, padding: "0 6px", fontSize: 11, cursor: "pointer",
+    border: "1px solid #d4d4d8", borderRadius: 3,
+    background: on ? "#27272a" : "#fff", color: on ? "#fff" : "#3f3f46",
+  });
+
   return (
     <div className="gb-wrap">
       <div className="gb-grid">
         {gb.pads.map((pad) => (
           <PadChart key={pad.pad_name} pad={pad} exForm={exForm}
             isMuted={(w) => exStick.has(w.stick_id)} onToggle={toggleStick}
-            width={chartW} height={chartH} />
+            colorOf={colorOf} width={chartW} height={chartH} />
         ))}
       </div>
       <div className="count">
         {gb.pads.length < gb.pad_count
           ? `showing ${gb.pads.length} of ${gb.pad_count} pads (most wells first)`
-          : `${gb.pad_count} pads`} · color = formation, shape = category · click a marker to cull / restore
+          : `${gb.pad_count} pads`} · shape = category · click a marker to cull / restore
+        <span style={{ marginLeft: 10 }}>
+          color:
+          <button style={modeBtn(colorMode === "bench")} onClick={() => setColorMode("bench")}>Blue Ox bench</button>
+          <button style={modeBtn(colorMode === "source")} onClick={() => setColorMode("source")}>source</button>
+        </span>
         <span className="gb-legend">
           <span>○ PUD</span> <span>● PDP</span> <span>△ RES</span> <span>dashed = culled</span>
         </span>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 10px", padding: "4px 6px", fontSize: 10, color: "#52525b" }}>
+        {legend.map((it) => (
+          <span key={it.label} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+            <span style={{ width: 9, height: 9, background: it.color, borderRadius: 2, display: "inline-block" }} /> {it.label}
+          </span>
+        ))}
       </div>
     </div>
   );

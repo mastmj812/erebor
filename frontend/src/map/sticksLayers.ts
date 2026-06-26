@@ -5,7 +5,7 @@ import type {
   LineLayerSpecification,
 } from "maplibre-gl";
 
-import { blueoxColorExpression } from "./formations";
+import { blueoxColorExpression, statusColorExpression } from "./formations";
 
 export const INTEL_SOURCE = "intel";
 export const POINTS_LAYER = "intel-points";
@@ -16,19 +16,23 @@ export const LINES_SRC_LAYER = "intel_lines";
 export type Category = "PDP" | "PUD" | "RES";
 export const CATEGORIES: Category[] = ["PDP", "PUD", "RES"];
 
-// Color by Blue Ox bench (formation_blueox), basin-aware; fallback slate.
-// Same palette/source-of-truth as the SVG gun-barrel and anduin.
-const colorByFormation = blueoxColorExpression();
+export type ColorMode = "bench" | "status";
 
 // Selected sticks (feature-state, keyed by stick_id via the source promoteId)
-// paint yellow; everything else keeps its formation color.
+// paint yellow; everything else takes the active color mode (Blue Ox bench, or
+// §6 reconciliation status). Same palettes as the SVG gun-barrel.
 const SELECTED = ["boolean", ["feature-state", "selected"], false];
-const colorOrSelected = [
-  "case", SELECTED, "#facc15", colorByFormation,
-] as unknown as ExpressionSpecification;
 
-// MapLibre filter: active categories AND not-excluded formations AND (if any)
-// unit match. formation property is emitted UPPER; excluded list is UPPER.
+export function colorExpr(mode: ColorMode): ExpressionSpecification {
+  const base = mode === "status" ? statusColorExpression() : blueoxColorExpression();
+  return ["case", SELECTED, "#facc15", base] as unknown as ExpressionSpecification;
+}
+
+const colorOrSelected = colorExpr("bench"); // initial layer paint; MapView swaps it
+
+// MapLibre filter: active categories AND not-excluded formation_blueox codes AND
+// (if any) unit match. excludedFormations holds formation_blueox codes (the
+// rollup/exclude dimension shared with the ResultsPanel).
 // Empty categories -> none. `units` are EXACT-SUFFIX matched against unique_id
 // (the unit number is the tail, so "Eddy Unit 10" matches "...Eddy Unit 10" but
 // not "...Eddy Unit 100"), OR'd across terms.
@@ -36,6 +40,7 @@ export function stickFilter(
   cats: Category[],
   excludedFormations: string[],
   units: string[] = [],
+  remainingOnly = false,
 ): FilterSpecification {
   const clauses: unknown[] = [
     cats.length === 0
@@ -43,7 +48,8 @@ export function stickFilter(
       : ["in", ["get", "category"], ["literal", cats]],
   ];
   if (excludedFormations.length > 0) {
-    clauses.push(["!", ["in", ["get", "formation"], ["literal", excludedFormations]]]);
+    // excludedFormations are formation_blueox codes (the rollup/exclude dimension).
+    clauses.push(["!", ["in", ["get", "formation_blueox"], ["literal", excludedFormations]]]);
   }
   if (units.length > 0) {
     // Match each term as a substring of unique_id, but NOT when it's immediately
@@ -61,6 +67,15 @@ export function stickFilter(
         ["in", u, uid],
         ["!", ["any", ...digits.map((d) => ["in", u + d, uid])]],
       ]),
+    ]);
+  }
+  if (remainingOnly) {
+    // Drillable-inventory view: among PUDs keep only remaining; RES/PDP pass
+    // (toggle them off via the category checkboxes for a pure remaining view).
+    clauses.push([
+      "any",
+      ["!=", ["get", "category"], "PUD"],
+      ["==", ["get", "recon_status"], "remaining_pud"],
     ]);
   }
   if (clauses.length === 1) return clauses[0] as unknown as FilterSpecification;

@@ -35,6 +35,10 @@ export function Controls() {
   const setDeals = useMapStore((s) => s.setDeals);
   const unitFilter = useMapStore((s) => s.unitFilter);
   const setUnitFilter = useMapStore((s) => s.setUnitFilter);
+  const colorMode = useMapStore((s) => s.colorMode);
+  const setColorMode = useMapStore((s) => s.setColorMode);
+  const remainingOnly = useMapStore((s) => s.remainingOnly);
+  const toggleRemainingOnly = useMapStore((s) => s.toggleRemainingOnly);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -112,6 +116,16 @@ export function Controls() {
           <label htmlFor={`cat-${c}`}>{CATEGORY_LABELS[c]}</label>
         </div>
       ))}
+
+      <h3 style={{ marginTop: 10 }}>Color sticks by</h3>
+      <div className="seg">
+        <button className={colorMode === "bench" ? "active" : ""} onClick={() => setColorMode("bench")}>Bench</button>
+        <button className={colorMode === "status" ? "active" : ""} onClick={() => setColorMode("status")}>Recon status</button>
+      </div>
+      <div className="row" style={{ marginTop: 6 }}>
+        <input id="remaining-only" type="checkbox" checked={remainingOnly} onChange={toggleRemainingOnly} />
+        <label htmlFor="remaining-only">Remaining PUDs only</label>
+      </div>
 
       <h3 style={{ marginTop: 10 }}>Filter to unit(s)</h3>
       <textarea

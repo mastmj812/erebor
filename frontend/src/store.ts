@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 import type { HighgradeFilters } from "./api/highgrade";
-import { CATEGORIES, type Category } from "./map/sticksLayers";
+import { CATEGORIES, type Category, type ColorMode } from "./map/sticksLayers";
 
 export interface BasinMeta {
   basin: string;
@@ -41,6 +41,7 @@ export interface GunbarrelWell {
   formation_blueox: string | null;        // Blue Ox bench code (intel_formation_blueox)
   basin_blueox: string | null;            // delaware | midland
   formation_blueox_source: string | null; // pdp_join | inferred | crosswalk | null
+  recon_status: string | null;            // realized_pud_to_pdp | remaining_pud | conflict | net_new_pdp | null
   tvd: number; ll_ft: number | null; offset_ft: number;
   in_filter?: boolean;          // set only by the Highgrade per-DSU gunbarrel
   metric_value?: number | null; // value of the selected screen metric (Highgrade)
@@ -53,6 +54,7 @@ export interface SelectionStick {
   unique_id: string;
   category: string;
   formation: string;
+  formation_blueox: string | null;
   pad_name: string | null;
   ll_ft: number | null;
   npv5: number; npv10: number; npv15: number; npv20: number; npv25: number;
@@ -108,6 +110,8 @@ interface MapState {
   excludedFormations: string[]; // UPPER formation names dropped from the rollup
   excludedSticks: number[];     // manually culled stick_ids (dropped from rollup/plot/export)
   unitFilter: string[];         // map-only: substring terms matched against unique_id (OR)
+  colorMode: ColorMode;         // map sticks: Blue Ox bench vs §6 reconciliation status
+  remainingOnly: boolean;       // map filter: among PUDs show only remaining (drillable)
   discountRate: DiscountRate;
   valueMetric: ValueMetric;
   production: ProductionAggregate | null;
@@ -136,6 +140,8 @@ interface MapState {
   setDeals: (d: DealFeature[] | null) => void;
   toggleFormation: (f: string) => void;
   setUnitFilter: (u: string[]) => void;
+  setColorMode: (m: ColorMode) => void;
+  toggleRemainingOnly: () => void;
   toggleStick: (id: number) => void;
   clearCulls: () => void;
   setDiscountRate: (r: DiscountRate) => void;
@@ -170,6 +176,8 @@ export const useMapStore = create<MapState>((set, get) => ({
   excludedFormations: [],
   excludedSticks: [],
   unitFilter: [],
+  colorMode: "bench",
+  remainingOnly: false,
   discountRate: 10,
   valueMetric: "npv",
   production: null,
@@ -189,7 +197,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   setHgGunbarrel: (g) => set({ hgGunbarrel: g, hgGunbarrelLoading: false }),
   closeHgGunbarrel: () => set({ hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false }),
   setBasin: (b) =>
-    set({ basin: b, highgrade: null, highgradeFilters: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, selection: null, aoi: null, deals: null, excludedFormations: [], excludedSticks: [], unitFilter: [], production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+    set({ basin: b, highgrade: null, highgradeFilters: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, selection: null, aoi: null, deals: null, excludedFormations: [], excludedSticks: [], unitFilter: [], remainingOnly: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleCategory: (c) =>
     set((s) => ({
       categories: s.categories.includes(c)
@@ -220,6 +228,8 @@ export const useMapStore = create<MapState>((set, get) => ({
         : [...s.excludedFormations, f],
     })),
   setUnitFilter: (u) => set({ unitFilter: u }),
+  setColorMode: (m) => set({ colorMode: m }),
+  toggleRemainingOnly: () => set((s) => ({ remainingOnly: !s.remainingOnly })),
   toggleStick: (id) =>
     set((s) => ({
       excludedSticks: s.excludedSticks.includes(id)

@@ -45,12 +45,14 @@ def select_in_aoi(
     sql = text(f"""
         WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g)
         SELECT w.stick_id, w.unique_id, w.category, UPPER(w.formation) AS formation,
+               fb.formation_blueox,
                w.pad_name, w.ll_ft,
                w.npv5, w.npv10, w.npv15, w.npv20, w.npv25,
                w.pv5, w.pv10, w.pv15, w.pv20, w.pv25,
                w.oil_eur, w.gas_eur,
                w.wti_price, w.hh_price, w.ngl_price, w.wti_diff, w.hh_diff
-        FROM curated.intel_locations w, aoi
+        FROM curated.intel_locations w
+        LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = w.stick_id, aoi
         WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL AND {pred}
     """)
     rows = session.execute(
@@ -63,7 +65,7 @@ def select_in_aoi(
     # Per-stick rows: the frontend computes the value rollup from these, applying
     # the formation filter AND the manual well-cull set, so both are instant.
     _COLS = (
-        "stick_id", "unique_id", "category", "formation", "pad_name", "ll_ft",
+        "stick_id", "unique_id", "category", "formation", "formation_blueox", "pad_name", "ll_ft",
         "npv5", "npv10", "npv15", "npv20", "npv25",
         "pv5", "pv10", "pv15", "pv20", "pv25", "oil_eur", "gas_eur",
     )

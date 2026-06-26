@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { fetchGunbarrel } from "../api/gunbarrel";
-import { BLUEOX_SOURCES, colorForBlueox, colorForFormation, colorForSource } from "../map/formations";
+import { BLUEOX_SOURCES, RECON_STATUS, colorForBlueox, colorForFormation, colorForSource, colorForStatus } from "../map/formations";
 import { useMapStore, type GunbarrelPad, type GunbarrelWell } from "../store";
 
 const M = { l: 46, r: 10, t: 18, b: 26 };
@@ -100,7 +100,7 @@ export function PadChart({ pad, exForm, isMuted, onToggle, width, height, metric
 }) {
   const colorFn = colorOf ?? ((w: GunbarrelWell) => colorForFormation(w.formation));
   const [hover, setHover] = useState<{ w: GunbarrelWell; x: number; y: number } | null>(null);
-  const wells = pad.wells.filter((w) => !exForm.has(w.formation));
+  const wells = pad.wells.filter((w) => !exForm.has(w.formation_blueox ?? "(unmapped)"));
   if (!wells.length) return null;
   const offs = wells.map((w) => w.offset_ft);
   const tvds = wells.map((w) => w.tvd);
@@ -157,7 +157,7 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
   const st = useMapStore;
   // Spot-check coloring: Blue Ox bench code, or the resolution source
   // (pdp_join / crosswalk / inferred) so the inferred sub-bench calls stand out.
-  const [colorMode, setColorMode] = useState<"bench" | "source">("bench");
+  const [colorMode, setColorMode] = useState<"bench" | "source" | "status">("bench");
 
   if (!sel || !aoi) return <div className="count">Draw or upload an AOI to see the gunbarrel.</div>;
 
@@ -184,13 +184,15 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
 
   const W = Math.max(360, width ?? 820);
   const H = Math.max(240, height ?? 380);
-  const FOOTER = 26, GAP = 8;
+  // Reserve room BELOW the chart for the footer (count + color toggle) AND the
+  // swatch legend, so the legend isn't pushed into the scroll area.
+  const FOOTER = 26, LEGEND_H = 56, GAP = 8;
   const n = gb.pads.length;
   const cols = Math.max(1, Math.min(n, Math.floor(W / 380)));
   const chartW = Math.floor((W - (cols - 1) * GAP) / cols) - 1;
   const rows = Math.ceil(n / cols);
   const chartH = rows <= 1
-    ? Math.max(240, H - FOOTER - 4)
+    ? Math.max(220, H - FOOTER - LEGEND_H - 4)
     : Math.min(360, Math.max(220, Math.round(chartW * 0.8)));
 
   const exForm = new Set(excluded);
@@ -198,7 +200,9 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
   const colorOf = (w: GunbarrelWell) =>
     colorMode === "source"
       ? colorForSource(w.formation_blueox_source)
-      : colorForBlueox(w.basin_blueox, w.formation_blueox);
+      : colorMode === "status"
+        ? colorForStatus(w.recon_status)
+        : colorForBlueox(w.basin_blueox, w.formation_blueox);
 
   // Swatch legend for the active color mode, limited to what's loaded.
   const allWells = gb.pads.flatMap((p) => p.wells);
@@ -206,6 +210,10 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
     colorMode === "source"
       ? BLUEOX_SOURCES.filter((s) =>
           allWells.some((w) => (w.formation_blueox_source ?? "(null)") === s.key),
+        ).map((s) => ({ label: s.label, color: s.color }))
+      : colorMode === "status"
+      ? RECON_STATUS.filter((s) =>
+          allWells.some((w) => (w.recon_status ?? "(null)") === s.key),
         ).map((s) => ({ label: s.label, color: s.color }))
       : Array.from(
           new Map(
@@ -244,6 +252,7 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
           color:
           <button style={modeBtn(colorMode === "bench")} onClick={() => setColorMode("bench")}>Blue Ox bench</button>
           <button style={modeBtn(colorMode === "source")} onClick={() => setColorMode("source")}>source</button>
+          <button style={modeBtn(colorMode === "status")} onClick={() => setColorMode("status")}>status</button>
         </span>
         <span className="gb-legend">
           <span>○ PUD</span> <span>● PDP</span> <span>△ RES</span> <span>dashed = culled</span>

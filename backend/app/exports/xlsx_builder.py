@@ -97,13 +97,13 @@ def _bold_row(ws, row: int, n_cols: int) -> None:
 
 
 def _write_summary(ws, data: ExportData) -> None:
-    header = ["category", "formation", "count", *SUMMARY_SUMS]
+    header = ["category", "formation_blueox", "count", *SUMMARY_SUMS]
     ws.append(header)
     _bold_row(ws, 1, len(header))
 
     groups: dict[tuple, dict] = {}
     for r in data.locations:
-        key = (r["category"], (r.get("formation") or "UNKNOWN").upper())
+        key = (r["category"], r.get("formation_blueox") or "(unmapped)")
         g = groups.setdefault(key, {"count": 0, **{c: 0.0 for c in SUMMARY_SUMS}})
         g["count"] += 1
         for c in SUMMARY_SUMS:
@@ -173,7 +173,7 @@ def _write_meta(
     pud = sum(1 for r in loc_rows if r.get("category") == "PUD")
     res = sum(1 for r in loc_rows if r.get("category") == "RES")
 
-    ws.append(["formation", formation])
+    ws.append(["formation_blueox", formation])
     ws.append(["wells", f"{len(loc_rows)} (PUD {pud} / RES {res})"])
     ws.append(["generated", data.generated_at.strftime("%Y-%m-%d %H:%M UTC")])
     for row in (1, 2, 3):
@@ -254,7 +254,7 @@ def build_workbook(data: ExportData) -> bytes:
     # still shows on its meta tab; it just has no forecast columns).
     locs_by_formation: dict[str, list[dict]] = {}
     for r in data.locations:
-        key = (r.get("formation") or "UNKNOWN").upper()
+        key = r.get("formation_blueox") or "(unmapped)"
         locs_by_formation.setdefault(key, []).append(r)
 
     used_slugs: set[str] = set()

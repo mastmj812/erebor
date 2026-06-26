@@ -40,6 +40,7 @@ WITH bounds AS (SELECT ST_TileEnvelope(:z, :x, :y) AS env)
     UPPER(w.formation) AS formation,
     w.formation_blueox,
     w.basin_blueox,
+    w.recon_status,
     w.operator,
     w.npv25,
     w.oil_eur,

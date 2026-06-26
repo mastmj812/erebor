@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { exportSelection } from "../api/export";
-import { colorForFormation } from "../map/formations";
+import { colorForBlueox } from "../map/formations";
 import { useMapStore, type DiscountRate, type SelectionStick } from "../store";
 
 const CAT_ORDER = ["PDP", "PUD", "RES"] as const;
@@ -69,10 +69,11 @@ export function ResultsPanel() {
   for (const s of sel.sticks) {
     if (exStick.has(s.stick_id)) { culled++; continue; } // culled -> contributes to nothing
     const v = Number(s[valKey]);
-    const fm = catForms[s.category].get(s.formation) ?? { count: 0, value: 0 };
+    const fkey = s.formation_blueox ?? "(unmapped)"; // Blue Ox code is the rollup dimension
+    const fm = catForms[s.category].get(fkey) ?? { count: 0, value: 0 };
     fm.count++; fm.value += v;
-    catForms[s.category].set(s.formation, fm);
-    if (!exForm.has(s.formation)) {
+    catForms[s.category].set(fkey, fm);
+    if (!exForm.has(fkey)) {
       cats[s.category].count++;
       cats[s.category].value += v;
       if (s.pad_name) pads.add(`${s.category}|${s.pad_name}`);
@@ -155,7 +156,7 @@ export function ResultsPanel() {
                 return (
                   <label className="item ffilter" key={f} style={{ opacity: on ? 1 : 0.4 }}>
                     <input type="checkbox" checked={on} onChange={() => toggleFormation(f)} />
-                    <span className="swatch" style={{ background: colorForFormation(f) }} />
+                    <span className="swatch" style={{ background: colorForBlueox(basin, f) }} />
                     <span className="bf-name">{f}</span>
                     <span className="bf-n">{fmtInt(v.count)}</span>
                     <span className="bf-npv">{fmtUSD(v.value)}</span>

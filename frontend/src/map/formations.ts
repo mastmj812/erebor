@@ -194,3 +194,34 @@ const _SOURCE_COLOR = new Map(BLUEOX_SOURCES.map((s) => [s.key, s.color]));
 export function colorForSource(source: string | null | undefined): string {
   return _SOURCE_COLOR.get(source ?? "(null)") ?? OTHER_COLOR;
 }
+
+// ===========================================================================
+// §6 reconciliation status (recon_status from curated.erebor_locations).
+// PUD -> realized / remaining / conflict; PDP -> net_new; RES + ordinary
+// producers -> null (slate). Used by the map + gun-barrel "status" color mode.
+// ===========================================================================
+export const RECON_OTHER = "#cbd5e1"; // slate-300: RES / ordinary producers / null
+
+export const RECON_STATUS: { key: string; label: string; color: string }[] = [
+  { key: "remaining_pud", label: "remaining PUD", color: "#10b981" }, // emerald
+  { key: "realized_pud_to_pdp", label: "realized", color: "#9ca3af" }, // muted grey
+  { key: "conflict", label: "conflict", color: "#f59e0b" }, // amber
+  { key: "net_new_pdp", label: "net-new PDP", color: "#a855f7" }, // violet
+  { key: "(null)", label: "other (RES / PDP)", color: RECON_OTHER },
+];
+
+const _STATUS_COLOR = new Map(RECON_STATUS.map((s) => [s.key, s.color]));
+
+export function colorForStatus(status: string | null | undefined): string {
+  return _STATUS_COLOR.get(status ?? "(null)") ?? RECON_OTHER;
+}
+
+// MapLibre paint expression: match recon_status -> color; null/unmatched -> slate.
+export function statusColorExpression(): unknown {
+  const pairs: unknown[] = [];
+  for (const s of RECON_STATUS) {
+    if (s.key === "(null)") continue;
+    pairs.push(s.key, s.color);
+  }
+  return ["match", ["get", "recon_status"], ...pairs, RECON_OTHER];
+}

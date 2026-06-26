@@ -42,7 +42,7 @@ class ExportBody(BaseModel):
     basin: Literal["delaware", "midland"]
     rule: Rule = "intersects"
     exclude_wells: list[str] = []       # culled well names (unique_id)
-    exclude_formations: list[str] = []  # UPPER formation names turned off
+    exclude_formations: list[str] = []  # formation_blueox codes turned off
     filename: str | None = None         # user-chosen workbook name (sans .xlsx)
 
 
@@ -55,7 +55,7 @@ class WellStream:
     """
 
     name: str               # novi_wellname == unique_id
-    formation: str          # UPPER
+    formation: str          # Blue Ox formation_blueox code (the grouping dimension)
     forecast_end_day: int   # last Novi forecast ip_day
     oil: np.ndarray = field(repr=False, default=None)  # type: ignore[assignment]
     gas: np.ndarray = field(repr=False, default=None)  # type: ignore[assignment]
@@ -102,8 +102,10 @@ def assemble_export_data(
     """
     pdp_count = sum(1 for r in loc_rows if r.get("category") == "PDP")
     locations = [r for r in loc_rows if r.get("category") in _FUTURE_CATS]
+    # Group/label by Blue Ox standardized formation (formation_blueox); uncoded
+    # wells fall under '(unmapped)'. Raw Novi `formation` stays on each loc row.
     formation_by_name = {
-        r["unique_id"]: (r.get("formation") or "UNKNOWN").upper() for r in locations
+        r["unique_id"]: (r.get("formation_blueox") or "(unmapped)") for r in locations
     }
 
     fc_by_well: dict[str, list] = defaultdict(list)
@@ -206,12 +208,15 @@ def gather_export_data(session: Session, body: ExportBody) -> ExportData:
     loc_rows = session.execute(
         text(f"""
             WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g)
-            SELECT to_jsonb(w) - 'wellstick_geom' AS r
-            FROM curated.intel_locations w, aoi
+            SELECT to_jsonb(w) - 'wellstick_geom'
+                   || jsonb_build_object('formation_blueox',
+                                         COALESCE(fb.formation_blueox, '(unmapped)')) AS r
+            FROM curated.intel_locations w
+            LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = w.stick_id, aoi
             WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL AND {pred}
-              AND UPPER(w.formation) <> ALL((:xforms)::text[])
+              AND COALESCE(fb.formation_blueox, '(unmapped)') <> ALL((:xforms)::text[])
               AND w.unique_id <> ALL((:xwells)::text[])
-            ORDER BY w.category, w.formation, w.unique_id
+            ORDER BY w.category, COALESCE(fb.formation_blueox, '(unmapped)'), w.unique_id
         """),
         params,
     ).scalars().all()

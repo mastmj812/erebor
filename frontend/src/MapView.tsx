@@ -15,6 +15,7 @@ import {
   LINES_SRC_LAYER,
   POINTS_LAYER,
   POINTS_SRC_LAYER,
+  colorExpr,
   linesLayer,
   pointsLayer,
   stickFilter,
@@ -166,6 +167,8 @@ export function MapView() {
   const excludedFormations = useMapStore((s) => s.excludedFormations);
   const unitFilter = useMapStore((s) => s.unitFilter);
   const excludedSticks = useMapStore((s) => s.excludedSticks);
+  const colorMode = useMapStore((s) => s.colorMode);
+  const remainingOnly = useMapStore((s) => s.remainingOnly);
   const appMode = useMapStore((s) => s.appMode);
   const highgrade = useMapStore((s) => s.highgrade);
 
@@ -326,7 +329,7 @@ export function MapView() {
       const exForm = new Set(excludedFormations);
       const exStick = new Set(excludedSticks);
       for (const s of selection.sticks) {
-        if (exForm.has(s.formation) || exStick.has(s.stick_id)) continue;
+        if (exForm.has(s.formation_blueox ?? "(unmapped)") || exStick.has(s.stick_id)) continue;
         for (const sl of [POINTS_SRC_LAYER, LINES_SRC_LAYER]) {
           map.setFeatureState({ source: INTEL_SOURCE, sourceLayer: sl, id: s.stick_id }, { selected: true });
         }
@@ -374,11 +377,21 @@ export function MapView() {
     if (!styleLoaded) return;
     const map = mapRef.current;
     if (!map) return;
-    const filt = stickFilter(categories, excludedFormations, unitFilter);
+    const filt = stickFilter(categories, excludedFormations, unitFilter, remainingOnly);
     for (const id of [POINTS_LAYER, LINES_LAYER]) {
       if (map.getLayer(id)) map.setFilter(id, filt);
     }
-  }, [categories, excludedFormations, unitFilter, styleLoaded]);
+  }, [categories, excludedFormations, unitFilter, remainingOnly, styleLoaded]);
+
+  // -------- color mode: Blue Ox bench vs §6 reconciliation status --------
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const expr = colorExpr(colorMode);
+    if (map.getLayer(POINTS_LAYER)) map.setPaintProperty(POINTS_LAYER, "circle-color", expr);
+    if (map.getLayer(LINES_LAYER)) map.setPaintProperty(LINES_LAYER, "line-color", expr);
+  }, [colorMode, styleLoaded]);
 
   // -------- overlay toggles --------
   useEffect(() => {
@@ -465,6 +478,7 @@ function popupHtml(p: Record<string, unknown>): string {
       <table class="mtt-table">
         <tr><td>Category</td><td>${esc(p.category)}</td></tr>
         <tr><td>Formation</td><td>${esc(p.formation)}</td></tr>
+        <tr><td>Recon</td><td>${esc(p.recon_status)}</td></tr>
         <tr><td>Operator</td><td>${esc(p.operator)}</td></tr>
         <tr><td>Lateral</td><td>${fmtInt(p.ll_ft)} ft</td></tr>
         <tr><td>Oil EUR</td><td>${fmtInt(p.oil_eur)} bbl</td></tr>

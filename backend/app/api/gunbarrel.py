@@ -52,14 +52,12 @@ def gunbarrel(body: GbBody, session: Session = Depends(get_session)) -> dict:
             WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g),
             sel AS (
               SELECT w.stick_id, w.unique_id, w.category, UPPER(w.formation) AS formation,
-                     fb.formation_blueox, fb.basin_blueox, fb.formation_blueox_source,
+                     w.formation_blueox, w.basin_blueox, w.formation_blueox_source,
                      w.tvd, w.ll_ft, w.wellstick_geom AS geom,
                      ST_LineInterpolatePoint(w.wellstick_geom, 0.5) AS mid,
                      CASE WHEN w.pad_name IS NULL OR w.pad_name IN ('PDP', 'No Pad Name')
                           THEN NULL ELSE w.pad_name END AS real_pad
-              FROM curated.intel_locations w
-              LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = w.stick_id,
-                   aoi
+              FROM curated.erebor_locations w, aoi
               WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL
                 AND w.tvd IS NOT NULL AND {pred}
             )

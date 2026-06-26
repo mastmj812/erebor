@@ -33,9 +33,20 @@ export function Controls() {
   const setSelection = useMapStore((s) => s.setSelection);
   const deals = useMapStore((s) => s.deals);
   const setDeals = useMapStore((s) => s.setDeals);
+  const unitFilter = useMapStore((s) => s.unitFilter);
+  const setUnitFilter = useMapStore((s) => s.setUnitFilter);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [unitText, setUnitText] = useState("");
+
+  // Map-only filter: terms (one per line / comma-separated) matched against
+  // unique_id, OR'd, with a trailing-digit guard so "Eddy Unit 10" doesn't also
+  // catch "Eddy Unit 100". See stickFilter.
+  const applyUnits = (text: string) => {
+    setUnitText(text);
+    setUnitFilter(text.split(/[\n,]/).map((t) => t.trim()).filter(Boolean));
+  };
 
   const count = basinsMeta.find((m) => m.basin === basin)?.count;
 
@@ -101,6 +112,22 @@ export function Controls() {
           <label htmlFor={`cat-${c}`}>{CATEGORY_LABELS[c]}</label>
         </div>
       ))}
+
+      <h3 style={{ marginTop: 10 }}>Filter to unit(s)</h3>
+      <textarea
+        value={unitText}
+        onChange={(e) => applyUnits(e.target.value)}
+        placeholder={"e.g. Eddy Unit 10\nmatches unit name (no Unit 100 bleed); one per line / comma-separated"}
+        rows={2}
+        spellCheck={false}
+        style={{ width: "100%", fontSize: 11, fontFamily: "monospace" }}
+      />
+      {unitFilter.length > 0 && (
+        <div style={{ fontSize: 11, color: "#71717a", marginTop: 2 }}>
+          {unitFilter.length} term{unitFilter.length === 1 ? "" : "s"} active ·{" "}
+          <button type="button" onClick={() => applyUnits("")} style={{ fontSize: 11, cursor: "pointer" }}>clear</button>
+        </div>
+      )}
 
       <h3 style={{ marginTop: 10 }}>Define AOI</h3>
       <div className="seg">

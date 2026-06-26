@@ -1,19 +1,19 @@
-import { type FormationGroup, groupedFormations } from "../map/formations";
-
-const GROUP_ORDER: FormationGroup[] = ["Wolfcamp", "Bone Spring", "Spraberry", "Other"];
+import { blueoxLegend } from "../map/formations";
+import { useMapStore } from "../store";
 
 export function Legend() {
-  const groups = groupedFormations();
+  const basin = useMapStore((s) => s.basin);
+  const groups = blueoxLegend(basin);
   return (
     <div className="panel legend">
-      <h3>Formation</h3>
-      {GROUP_ORDER.map((g) => (
-        <div className="legend-group" key={g}>
-          <div>{g}</div>
-          {groups[g].map((f) => (
-            <div className="item" key={f.name}>
-              <span className="swatch" style={{ background: f.color }} />
-              {f.name}
+      <h3>Formation (Blue Ox)</h3>
+      {groups.map((g) => (
+        <div className="legend-group" key={g.group}>
+          <div>{g.group}</div>
+          {g.codes.map((c) => (
+            <div className="item" key={c.code}>
+              <span className="swatch" style={{ background: c.color }} />
+              {c.code}
             </div>
           ))}
         </div>

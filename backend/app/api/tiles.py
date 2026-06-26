@@ -38,6 +38,8 @@ WITH bounds AS (SELECT ST_TileEnvelope(:z, :x, :y) AS env)
     w.unique_id,
     w.category,
     UPPER(w.formation) AS formation,
+    w.formation_blueox,
+    w.basin_blueox,
     w.operator,
     w.npv25,
     w.oil_eur,
@@ -46,7 +48,7 @@ WITH bounds AS (SELECT ST_TileEnvelope(:z, :x, :y) AS env)
       ST_Transform({geom_expr}, 3857),
       (SELECT env FROM bounds), 4096, 64, true
     ) AS geom
-  FROM curated.intel_locations w
+  FROM curated.erebor_locations w
   WHERE w.basin = :basin
     AND w.wellstick_geom IS NOT NULL
     AND ST_Intersects(ST_Transform(w.wellstick_geom, 3857), (SELECT env FROM bounds))

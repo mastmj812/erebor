@@ -5,7 +5,7 @@ import type {
   LineLayerSpecification,
 } from "maplibre-gl";
 
-import { OTHER_COLOR, formationMatchPairs } from "./formations";
+import { blueoxColorExpression } from "./formations";
 
 export const INTEL_SOURCE = "intel";
 export const POINTS_LAYER = "intel-points";
@@ -16,13 +16,9 @@ export const LINES_SRC_LAYER = "intel_lines";
 export type Category = "PDP" | "PUD" | "RES";
 export const CATEGORIES: Category[] = ["PDP", "PUD", "RES"];
 
-// Color by formation (emitted UPPER from the backend); fallback slate.
-const colorByFormation = [
-  "match",
-  ["get", "formation"],
-  ...formationMatchPairs(),
-  OTHER_COLOR,
-];
+// Color by Blue Ox bench (formation_blueox), basin-aware; fallback slate.
+// Same palette/source-of-truth as the SVG gun-barrel and anduin.
+const colorByFormation = blueoxColorExpression();
 
 // Selected sticks (feature-state, keyed by stick_id via the source promoteId)
 // paint yellow; everything else keeps its formation color.
@@ -31,21 +27,44 @@ const colorOrSelected = [
   "case", SELECTED, "#facc15", colorByFormation,
 ] as unknown as ExpressionSpecification;
 
-// MapLibre filter: active categories AND not-excluded formations (formation
-// property is emitted UPPER; excluded list is UPPER). Empty categories -> none.
-export function stickFilter(cats: Category[], excludedFormations: string[]): FilterSpecification {
-  const catF =
+// MapLibre filter: active categories AND not-excluded formations AND (if any)
+// unit match. formation property is emitted UPPER; excluded list is UPPER.
+// Empty categories -> none. `units` are EXACT-SUFFIX matched against unique_id
+// (the unit number is the tail, so "Eddy Unit 10" matches "...Eddy Unit 10" but
+// not "...Eddy Unit 100"), OR'd across terms.
+export function stickFilter(
+  cats: Category[],
+  excludedFormations: string[],
+  units: string[] = [],
+): FilterSpecification {
+  const clauses: unknown[] = [
     cats.length === 0
       ? ["==", ["get", "category"], "__none__"]
-      : ["in", ["get", "category"], ["literal", cats]];
-  if (excludedFormations.length === 0) {
-    return catF as unknown as FilterSpecification;
+      : ["in", ["get", "category"], ["literal", cats]],
+  ];
+  if (excludedFormations.length > 0) {
+    clauses.push(["!", ["in", ["get", "formation"], ["literal", excludedFormations]]]);
   }
-  return [
-    "all",
-    catF,
-    ["!", ["in", ["get", "formation"], ["literal", excludedFormations]]],
-  ] as unknown as FilterSpecification;
+  if (units.length > 0) {
+    // Match each term as a substring of unique_id, but NOT when it's immediately
+    // followed by another digit — so "Eddy Unit 10" hits "...Unit 10" yet not
+    // "...Unit 100/101". Uses only `in` (slice/length get rejected in filters).
+    // PDP is exempt: curated producers key on api10 (no unit name), and you want
+    // the producing context visible alongside a filtered unit's PUDs.
+    const uid = ["get", "unique_id"];
+    const digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+    clauses.push([
+      "any",
+      ["==", ["get", "category"], "PDP"],
+      ...units.map((u) => [
+        "all",
+        ["in", u, uid],
+        ["!", ["any", ...digits.map((d) => ["in", u + d, uid])]],
+      ]),
+    ]);
+  }
+  if (clauses.length === 1) return clauses[0] as unknown as FilterSpecification;
+  return ["all", ...clauses] as unknown as FilterSpecification;
 }
 
 export const pointsLayer: CircleLayerSpecification = {

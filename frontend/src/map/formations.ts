@@ -136,12 +136,56 @@ export function colorForBlueox(
   return BLUEOX_COLORS[basin as BasinBlueox]?.[code] ?? OTHER_COLOR;
 }
 
+// MapLibre paint expression for the wellstick layers: nested `match` on
+// basin_blueox -> formation_blueox -> color (built from BLUEOX_COLORS so the
+// map and the SVG gun-barrel share one source of truth). Unmatched -> slate.
+export function blueoxColorExpression(): unknown {
+  const inner = (basin: BasinBlueox): unknown[] => {
+    const pairs: unknown[] = [];
+    for (const [code, color] of Object.entries(BLUEOX_COLORS[basin])) {
+      pairs.push(code, color);
+    }
+    return ["match", ["get", "formation_blueox"], ...pairs, OTHER_COLOR];
+  };
+  return [
+    "match",
+    ["get", "basin_blueox"],
+    "delaware", inner("delaware"),
+    "midland", inner("midland"),
+    OTHER_COLOR,
+  ];
+}
+
+// code -> play group + display order, for the map legend.
+const _BLUEOX_GROUP: Record<string, string> = {
+  AVA_0: "Avalon", AVA_1: "Avalon", AVA_2: "Avalon",
+  BS1_S: "Bone Spring", BS2_C: "Bone Spring", BS2_S: "Bone Spring",
+  BS3_C: "Bone Spring", BS3_S: "Bone Spring",
+  US: "Spraberry", MS: "Spraberry", JM: "Spraberry", LSSH: "Spraberry", DEAN: "Spraberry",
+  WCXY: "Wolfcamp", WCA_1: "Wolfcamp", WCA_2: "Wolfcamp", WCB_1: "Wolfcamp",
+  WCB_2: "Wolfcamp", WCC: "Wolfcamp", WCD: "Wolfcamp",
+};
+const _GROUP_ORDER = ["Avalon", "Bone Spring", "Spraberry", "Wolfcamp", "Other"];
+
+// Blue Ox legend for the current basin: codes grouped by play, in display order.
+export function blueoxLegend(
+  basin: BasinBlueox,
+): { group: string; codes: { code: string; color: string }[] }[] {
+  const byGroup: Record<string, { code: string; color: string }[]> = {};
+  for (const [code, color] of Object.entries(BLUEOX_COLORS[basin])) {
+    const g = _BLUEOX_GROUP[code] ?? "Other";
+    (byGroup[g] ??= []).push({ code, color });
+  }
+  return _GROUP_ORDER.filter((g) => byGroup[g]?.length).map((g) => ({ group: g, codes: byGroup[g] }));
+}
+
 // formation_blueox_source -> color, for the gun-barrel "color by source" toggle.
 // Ordered most-trusted -> least for the legend.
 export const BLUEOX_SOURCES: { key: string; label: string; color: string }[] = [
   { key: "pdp_join", label: "PDP (actual well)", color: "#10b981" },
   { key: "crosswalk", label: "crosswalk", color: "#3b82f6" },
   { key: "inferred", label: "inferred (KNN)", color: "#f59e0b" },
+  { key: "tvd_corrected", label: "TVD-corrected", color: "#a855f7" },
   { key: "(null)", label: "unmapped", color: OTHER_COLOR },
 ];
 

@@ -164,6 +164,7 @@ export function MapView() {
   const selection = useMapStore((s) => s.selection);
   const aoi = useMapStore((s) => s.aoi);
   const excludedFormations = useMapStore((s) => s.excludedFormations);
+  const unitFilter = useMapStore((s) => s.unitFilter);
   const excludedSticks = useMapStore((s) => s.excludedSticks);
   const appMode = useMapStore((s) => s.appMode);
   const highgrade = useMapStore((s) => s.highgrade);
@@ -373,11 +374,11 @@ export function MapView() {
     if (!styleLoaded) return;
     const map = mapRef.current;
     if (!map) return;
-    const filt = stickFilter(categories, excludedFormations);
+    const filt = stickFilter(categories, excludedFormations, unitFilter);
     for (const id of [POINTS_LAYER, LINES_LAYER]) {
       if (map.getLayer(id)) map.setFilter(id, filt);
     }
-  }, [categories, excludedFormations, styleLoaded]);
+  }, [categories, excludedFormations, unitFilter, styleLoaded]);
 
   // -------- overlay toggles --------
   useEffect(() => {

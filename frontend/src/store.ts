@@ -107,6 +107,7 @@ interface MapState {
   deals: DealFeature[] | null; // uploaded multi-deal shapefile (pick one)
   excludedFormations: string[]; // UPPER formation names dropped from the rollup
   excludedSticks: number[];     // manually culled stick_ids (dropped from rollup/plot/export)
+  unitFilter: string[];         // map-only: substring terms matched against unique_id (OR)
   discountRate: DiscountRate;
   valueMetric: ValueMetric;
   production: ProductionAggregate | null;
@@ -134,6 +135,7 @@ interface MapState {
   setSelection: (s: SelectionResult | null, aoi: GeoJSON.Geometry | null) => void;
   setDeals: (d: DealFeature[] | null) => void;
   toggleFormation: (f: string) => void;
+  setUnitFilter: (u: string[]) => void;
   toggleStick: (id: number) => void;
   clearCulls: () => void;
   setDiscountRate: (r: DiscountRate) => void;
@@ -167,6 +169,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   deals: null,
   excludedFormations: [],
   excludedSticks: [],
+  unitFilter: [],
   discountRate: 10,
   valueMetric: "npv",
   production: null,
@@ -186,7 +189,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   setHgGunbarrel: (g) => set({ hgGunbarrel: g, hgGunbarrelLoading: false }),
   closeHgGunbarrel: () => set({ hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false }),
   setBasin: (b) =>
-    set({ basin: b, highgrade: null, highgradeFilters: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, selection: null, aoi: null, deals: null, excludedFormations: [], excludedSticks: [], production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+    set({ basin: b, highgrade: null, highgradeFilters: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, selection: null, aoi: null, deals: null, excludedFormations: [], excludedSticks: [], unitFilter: [], production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleCategory: (c) =>
     set((s) => ({
       categories: s.categories.includes(c)
@@ -216,6 +219,7 @@ export const useMapStore = create<MapState>((set, get) => ({
         ? s.excludedFormations.filter((x) => x !== f)
         : [...s.excludedFormations, f],
     })),
+  setUnitFilter: (u) => set({ unitFilter: u }),
   toggleStick: (id) =>
     set((s) => ({
       excludedSticks: s.excludedSticks.includes(id)

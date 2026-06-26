@@ -197,14 +197,17 @@ export function colorForSource(source: string | null | undefined): string {
 
 // ===========================================================================
 // §6 reconciliation status (recon_status from curated.erebor_locations).
-// PUD -> realized / remaining / conflict; PDP -> net_new; RES + ordinary
-// producers -> null (slate). Used by the map + gun-barrel "status" color mode.
+// PUD -> remaining / realized_drift / realized_phantom / conflict; PDP -> net_new;
+// RES + ordinary producers -> null (slate). Used by the map + gun-barrel status mode.
+// realized is split by vintage: DRIFT = drilled since the 3Q25 vintage (real
+// PUD->PDP), PHANTOM = Novi listed a slot already drilled years ago (data hygiene).
 // ===========================================================================
 export const RECON_OTHER = "#cbd5e1"; // slate-300: RES / ordinary producers / null
 
 export const RECON_STATUS: { key: string; label: string; color: string }[] = [
   { key: "remaining_pud", label: "remaining PUD", color: "#10b981" }, // emerald
-  { key: "realized_pud_to_pdp", label: "realized", color: "#9ca3af" }, // muted grey
+  { key: "realized_drift", label: "realized (drift)", color: "#9ca3af" }, // grey — real PUD->PDP
+  { key: "realized_phantom", label: "realized (phantom)", color: "#fb7185" }, // rose — Novi already-drilled slot
   { key: "conflict", label: "conflict", color: "#f59e0b" }, // amber
   { key: "net_new_pdp", label: "net-new PDP", color: "#a855f7" }, // violet
   { key: "(null)", label: "other (RES / PDP)", color: RECON_OTHER },

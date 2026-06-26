@@ -1,18 +1,25 @@
 """Gunbarrel cross-section data for an AOI selection.
 
-Per pad, project each lateral's midpoint onto the axis PERPENDICULAR to the pad's
-mean lateral azimuth (horizontal offset, ft) and pair it with TVD — the classic
-gunbarrel view looking down the laterals. Markers carry formation for coloring.
+Projects EVERY selected lateral onto ONE shared axis perpendicular to the
+selection's mean lateral azimuth (horizontal offset, ft) and pairs it with TVD —
+the classic gunbarrel view looking down the laterals, as a single cross-section.
 
-Uses wellstick_geom (present for all categories). Restricted to real DSU pads
-(PDP's placeholder pad names are excluded).
+A single shared frame (not one panel per Novi pad/unit) is deliberate: Novi names
+PUDs per planned well and buckets producers into pad polygons, so trellising by
+that assignment scatters physically co-located wells across panels — exactly the
+wells the §6 reconciliation matches ACROSS unit names. One frame puts a producer
+and the PUDs it overlaps side by side.
+
+Assumes the selection is roughly parallel laterals (one azimuth) — true for a
+box/lasso over a development area; a selection spanning two differently-oriented
+areas will skew the offset. Uses wellstick_geom (present for all categories);
+no pad resolution, so no well is dropped.
 """
 
 from __future__ import annotations
 
 import json
 import math
-from collections import defaultdict
 from typing import Literal
 
 from fastapi import APIRouter, Depends
@@ -32,7 +39,6 @@ _PRED = {
 M_PER_DEG_LAT = 110540.0
 M_PER_DEG_LON = 111320.0
 FT_PER_M = 3.28084
-MAX_PADS = 24
 
 
 class GbBody(BaseModel):
@@ -44,89 +50,66 @@ class GbBody(BaseModel):
 @router.post("")
 def gunbarrel(body: GbBody, session: Session = Depends(get_session)) -> dict:
     pred = _PRED[body.rule]
-    # PUD/RES carry a real pad_name; PDP's is a placeholder, so resolve its pad by
-    # spatially containing its lateral midpoint in a DSU pad polygon. Wells with no
-    # real pad and no containing polygon are dropped (can't place on a pad).
     rows = session.execute(
         text(f"""
-            WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g),
-            sel AS (
-              SELECT w.stick_id, w.unique_id, w.category, UPPER(w.formation) AS formation,
-                     w.formation_blueox, w.basin_blueox, w.formation_blueox_source,
-                     w.tvd, w.ll_ft, w.wellstick_geom AS geom,
-                     ST_LineInterpolatePoint(w.wellstick_geom, 0.5) AS mid,
-                     CASE WHEN w.pad_name IS NULL OR w.pad_name IN ('PDP', 'No Pad Name')
-                          THEN NULL ELSE w.pad_name END AS real_pad
-              FROM curated.erebor_locations w, aoi
-              WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL
-                AND w.tvd IS NOT NULL AND {pred}
-            )
-            SELECT sel.stick_id, sel.unique_id, sel.category, sel.formation,
-                   sel.formation_blueox, sel.basin_blueox, sel.formation_blueox_source,
-                   sel.tvd, sel.ll_ft,
-                   COALESCE(sel.real_pad, p.pad_name) AS pad_name,
-                   ST_X(sel.mid) AS mx, ST_Y(sel.mid) AS my,
-                   ST_X(ST_StartPoint(sel.geom)) AS sx, ST_Y(ST_StartPoint(sel.geom)) AS sy,
-                   ST_X(ST_EndPoint(sel.geom))   AS ex, ST_Y(ST_EndPoint(sel.geom))   AS ey
-            FROM sel
-            LEFT JOIN LATERAL (
-              SELECT p.pad_name FROM raw_novi_intel.pads p
-              WHERE p.basin = :basin AND sel.real_pad IS NULL
-                AND ST_Contains(p.geom, sel.mid)
-              LIMIT 1
-            ) p ON true
-            WHERE COALESCE(sel.real_pad, p.pad_name) IS NOT NULL
+            WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g)
+            SELECT w.stick_id, w.unique_id, w.category, UPPER(w.formation) AS formation,
+                   w.formation_blueox, w.basin_blueox, w.formation_blueox_source,
+                   w.tvd, w.ll_ft,
+                   ST_X(ST_LineInterpolatePoint(w.wellstick_geom, 0.5)) AS mx,
+                   ST_Y(ST_LineInterpolatePoint(w.wellstick_geom, 0.5)) AS my,
+                   ST_X(ST_StartPoint(w.wellstick_geom)) AS sx, ST_Y(ST_StartPoint(w.wellstick_geom)) AS sy,
+                   ST_X(ST_EndPoint(w.wellstick_geom))   AS ex, ST_Y(ST_EndPoint(w.wellstick_geom))   AS ey
+            FROM curated.erebor_locations w, aoi
+            WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL
+              AND w.tvd IS NOT NULL AND {pred}
         """),
         {"aoi": json.dumps(body.aoi), "basin": body.basin},
     ).mappings().all()
 
-    by_pad: dict[str, list] = defaultdict(list)
+    if not rows:
+        return {"pad_count": 0, "pads": []}
+
+    # One frame for the whole selection: shared centroid + a single offset axis
+    # perpendicular to the mean heel->toe azimuth.
+    lat0 = sum(r["my"] for r in rows) / len(rows)
+    lon0 = sum(r["mx"] for r in rows) / len(rows)
+    k = math.cos(math.radians(lat0))
+
+    def to_m(lon, lat):
+        return ((lon - lon0) * M_PER_DEG_LON * k, (lat - lat0) * M_PER_DEG_LAT)
+
+    dx = dy = 0.0
+    mids = []
     for r in rows:
-        by_pad[r["pad_name"]].append(r)
+        sxm, sym = to_m(r["sx"], r["sy"])
+        exm, eym = to_m(r["ex"], r["ey"])
+        dx += exm - sxm
+        dy += eym - sym
+        mids.append(to_m(r["mx"], r["my"]))
+    norm = math.hypot(dx, dy)
+    if norm < 1e-9:
+        perp = (1.0, 0.0)
+    else:
+        ux, uy = dx / norm, dy / norm
+        perp = (-uy, ux)  # rotate the mean lateral direction 90deg
+    cx = sum(m[0] for m in mids) / len(mids)
+    cy = sum(m[1] for m in mids) / len(mids)
 
-    pads_out = []
-    for pad, ws in by_pad.items():
-        lat0 = sum(w["my"] for w in ws) / len(ws)
-        lon0 = sum(w["mx"] for w in ws) / len(ws)
-        k = math.cos(math.radians(lat0))
-
-        def to_m(lon, lat):
-            return ((lon - lon0) * M_PER_DEG_LON * k, (lat - lat0) * M_PER_DEG_LAT)
-
-        # Pad mean lateral direction (sum of heel->toe vectors) -> perpendicular axis.
-        dx = dy = 0.0
-        mids = []
-        for w in ws:
-            sxm, sym = to_m(w["sx"], w["sy"])
-            exm, eym = to_m(w["ex"], w["ey"])
-            dx += exm - sxm
-            dy += eym - sym
-            mids.append(to_m(w["mx"], w["my"]))
-        norm = math.hypot(dx, dy)
-        if norm < 1e-9:
-            perp = (1.0, 0.0)
-        else:
-            ux, uy = dx / norm, dy / norm
-            perp = (-uy, ux)  # rotate lateral direction 90deg
-        cx = sum(m[0] for m in mids) / len(mids)
-        cy = sum(m[1] for m in mids) / len(mids)
-
-        wells = []
-        for w, (mxm, mym) in zip(ws, mids):
-            offset_ft = ((mxm - cx) * perp[0] + (mym - cy) * perp[1]) * FT_PER_M
-            wells.append({
-                "stick_id": w["stick_id"],
-                "unique_id": w["unique_id"], "category": w["category"],
-                "formation": w["formation"],
-                "formation_blueox": w["formation_blueox"],
-                "basin_blueox": w["basin_blueox"],
-                "formation_blueox_source": w["formation_blueox_source"],
-                "tvd": float(w["tvd"]),
-                "ll_ft": float(w["ll_ft"]) if w["ll_ft"] is not None else None,
-                "offset_ft": round(offset_ft, 1),
-            })
-        wells.sort(key=lambda x: x["offset_ft"])
-        pads_out.append({"pad_name": pad, "well_count": len(wells), "wells": wells})
-
-    pads_out.sort(key=lambda p: -p["well_count"])
-    return {"pad_count": len(pads_out), "pads": pads_out[:MAX_PADS]}
+    wells = []
+    for r, (mxm, mym) in zip(rows, mids):
+        offset_ft = ((mxm - cx) * perp[0] + (mym - cy) * perp[1]) * FT_PER_M
+        wells.append({
+            "stick_id": r["stick_id"],
+            "unique_id": r["unique_id"], "category": r["category"],
+            "formation": r["formation"],
+            "formation_blueox": r["formation_blueox"],
+            "basin_blueox": r["basin_blueox"],
+            "formation_blueox_source": r["formation_blueox_source"],
+            "tvd": float(r["tvd"]),
+            "ll_ft": float(r["ll_ft"]) if r["ll_ft"] is not None else None,
+            "offset_ft": round(offset_ft, 1),
+        })
+    wells.sort(key=lambda x: x["offset_ft"])
+    pad = {"pad_name": "Selection", "well_count": len(wells), "wells": wells}
+    return {"pad_count": 1, "pads": [pad]}

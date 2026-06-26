@@ -176,7 +176,7 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
     return (
       <div className="prod-load">
         <button disabled={loading} onClick={() => void load()}>
-          {loading ? "Loading…" : "Load gunbarrel (offset vs TVD by pad)"}
+          {loading ? "Loading…" : "Load gunbarrel (offset vs TVD)"}
         </button>
       </div>
     );
@@ -237,9 +237,9 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
         ))}
       </div>
       <div className="count">
-        {gb.pads.length < gb.pad_count
-          ? `showing ${gb.pads.length} of ${gb.pad_count} pads (most wells first)`
-          : `${gb.pad_count} pads`} · shape = category · click a marker to cull / restore
+        {allWells.length} wells ({["PUD", "PDP", "RES"]
+          .map((cat) => `${allWells.filter((w) => w.category === cat).length} ${cat}`)
+          .join(" · ")}) · shape = category · click a marker to cull / restore
         <span style={{ marginLeft: 10 }}>
           color:
           <button style={modeBtn(colorMode === "bench")} onClick={() => setColorMode("bench")}>Blue Ox bench</button>

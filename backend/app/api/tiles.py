@@ -52,7 +52,11 @@ WITH bounds AS (SELECT ST_TileEnvelope(:z, :x, :y) AS env)
   FROM curated.erebor_locations w
   WHERE w.basin = :basin
     AND w.wellstick_geom IS NOT NULL
-    AND ST_Intersects(ST_Transform(w.wellstick_geom, 3857), (SELECT env FROM bounds))
+    -- Intersect in the geometry's native SRID (4326) so the GiST index on
+    -- wellstick_geom is usable. Transforming the *column* to 3857 (as
+    -- ST_AsMVTGeom does for output) would force a per-row transform + seq scan;
+    -- transforming the tile envelope back to 4326 keeps the index in play.
+    AND ST_Intersects(w.wellstick_geom, ST_Transform((SELECT env FROM bounds), 4326))
 )
 SELECT ST_AsMVT(mvtgeom.*, '{layer}', 4096, 'geom')
 FROM mvtgeom WHERE geom IS NOT NULL

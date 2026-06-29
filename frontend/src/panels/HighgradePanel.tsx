@@ -29,10 +29,11 @@ const METRICS: { value: HighgradeMetric; label: string }[] = [
 ];
 
 // tier multi-selects (4 chips each, Tier-1..4)
-const TIER_FIELDS: { field: CategoricalField; label: string }[] = [
+const TIER_FIELDS: { field: CategoricalField; label: string; hint?: string }[] = [
   { field: "rqt", label: "Rock quality tier" },
   { field: "spacing_t", label: "Spacing tier" },
-  { field: "deplet_t", label: "Depletion tier" },
+  { field: "deplet_t", label: "Depletion tier",
+    hint: "Tier-4 (offset-depleted) off by default — drained rock; click to include." },
   { field: "complet_t", label: "Completion tier" },
 ];
 
@@ -56,6 +57,15 @@ const RANGE_FIELDS: { col: string; label: string; money?: boolean }[] = [
 
 const EMPTY_CATS: Record<CategoricalField, string[]> = {
   formation: [], operator: [], spacing_t: [], deplet_t: [], complet_t: [], rqt: [],
+};
+
+// Highgrade default screens TRUE drillable inventory: not-already-drilled (the
+// reconciliation gate, server-side) AND not offset-depleted. Novi's deplet_t
+// Tier-4 = drained rock (frac grows into the depleted offset; produces water) —
+// technically drillable, worthless — so the depletion-tier filter defaults to
+// Tier-1/2/3 (Tier-4 off). The user can click Tier-4 back in to see it.
+const DEFAULT_CATS: Record<CategoricalField, string[]> = {
+  ...EMPTY_CATS, deplet_t: ["Tier-1", "Tier-2", "Tier-3"],
 };
 
 type RangeMap = Record<string, [number | null, number | null]>;
@@ -84,7 +94,7 @@ export function HighgradePanel() {
   // Reset the form on basin change (filters are basin-specific). Not on the
   // realized toggle — those selections stay valid across the wider/narrower set.
   useEffect(() => {
-    setCats({ ...EMPTY_CATS });
+    setCats({ ...DEFAULT_CATS });
     setRanges({});
     setOpSearch("");
   }, [basin]);
@@ -146,7 +156,7 @@ export function HighgradePanel() {
   };
 
   const reset = () => {
-    setCats({ ...EMPTY_CATS });
+    setCats({ ...DEFAULT_CATS });
     setRanges({});
     setHighgrade(null);
     setHighgradeFilters(null);
@@ -203,10 +213,11 @@ export function HighgradePanel() {
 
       {facets && (
         <>
-          {TIER_FIELDS.map(({ field, label }) => (
+          {TIER_FIELDS.map(({ field, label, hint }) => (
             <ChipGroup
               key={field}
               label={label}
+              hint={hint}
               options={facets.categorical[field]}
               selected={cats[field]}
               onToggle={(v) => toggleCat(field, v)}
@@ -281,18 +292,20 @@ export function HighgradePanel() {
 }
 
 function ChipGroup({
-  label, options, selected, onToggle, swatch,
+  label, options, selected, onToggle, swatch, hint,
 }: {
   label: string;
   options: string[];
   selected: string[];
   onToggle: (v: string) => void;
   swatch?: (name: string) => string;
+  hint?: string;
 }) {
   if (!options || options.length === 0) return null;
   return (
     <div className="hg-chipgroup">
       <h3>{label} {selected.length === 0 ? <span className="hg-n">(all)</span> : <span className="hg-n">({selected.length})</span>}</h3>
+      {hint && <div className="count" style={{ margin: "0 0 4px" }}>{hint}</div>}
       <div className="hg-chips">
         {options.map((o) => (
           <button

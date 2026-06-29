@@ -2,7 +2,7 @@ import type { GunbarrelPad, HighgradeResult } from "../store";
 
 // Categorical filter fields (multi-select) returned by /facets.categorical.
 export type CategoricalField =
-  | "formation"
+  | "formation_blueox"
   | "operator"
   | "spacing_t"
   | "deplet_t"
@@ -22,7 +22,7 @@ export type HighgradeMetric =
 export type HighgradeAgg = "sum" | "avg" | "per_acre";
 
 export interface HighgradeFilters {
-  formation?: string[];
+  formation_blueox?: string[];
   operator?: string[];
   spacing_t?: string[];
   deplet_t?: string[];

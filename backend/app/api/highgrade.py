@@ -40,7 +40,7 @@ FT_PER_M = 3.28084
 
 # Whitelists — every column/metric that can reach SQL is validated against these,
 # so list/range filters and the metric expression are never free-text-interpolated.
-CATEGORICAL: tuple[str, ...] = ("formation", "operator", "spacing_t", "deplet_t", "complet_t", "rqt")
+CATEGORICAL: tuple[str, ...] = ("formation_blueox", "operator", "spacing_t", "deplet_t", "complet_t", "rqt")
 NUMERIC: tuple[str, ...] = (
     "spacing_s", "deplet_s", "complet_s", "rqs",
     "npv5", "npv10", "npv15", "npv20", "npv25",
@@ -75,6 +75,22 @@ def _recon_join(left_alias: str) -> str:
     return f"LEFT JOIN curated.reconciled_inventory rec ON rec.stick_id = {left_alias}.stick_id"
 
 
+def _blueox_join(left_alias: str) -> str:
+    # formation_blueox (the Blue Ox bench) lives on intel_formation_blueox, joined
+    # as `fb` in every facet/filter query that references it.
+    return f"LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = {left_alias}.stick_id"
+
+
+def _cat_sql(col: str) -> str:
+    """SQL expression for a categorical column. formation_blueox is on the fb join
+    (NULL -> '(unmapped)', matching the rest of the app); the other categoricals are
+    bare columns on the base table — unambiguous, so they resolve whether the base
+    is aliased `il` (facets/pads) or `w` (gunbarrel)."""
+    if col == "formation_blueox":
+        return "COALESCE(fb.formation_blueox, '(unmapped)')"
+    return col
+
+
 # ---------------------------------------------------------------------------
 # facets
 # ---------------------------------------------------------------------------
@@ -86,7 +102,8 @@ def facets(
 ) -> dict:
     """Distinct categorical values + numeric min/max over the screened PUD set."""
     cat_aggs = ",\n".join(
-        f"array_agg(DISTINCT il.{c}) FILTER (WHERE il.{c} IS NOT NULL) AS {c}" for c in CATEGORICAL
+        f"array_agg(DISTINCT {_cat_sql(c)}) FILTER (WHERE {_cat_sql(c)} IS NOT NULL) AS {c}"
+        for c in CATEGORICAL
     )
     num_aggs = ",\n".join(
         f"min(il.{c}) AS {c}_min, max(il.{c}) AS {c}_max" for c in NUMERIC
@@ -95,7 +112,7 @@ def facets(
     row = session.execute(
         text(
             f"SELECT {cat_aggs}, {num_aggs} "
-            f"FROM curated.intel_locations il {_recon_join('il')} "
+            f"FROM curated.intel_locations il {_blueox_join('il')} {_recon_join('il')} "
             f"WHERE {_PUD_BASE}{recon}"
         ),
         {"basin": basin},
@@ -111,7 +128,7 @@ def facets(
 # ---------------------------------------------------------------------------
 class HighgradeFilters(BaseModel):
     # categorical multi-selects (omit/empty -> no constraint on that field)
-    formation: list[str] | None = None
+    formation_blueox: list[str] | None = None
     operator: list[str] | None = None
     spacing_t: list[str] | None = None
     deplet_t: list[str] | None = None
@@ -147,7 +164,7 @@ def _build_filters(filters: HighgradeFilters) -> tuple[list[str], dict, list]:
     for col in CATEGORICAL:
         vals = getattr(filters, col)
         if vals:
-            clauses.append(f"{col} IN :{col}")
+            clauses.append(f"{_cat_sql(col)} IN :{col}")
             params[col] = list(vals)
             expanding.append(bindparam(col, expanding=True))
 
@@ -186,7 +203,7 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
             SELECT il.pad_name,
                    {value_expr} AS value,
                    count(*)     AS n_wells
-            FROM curated.intel_locations il {_recon_join('il')}
+            FROM curated.intel_locations il {_blueox_join('il')} {_recon_join('il')}
             WHERE {_PUD_BASE} AND il.pad_name IS NOT NULL {filt_sql}{recon}
             GROUP BY il.pad_name
         ),

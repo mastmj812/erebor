@@ -9,7 +9,7 @@ import {
   type HighgradeFilters,
   type HighgradeMetric,
 } from "../api/highgrade";
-import { colorForFormation } from "../map/formations";
+import { colorForBlueox } from "../map/formations";
 import { useMapStore, type OverlayKey } from "../store";
 
 const METRICS: { value: HighgradeMetric; label: string }[] = [
@@ -56,7 +56,7 @@ const RANGE_FIELDS: { col: string; label: string; money?: boolean }[] = [
 ];
 
 const EMPTY_CATS: Record<CategoricalField, string[]> = {
-  formation: [], operator: [], spacing_t: [], deplet_t: [], complet_t: [], rqt: [],
+  formation_blueox: [], operator: [], spacing_t: [], deplet_t: [], complet_t: [], rqt: [],
 };
 
 // Highgrade default screens TRUE drillable inventory: not-already-drilled (the
@@ -225,11 +225,11 @@ export function HighgradePanel() {
           ))}
 
           <ChipGroup
-            label="Formation"
-            options={facets.categorical.formation}
-            selected={cats.formation}
-            onToggle={(v) => toggleCat("formation", v)}
-            swatch={colorForFormation}
+            label="Formation (Blue Ox)"
+            options={facets.categorical.formation_blueox}
+            selected={cats.formation_blueox}
+            onToggle={(v) => toggleCat("formation_blueox", v)}
+            swatch={(code) => colorForBlueox(basin, code)}
           />
 
           <h3>Operator {cats.operator.length > 0 && <span className="hg-n">({cats.operator.length})</span>}</h3>

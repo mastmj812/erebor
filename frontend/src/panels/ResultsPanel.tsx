@@ -23,6 +23,8 @@ export function ResultsPanel() {
   const toggleFormation = useMapStore((s) => s.toggleFormation);
   const excludedSticks = useMapStore((s) => s.excludedSticks);
   const clearCulls = useMapStore((s) => s.clearCulls);
+  const remainingOnly = useMapStore((s) => s.remainingOnly);
+  const excludeDepleted = useMapStore((s) => s.excludeDepleted);
   const rate = useMapStore((s) => s.discountRate);
   const setDiscountRate = useMapStore((s) => s.setDiscountRate);
   const metric = useMapStore((s) => s.valueMetric);
@@ -46,7 +48,7 @@ export function ResultsPanel() {
       const culledNames = excludedSticks
         .map((id) => byId.get(id))
         .filter((n): n is string => !!n);
-      await exportSelection(aoi, basin, rule, culledNames, excluded, filename);
+      await exportSelection(aoi, basin, rule, culledNames, excluded, filename, remainingOnly, excludeDepleted);
     } catch (e) {
       alert(`Export failed: ${e}`);
     } finally {
@@ -64,10 +66,20 @@ export function ResultsPanel() {
   const catForms: Record<string, Map<string, { count: number; value: number }>> = {
     PDP: new Map(), PUD: new Map(), RES: new Map(),
   };
+  // Mirror the map's display filters so the value rollup never counts wells you
+  // can't see: "Remaining PUDs only" drops anything reconciliation flagged as
+  // already realized (keep remaining PUDs + producers/RES with null recon);
+  // "Exclude depleted" drops Tier-4 PUDs.
+  const passesMapFilter = (s: SelectionStick) =>
+    (!remainingOnly || s.recon_status == null || s.recon_status === "remaining_pud") &&
+    (!excludeDepleted || s.deplet_t !== "Tier-4");
+
   let culled = 0;
+  let filtered = 0;
   const pads = new Set<string>();
   for (const s of sel.sticks) {
     if (exStick.has(s.stick_id)) { culled++; continue; } // culled -> contributes to nothing
+    if (!passesMapFilter(s)) { filtered++; continue; }   // hidden by a map filter
     const v = Number(s[valKey]);
     const fkey = s.formation_blueox ?? "(unmapped)"; // Blue Ox code is the rollup dimension
     const fm = catForms[s.category].get(fkey) ?? { count: 0, value: 0 };
@@ -91,6 +103,7 @@ export function ResultsPanel() {
       <div className="count">
         {includedCount.toLocaleString()} of {sel.count.toLocaleString()} sticks in rollup
         {excluded.length ? ` · ${excluded.length} formation${excluded.length > 1 ? "s" : ""} off` : ""}
+        {filtered > 0 ? ` · ${filtered.toLocaleString()} filtered (remaining/depletion)` : ""}
         {sel.truncated ? " · capped 20k" : ""}
       </div>
       {culled > 0 && (

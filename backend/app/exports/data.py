@@ -43,6 +43,8 @@ class ExportBody(BaseModel):
     rule: Rule = "intersects"
     exclude_wells: list[str] = []       # culled well names (unique_id)
     exclude_formations: list[str] = []  # formation_blueox codes turned off
+    remaining_only: bool = False        # drop realized/phantom/conflict PUDs (keep RES)
+    exclude_depleted: bool = False      # drop Tier-4 (offset-depleted) PUDs
     filename: str | None = None         # user-chosen workbook name (sans .xlsx)
 
 
@@ -202,6 +204,14 @@ def gather_export_data(session: Session, body: ExportBody) -> ExportData:
         "xforms": body.exclude_formations,
         "xwells": body.exclude_wells,
     }
+    # Mirror the map/rollup filters so the workbook value matches the on-screen
+    # total (see ResultsPanel). PDP carry null recon/deplet_t and survive both —
+    # they're counted then dropped from the workbook either way.
+    filt = ""
+    if body.remaining_only:
+        filt += " AND (rec.status IS NULL OR rec.status = 'remaining_pud')"
+    if body.exclude_depleted:
+        filt += " AND w.deplet_t IS DISTINCT FROM 'Tier-4'"
 
     # Included locations: full curated row (minus geom) as JSON -> dict.
     # All categories — PDP is needed for the Assumptions-tab count.
@@ -212,10 +222,11 @@ def gather_export_data(session: Session, body: ExportBody) -> ExportData:
                    || jsonb_build_object('formation_blueox',
                                          COALESCE(fb.formation_blueox, '(unmapped)')) AS r
             FROM curated.intel_locations w
-            LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = w.stick_id, aoi
+            LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = w.stick_id
+            LEFT JOIN curated.reconciled_inventory rec ON rec.stick_id = w.stick_id, aoi
             WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL AND {pred}
               AND COALESCE(fb.formation_blueox, '(unmapped)') <> ALL((:xforms)::text[])
-              AND w.unique_id <> ALL((:xwells)::text[])
+              AND w.unique_id <> ALL((:xwells)::text[]){filt}
             ORDER BY w.category, COALESCE(fb.formation_blueox, '(unmapped)'), w.unique_id
         """),
         params,

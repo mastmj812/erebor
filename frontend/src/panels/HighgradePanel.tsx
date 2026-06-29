@@ -66,6 +66,8 @@ export function HighgradePanel() {
   const highgrade = useMapStore((s) => s.highgrade);
   const setHighgrade = useMapStore((s) => s.setHighgrade);
   const setHighgradeFilters = useMapStore((s) => s.setHighgradeFilters);
+  const includeRealized = useMapStore((s) => s.hgIncludeRealized);
+  const setIncludeRealized = useMapStore((s) => s.setHgIncludeRealized);
   const closeHgGunbarrel = useMapStore((s) => s.closeHgGunbarrel);
   const overlays = useMapStore((s) => s.overlays);
   const toggleOverlay = useMapStore((s) => s.toggleOverlay);
@@ -79,17 +81,24 @@ export function HighgradePanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load facets on mount + basin change; reset the form (filters are basin-specific).
+  // Reset the form on basin change (filters are basin-specific). Not on the
+  // realized toggle — those selections stay valid across the wider/narrower set.
+  useEffect(() => {
+    setCats({ ...EMPTY_CATS });
+    setRanges({});
+    setOpSearch("");
+  }, [basin]);
+
+  // (Re)load facets on basin or realized-toggle change so the filter bounds /
+  // distinct values reflect exactly the PUD population being screened.
   useEffect(() => {
     let live = true;
     setFacets(null);
-    setCats({ ...EMPTY_CATS });
-    setRanges({});
-    fetchFacets(basin)
+    fetchFacets(basin, includeRealized)
       .then((f) => { if (live) setFacets(f); })
       .catch((e) => { if (live) setError(String(e)); });
     return () => { live = false; };
-  }, [basin]);
+  }, [basin, includeRealized]);
 
   // per_acre is only offered for the $-metrics; drop it if the metric changes away.
   useEffect(() => {
@@ -125,7 +134,7 @@ export function HighgradePanel() {
       });
       const rangeEntries = Object.entries(ranges).filter(([, [lo, hi]]) => lo != null || hi != null);
       if (rangeEntries.length) filters.ranges = Object.fromEntries(rangeEntries);
-      const res = await fetchHighgradePads({ basin, filters, metric, agg });
+      const res = await fetchHighgradePads({ basin, filters, metric, agg, include_realized: includeRealized });
       setHighgrade(res);
       // Record the applied screen so a per-DSU gunbarrel can grey off-filter wells.
       setHighgradeFilters(filters);
@@ -154,6 +163,17 @@ export function HighgradePanel() {
         <button className={basin === "midland" ? "active" : ""} onClick={() => setBasin("midland")}>Midland</button>
       </div>
       <div className="count">Screen undeveloped (PUD) inventory → highlight target pads.</div>
+
+      <h3>Inventory</h3>
+      <div className="seg sm">
+        <button className={!includeRealized ? "active" : ""} onClick={() => setIncludeRealized(false)}>Drillable only</button>
+        <button className={includeRealized ? "active" : ""} onClick={() => setIncludeRealized(true)}>All Novi PUDs</button>
+      </div>
+      <div className="count" style={{ margin: "2px 0 10px" }}>
+        {includeRealized
+          ? "Every Novi PUD, including locations §6 reconciliation flags as already drilled."
+          : "Remaining + conflict only; excludes PUDs reconciliation matched to existing production (realized / phantom)."}
+      </div>
 
       <h3>Metric (per pad)</h3>
       <div className="row" style={{ marginBottom: 6 }}>

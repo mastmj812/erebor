@@ -61,9 +61,9 @@ export function HighgradeGunbarrelModal() {
   useEffect(() => {
     if (!pad) return;
     let live = true;
-    const { basin, highgradeFilters, highgrade } = useMapStore.getState();
+    const { basin, highgradeFilters, highgrade, hgIncludeRealized } = useMapStore.getState();
     const m = (highgrade?.metric ?? "npv25") as HighgradeMetric;
-    fetchHighgradeGunbarrel({ basin, pad_name: pad, filters: highgradeFilters ?? {}, metric: m })
+    fetchHighgradeGunbarrel({ basin, pad_name: pad, filters: highgradeFilters ?? {}, metric: m, include_realized: hgIncludeRealized })
       .then((d) => { if (live) useMapStore.getState().setHgGunbarrel(d); })
       .catch((e) => {
         console.error("highgrade gunbarrel failed", e);

@@ -96,6 +96,7 @@ interface MapState {
   appMode: AppMode;
   highgrade: HighgradeResult | null;
   highgradeFilters: HighgradeFilters | null; // last-applied screen, drives the per-DSU gunbarrel
+  hgIncludeRealized: boolean; // Highgrade: false = drillable inventory only (drop §6 realized/phantom PUDs)
   hgGunbarrelPad: string | null;             // clicked DSU (modal open when non-null)
   hgGunbarrel: GunbarrelPad | null;          // loaded per-DSU wells
   hgGunbarrelLoading: boolean;
@@ -129,6 +130,7 @@ interface MapState {
   setAppMode: (m: AppMode) => void;
   setHighgrade: (h: HighgradeResult | null) => void;
   setHighgradeFilters: (f: HighgradeFilters | null) => void;
+  setHgIncludeRealized: (b: boolean) => void;
   openHgGunbarrel: (padName: string) => void;
   setHgGunbarrel: (g: GunbarrelPad | null) => void;
   closeHgGunbarrel: () => void;
@@ -164,6 +166,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   appMode: "map",
   highgrade: null,
   highgradeFilters: null,
+  hgIncludeRealized: false,
   hgGunbarrelPad: null,
   hgGunbarrel: null,
   hgGunbarrelLoading: false,
@@ -197,11 +200,12 @@ export const useMapStore = create<MapState>((set, get) => ({
   setAppMode: (m) => set({ appMode: m, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false }),
   setHighgrade: (h) => set({ highgrade: h }),
   setHighgradeFilters: (f) => set({ highgradeFilters: f }),
+  setHgIncludeRealized: (b) => set({ hgIncludeRealized: b }),
   openHgGunbarrel: (padName) => set({ hgGunbarrelPad: padName, hgGunbarrel: null, hgGunbarrelLoading: true }),
   setHgGunbarrel: (g) => set({ hgGunbarrel: g, hgGunbarrelLoading: false }),
   closeHgGunbarrel: () => set({ hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false }),
   setBasin: (b) =>
-    set({ basin: b, highgrade: null, highgradeFilters: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, selection: null, aoi: null, deals: null, excludedFormations: [], excludedSticks: [], unitFilter: [], reconCounts: null, remainingOnly: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, selection: null, aoi: null, deals: null, excludedFormations: [], excludedSticks: [], unitFilter: [], reconCounts: null, remainingOnly: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleCategory: (c) =>
     set((s) => ({
       categories: s.categories.includes(c)

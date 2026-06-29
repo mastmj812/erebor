@@ -55,24 +55,49 @@ Metric = Literal[
 ]
 Agg = Literal["sum", "avg", "per_acre"]
 
-# Base predicate: PUD inventory only, in the requested basin, with a real pad.
-_PUD_BASE = "category = 'PUD' AND basin = :basin"
+# Base predicate: PUD inventory only, in the requested basin. `il` aliases
+# curated.intel_locations in every query below.
+_PUD_BASE = "il.category = 'PUD' AND il.basin = :basin"
+
+# §6 reconciliation gate. By default Highgrade screens only DRILLABLE inventory:
+# PUDs the reconciliation (curated.reconciled_inventory) did NOT confirm as already
+# drilled. remaining_pud + conflict (+ any unreconciled PUD) stay in; realized_drift
+# and realized_phantom drop out. include_realized=True removes the gate to screen the
+# full Novi PUD set. reconciled_inventory is UNIQUE on stick_id, so the LEFT JOIN
+# never multiplies rows; IS DISTINCT FROM keeps unreconciled (NULL-status) PUDs in.
+_DRILLABLE = (
+    "rec.status IS DISTINCT FROM 'realized_drift' "
+    "AND rec.status IS DISTINCT FROM 'realized_phantom'"
+)
+
+
+def _recon_join(left_alias: str) -> str:
+    return f"LEFT JOIN curated.reconciled_inventory rec ON rec.stick_id = {left_alias}.stick_id"
 
 
 # ---------------------------------------------------------------------------
 # facets
 # ---------------------------------------------------------------------------
 @router.get("/facets")
-def facets(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict:
-    """Distinct categorical values + numeric min/max over PUD inventory (one scan)."""
+def facets(
+    basin: str = _BASIN,
+    include_realized: bool = Query(False),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Distinct categorical values + numeric min/max over the screened PUD set."""
     cat_aggs = ",\n".join(
-        f"array_agg(DISTINCT {c}) FILTER (WHERE {c} IS NOT NULL) AS {c}" for c in CATEGORICAL
+        f"array_agg(DISTINCT il.{c}) FILTER (WHERE il.{c} IS NOT NULL) AS {c}" for c in CATEGORICAL
     )
     num_aggs = ",\n".join(
-        f"min({c}) AS {c}_min, max({c}) AS {c}_max" for c in NUMERIC
+        f"min(il.{c}) AS {c}_min, max(il.{c}) AS {c}_max" for c in NUMERIC
     )
+    recon = "" if include_realized else f" AND {_DRILLABLE}"
     row = session.execute(
-        text(f"SELECT {cat_aggs}, {num_aggs} FROM curated.intel_locations WHERE {_PUD_BASE}"),
+        text(
+            f"SELECT {cat_aggs}, {num_aggs} "
+            f"FROM curated.intel_locations il {_recon_join('il')} "
+            f"WHERE {_PUD_BASE}{recon}"
+        ),
         {"basin": basin},
     ).mappings().one()
 
@@ -101,6 +126,7 @@ class PadsBody(BaseModel):
     filters: HighgradeFilters = Field(default_factory=HighgradeFilters)
     metric: Metric = "npv25"
     agg: Agg = "sum"
+    include_realized: bool = False  # False -> drillable inventory only (see _DRILLABLE)
 
 
 def _value_expr(metric: str, agg: str) -> str:
@@ -109,7 +135,7 @@ def _value_expr(metric: str, agg: str) -> str:
     # per_acre's numerator is the per-pad sum; the /acre division happens in `joined`,
     # where the pad geometry (hence acreage) is available.
     fn = "avg" if agg == "avg" else "sum"
-    return f"{fn}({metric})"  # metric validated against the Metric literal
+    return f"{fn}(il.{metric})"  # metric validated against the Metric literal
 
 
 def _build_filters(filters: HighgradeFilters) -> tuple[list[str], dict, list]:
@@ -150,18 +176,19 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
     where, params, expanding = _build_filters(body.filters)
     params["basin"] = body.basin
     filt_sql = ("AND " + " AND ".join(where)) if where else ""
+    recon = "" if body.include_realized else f" AND {_DRILLABLE}"
     value_expr = _value_expr(body.metric, agg)
     # In per_acre mode the final value is sum/acre; otherwise it passes through.
     final_value = "a.value / NULLIF(p.acres, 0)" if agg == "per_acre" else "a.value"
 
     sql = text(f"""
         WITH agg AS (
-            SELECT pad_name,
+            SELECT il.pad_name,
                    {value_expr} AS value,
                    count(*)     AS n_wells
-            FROM curated.intel_locations
-            WHERE {_PUD_BASE} AND pad_name IS NOT NULL {filt_sql}
-            GROUP BY pad_name
+            FROM curated.intel_locations il {_recon_join('il')}
+            WHERE {_PUD_BASE} AND il.pad_name IS NOT NULL {filt_sql}{recon}
+            GROUP BY il.pad_name
         ),
         pad_geom AS (
             -- one geometry per pad_name; raw_novi_intel.pads has duplicate pad rows
@@ -214,6 +241,7 @@ class GunbarrelBody(BaseModel):
     pad_name: str
     filters: HighgradeFilters = Field(default_factory=HighgradeFilters)
     metric: Metric = "npv25"
+    include_realized: bool = False  # gates the in_filter highlight, matching the choropleth
 
 
 @router.post("/gunbarrel")
@@ -235,8 +263,13 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
     where, params, expanding = _build_filters(body.filters)
     # in_filter is true only for a PUD matching every active filter clause; PDP
     # (and any off-filter PUD) -> false. `category` is always the PUD gate, so a
-    # PDP can never be in_filter even when the filter set is empty.
-    in_filter_expr = "CASE WHEN " + " AND ".join(["category = 'PUD'", *where]) + " THEN true ELSE false END"
+    # PDP can never be in_filter even when the filter set is empty. The drillable
+    # gate (unless include_realized) keeps realized/phantom PUDs visible but
+    # un-highlighted, matching the choropleth's screened population.
+    gate = ["w.category = 'PUD'", *where]
+    if not body.include_realized:
+        gate.append(_DRILLABLE)
+    in_filter_expr = "CASE WHEN " + " AND ".join(gate) + " THEN true ELSE false END"
     # metric is validated against the Metric literal; well_count has no per-well value.
     metric_expr = "NULL" if body.metric == "well_count" else f"w.{body.metric}"
     params["basin"] = body.basin
@@ -260,6 +293,7 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
                ST_Y(ST_EndPoint(w.wellstick_geom))   AS ey
         FROM curated.intel_locations w
         LEFT JOIN pad ON true
+        {_recon_join('w')}
         WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL AND w.tvd IS NOT NULL
           AND (
             (w.category = 'PUD' AND w.pad_name = :pad_name)

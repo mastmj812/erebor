@@ -32,8 +32,11 @@ export interface HighgradeFilters {
   ranges?: Record<string, [number | null, number | null]>;
 }
 
-export async function fetchFacets(basin: string): Promise<HighgradeFacets> {
-  const r = await fetch(`/api/highgrade/facets?basin=${basin}`);
+export async function fetchFacets(
+  basin: string,
+  includeRealized = false,
+): Promise<HighgradeFacets> {
+  const r = await fetch(`/api/highgrade/facets?basin=${basin}&include_realized=${includeRealized}`);
   if (!r.ok) throw new Error(`facets failed: ${r.status}`);
   return r.json();
 }
@@ -43,6 +46,7 @@ export async function fetchHighgradePads(body: {
   filters: HighgradeFilters;
   metric: HighgradeMetric;
   agg: HighgradeAgg;
+  include_realized: boolean;
 }): Promise<HighgradeResult> {
   const r = await fetch("/api/highgrade/pads", {
     method: "POST",
@@ -60,6 +64,7 @@ export async function fetchHighgradeGunbarrel(body: {
   pad_name: string;
   filters: HighgradeFilters;
   metric: HighgradeMetric;
+  include_realized: boolean;
 }): Promise<GunbarrelPad> {
   const r = await fetch("/api/highgrade/gunbarrel", {
     method: "POST",

@@ -74,12 +74,14 @@ export function stickFilter(
     ]);
   }
   if (remainingOnly) {
-    // Drillable-inventory view: among PUDs keep only remaining; RES/PDP pass
-    // (toggle them off via the category checkboxes for a pure remaining view).
+    // Drillable-inventory view: keep remaining PUDs + producing context (ordinary
+    // producers / RES carry no recon_status), and drop everything reconciliation
+    // flagged as already realized — realized_drift/phantom, conflict (PUD side)
+    // and net_new_pdp (PDP side). `has` is false for null props in the tile.
     clauses.push([
       "any",
-      ["!=", ["get", "category"], "PUD"],
       ["==", ["get", "recon_status"], "remaining_pud"],
+      ["!", ["has", "recon_status"]],
     ]);
   }
   if (excludeDepleted) {

@@ -260,8 +260,10 @@ export const useMapStore = create<MapState>((set, get) => ({
       console.warn("loadDepletionCounts failed", e);
     }
   },
-  toggleRemainingOnly: () => set((s) => ({ remainingOnly: !s.remainingOnly })),
-  toggleExcludeDepleted: () => set((s) => ({ excludeDepleted: !s.excludeDepleted })),
+  // Both filters also drive the gun-barrel server query; clear the loaded
+  // gun-barrel so it reloads with the new filter (mirrors setSelection).
+  toggleRemainingOnly: () => set((s) => ({ remainingOnly: !s.remainingOnly, gunbarrel: null })),
+  toggleExcludeDepleted: () => set((s) => ({ excludeDepleted: !s.excludeDepleted, gunbarrel: null })),
   toggleStick: (id) =>
     set((s) => ({
       excludedSticks: s.excludedSticks.includes(id)

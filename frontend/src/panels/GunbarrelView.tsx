@@ -157,6 +157,8 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
   const excluded = useMapStore((s) => s.excludedFormations);
   const excludedSticks = useMapStore((s) => s.excludedSticks);
   const toggleStick = useMapStore((s) => s.toggleStick);
+  const remainingOnly = useMapStore((s) => s.remainingOnly);
+  const excludeDepleted = useMapStore((s) => s.excludeDepleted);
   const gb = useMapStore((s) => s.gunbarrel);
   const loading = useMapStore((s) => s.gunbarrelLoading);
   const st = useMapStore;
@@ -169,7 +171,7 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
   const load = async () => {
     st.getState().setGunbarrelLoading(true);
     try {
-      st.getState().setGunbarrel(await fetchGunbarrel(aoi, basin, rule));
+      st.getState().setGunbarrel(await fetchGunbarrel(aoi, basin, rule, remainingOnly, excludeDepleted));
     } catch (e) {
       console.error(e);
     } finally {

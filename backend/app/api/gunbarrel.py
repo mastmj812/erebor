@@ -45,11 +45,23 @@ class GbBody(BaseModel):
     aoi: dict
     basin: Literal["delaware", "midland"]
     rule: Rule = "intersects"
+    # Mirror the map's display filters so the gun-barrel shows exactly what's on
+    # the map. remaining_only: drop everything reconciliation flagged as already
+    # realized (realized_drift/phantom, conflict, net_new_pdp) — keep remaining
+    # PUDs + ordinary producers (null recon) + RES. exclude_depleted: drop Tier-4
+    # PUDs. Both leave producing context (null recon / null deplet_t) intact.
+    remaining_only: bool = False
+    exclude_depleted: bool = False
 
 
 @router.post("")
 def gunbarrel(body: GbBody, session: Session = Depends(get_session)) -> dict:
     pred = _PRED[body.rule]
+    filt = ""
+    if body.remaining_only:
+        filt += " AND (w.recon_status IS NULL OR w.recon_status = 'remaining_pud')"
+    if body.exclude_depleted:
+        filt += " AND w.deplet_t IS DISTINCT FROM 'Tier-4'"
     rows = session.execute(
         text(f"""
             WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g)
@@ -63,7 +75,7 @@ def gunbarrel(body: GbBody, session: Session = Depends(get_session)) -> dict:
                    ST_X(ST_EndPoint(w.wellstick_geom))   AS ex, ST_Y(ST_EndPoint(w.wellstick_geom))   AS ey
             FROM curated.erebor_locations w, aoi
             WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL
-              AND w.tvd IS NOT NULL AND {pred}
+              AND w.tvd IS NOT NULL AND {pred}{filt}
         """),
         {"aoi": json.dumps(body.aoi), "basin": body.basin},
     ).mappings().all()

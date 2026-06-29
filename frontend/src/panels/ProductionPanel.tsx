@@ -1,5 +1,5 @@
 import { fetchProductionAggregate } from "../api/production";
-import { colorForFormation } from "../map/formations";
+import { colorForBlueox } from "../map/formations";
 import { useMapStore, type Phase } from "../store";
 import { LineChart, type Series } from "./LineChart";
 
@@ -56,7 +56,7 @@ export function ProductionView({ width, height }: { width?: number; height?: num
       const raw = f[phase].map((v) => v / div);
       series.push({
         label: f.formation,
-        color: colorForFormation(f.formation),
+        color: colorForBlueox(basin, f.formation),
         xs: yrs(prod.ip_days),
         ys: mode === "rate" ? raw : cumsum(raw),
       });

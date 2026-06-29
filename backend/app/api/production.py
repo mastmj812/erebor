@@ -67,11 +67,16 @@ class AggBody(BaseModel):
 
 
 def _sel_cte(pred: str) -> str:
+    # The curve rollup dimension is the Blue Ox bench (formation_blueox), matching
+    # the map sticks and the ResultsPanel cull list (both keyed on the bench code).
+    # NULL -> '(unmapped)' to mirror ResultsPanel, so its cull checkboxes line up
+    # with these curves. Sourced from curated.erebor_locations (the only relation
+    # carrying formation_blueox alongside unique_id / wellstick_geom).
     return f"""
         WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g),
         sel AS (
-          SELECT w.unique_id, UPPER(w.formation) AS formation
-          FROM curated.intel_locations w, aoi
+          SELECT w.unique_id, COALESCE(w.formation_blueox, '(unmapped)') AS formation
+          FROM curated.erebor_locations w, aoi
           WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL AND {pred}
             AND w.unique_id <> ALL((:exclude)::text[])
         )

@@ -100,3 +100,20 @@ def recon_counts(basin: str = _BASIN, session: Session = Depends(get_session)) -
         GROUP BY 1
     """), {"basin": basin}).mappings().all()
     return {r["status"]: int(r["n"]) for r in rows}
+
+
+@router.get("/depletion_counts")
+def depletion_counts(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict[str, int]:
+    """Novi depletion-tier stick counts for the basin (legend annotations).
+
+    Counts the same map sticks the tiles render (curated.erebor_locations);
+    NULL deplet_t (PDP / RES — unscored) is keyed '(null)' to match the frontend
+    DEPLETION_TIERS legend entry.
+    """
+    rows = session.execute(text("""
+        SELECT COALESCE(deplet_t, '(null)') AS tier, count(*) AS n
+        FROM curated.erebor_locations
+        WHERE basin = :basin AND wellstick_geom IS NOT NULL
+        GROUP BY 1
+    """), {"basin": basin}).mappings().all()
+    return {r["tier"]: int(r["n"]) for r in rows}

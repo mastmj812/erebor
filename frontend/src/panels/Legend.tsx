@@ -10,12 +10,15 @@ export function Legend() {
   const colorMode = useMapStore((s) => s.colorMode);
   const reconCounts = useMapStore((s) => s.reconCounts);
   const loadReconCounts = useMapStore((s) => s.loadReconCounts);
+  const depletionCounts = useMapStore((s) => s.depletionCounts);
+  const loadDepletionCounts = useMapStore((s) => s.loadDepletionCounts);
 
-  // Pull per-status stick counts when the legend is showing reconciliation
-  // status; cleared on basin change, so this refetches per basin.
+  // Pull per-status / per-tier stick counts for whichever color mode is active;
+  // both are cleared on basin change, so these refetch per basin.
   useEffect(() => {
     if (colorMode === "status") loadReconCounts();
-  }, [colorMode, basin, loadReconCounts]);
+    if (colorMode === "depletion") loadDepletionCounts();
+  }, [colorMode, basin, loadReconCounts, loadDepletionCounts]);
 
   if (colorMode === "status") {
     return (
@@ -41,7 +44,10 @@ export function Legend() {
         {DEPLETION_TIERS.map((t) => (
           <div className="item" key={t.key}>
             <span className="swatch" style={{ background: t.color }} />
-            {t.label}
+            <span className="legend-label">{t.label}</span>
+            {depletionCounts && (
+              <span className="legend-count">{_fmt.format(depletionCounts[t.key] ?? 0)}</span>
+            )}
           </div>
         ))}
       </div>

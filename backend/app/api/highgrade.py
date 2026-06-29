@@ -283,6 +283,7 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
             ORDER BY pad_id LIMIT 1
         )
         SELECT w.stick_id, w.unique_id, w.category, UPPER(w.formation) AS formation,
+               fb.formation_blueox, w.basin AS basin_blueox, fb.formation_blueox_source,
                w.tvd, w.ll_ft, {in_filter_expr} AS in_filter,
                {metric_expr} AS metric_value,
                ST_X(ST_LineInterpolatePoint(w.wellstick_geom, 0.5)) AS mx,
@@ -293,6 +294,7 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
                ST_Y(ST_EndPoint(w.wellstick_geom))   AS ey
         FROM curated.intel_locations w
         LEFT JOIN pad ON true
+        LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = w.stick_id
         {_recon_join('w')}
         WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL AND w.tvd IS NOT NULL
           AND (
@@ -334,6 +336,9 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
         wells.append({
             "stick_id": w["stick_id"], "unique_id": w["unique_id"],
             "category": w["category"], "formation": w["formation"],
+            "formation_blueox": w["formation_blueox"],
+            "basin_blueox": w["basin_blueox"],
+            "formation_blueox_source": w["formation_blueox_source"],
             "tvd": float(w["tvd"]),
             "ll_ft": float(w["ll_ft"]) if w["ll_ft"] is not None else None,
             "offset_ft": round(offset_ft, 1), "in_filter": bool(w["in_filter"]),

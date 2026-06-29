@@ -83,3 +83,20 @@ def basins(session: Session = Depends(get_session)) -> list[dict]:
         }
         for r in rows
     ]
+
+
+@router.get("/recon_counts")
+def recon_counts(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict[str, int]:
+    """§6 reconciliation-status stick counts for the basin (legend annotations).
+
+    Counts the same map sticks the tiles render (curated.erebor_locations);
+    NULL recon_status (RES / ordinary producers) is keyed '(null)' to match the
+    frontend RECON_STATUS legend entry.
+    """
+    rows = session.execute(text("""
+        SELECT COALESCE(recon_status, '(null)') AS status, count(*) AS n
+        FROM curated.erebor_locations
+        WHERE basin = :basin AND wellstick_geom IS NOT NULL
+        GROUP BY 1
+    """), {"basin": basin}).mappings().all()
+    return {r["status"]: int(r["n"]) for r in rows}

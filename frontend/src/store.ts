@@ -1,5 +1,6 @@
 import { create } from "zustand";
 
+import { fetchReconCounts } from "./api/recon";
 import type { HighgradeFilters } from "./api/highgrade";
 import { CATEGORIES, type Category, type ColorMode } from "./map/sticksLayers";
 
@@ -111,6 +112,7 @@ interface MapState {
   excludedSticks: number[];     // manually culled stick_ids (dropped from rollup/plot/export)
   unitFilter: string[];         // map-only: substring terms matched against unique_id (OR)
   colorMode: ColorMode;         // map sticks: Blue Ox bench vs §6 reconciliation status
+  reconCounts: Record<string, number> | null; // recon_status -> stick count for current basin (legend)
   remainingOnly: boolean;       // map filter: among PUDs show only remaining (drillable)
   discountRate: DiscountRate;
   valueMetric: ValueMetric;
@@ -141,6 +143,7 @@ interface MapState {
   toggleFormation: (f: string) => void;
   setUnitFilter: (u: string[]) => void;
   setColorMode: (m: ColorMode) => void;
+  loadReconCounts: () => Promise<void>;
   toggleRemainingOnly: () => void;
   toggleStick: (id: number) => void;
   clearCulls: () => void;
@@ -177,6 +180,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   excludedSticks: [],
   unitFilter: [],
   colorMode: "bench",
+  reconCounts: null,
   remainingOnly: false,
   discountRate: 10,
   valueMetric: "npv",
@@ -197,7 +201,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   setHgGunbarrel: (g) => set({ hgGunbarrel: g, hgGunbarrelLoading: false }),
   closeHgGunbarrel: () => set({ hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false }),
   setBasin: (b) =>
-    set({ basin: b, highgrade: null, highgradeFilters: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, selection: null, aoi: null, deals: null, excludedFormations: [], excludedSticks: [], unitFilter: [], remainingOnly: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+    set({ basin: b, highgrade: null, highgradeFilters: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, selection: null, aoi: null, deals: null, excludedFormations: [], excludedSticks: [], unitFilter: [], reconCounts: null, remainingOnly: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleCategory: (c) =>
     set((s) => ({
       categories: s.categories.includes(c)
@@ -229,6 +233,14 @@ export const useMapStore = create<MapState>((set, get) => ({
     })),
   setUnitFilter: (u) => set({ unitFilter: u }),
   setColorMode: (m) => set({ colorMode: m }),
+  loadReconCounts: async () => {
+    if (get().reconCounts) return; // cached for the current basin (cleared by setBasin)
+    try {
+      set({ reconCounts: await fetchReconCounts(get().basin) });
+    } catch (e) {
+      console.warn("loadReconCounts failed", e);
+    }
+  },
   toggleRemainingOnly: () => set((s) => ({ remainingOnly: !s.remainingOnly })),
   toggleStick: (id) =>
     set((s) => ({

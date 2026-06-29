@@ -169,6 +169,7 @@ export function MapView() {
   const excludedSticks = useMapStore((s) => s.excludedSticks);
   const colorMode = useMapStore((s) => s.colorMode);
   const remainingOnly = useMapStore((s) => s.remainingOnly);
+  const excludeDepleted = useMapStore((s) => s.excludeDepleted);
   const appMode = useMapStore((s) => s.appMode);
   const highgrade = useMapStore((s) => s.highgrade);
 
@@ -377,11 +378,11 @@ export function MapView() {
     if (!styleLoaded) return;
     const map = mapRef.current;
     if (!map) return;
-    const filt = stickFilter(categories, excludedFormations, unitFilter, remainingOnly);
+    const filt = stickFilter(categories, excludedFormations, unitFilter, remainingOnly, excludeDepleted);
     for (const id of [POINTS_LAYER, LINES_LAYER]) {
       if (map.getLayer(id)) map.setFilter(id, filt);
     }
-  }, [categories, excludedFormations, unitFilter, remainingOnly, styleLoaded]);
+  }, [categories, excludedFormations, unitFilter, remainingOnly, excludeDepleted, styleLoaded]);
 
   // -------- color mode: Blue Ox bench vs §6 reconciliation status --------
   useEffect(() => {
@@ -479,6 +480,7 @@ function popupHtml(p: Record<string, unknown>): string {
         <tr><td>Category</td><td>${esc(p.category)}</td></tr>
         <tr><td>Formation</td><td>${esc(p.formation)}</td></tr>
         <tr><td>Recon</td><td>${esc(p.recon_status)}</td></tr>
+        ${p.deplet_t ? `<tr><td>Depletion</td><td>${esc(p.deplet_t)}${p.deplet_t === "Tier-4" ? " — depleted" : ""}</td></tr>` : ""}
         <tr><td>Operator</td><td>${esc(p.operator)}</td></tr>
         <tr><td>Lateral</td><td>${fmtInt(p.ll_ft)} ft</td></tr>
         <tr><td>Oil EUR</td><td>${fmtInt(p.oil_eur)} bbl</td></tr>

@@ -75,6 +75,11 @@ function GbTooltip({ w, x, y, muted, interactive, metricLabel, formatMetric }: {
             {w.formation_blueox ?? "—"}
             {w.formation_blueox_source ? ` (${w.formation_blueox_source})` : ""}
           </td></tr>
+          {w.deplet_t && (
+            <tr><td>Depletion</td><td style={w.deplet_t === "Tier-4" ? { color: "#dc2626", fontWeight: 600 } : undefined}>
+              {w.deplet_t}{w.deplet_t === "Tier-4" ? " — depleted" : ""}
+            </td></tr>
+          )}
           <tr><td>TVD</td><td>{Math.round(w.tvd).toLocaleString()} ft</td></tr>
           <tr><td>Offset</td><td>{Math.round(w.offset_ft).toLocaleString()} ft</td></tr>
           {w.ll_ft != null && <tr><td>Lateral</td><td>{Math.round(w.ll_ft).toLocaleString()} ft</td></tr>}

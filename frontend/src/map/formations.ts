@@ -228,3 +228,33 @@ export function statusColorExpression(): unknown {
   }
   return ["match", ["get", "recon_status"], ...pairs, RECON_OTHER];
 }
+
+// ===========================================================================
+// Novi PUD depletion tier (deplet_t). Tier-4 = offset-depleted / drained rock
+// (the frac grows into the depleted offset; produces water) — technically
+// drillable, worthless. Green (clean) -> red (drained); PDP/RES are unscored
+// (deplet_t NULL) -> slate. Used by the map depletion color mode + gun-barrel.
+// ===========================================================================
+export const DEPLETION_TIERS: { key: string; label: string; color: string }[] = [
+  { key: "Tier-1", label: "Tier-1 (clean)", color: "#16a34a" },   // green
+  { key: "Tier-2", label: "Tier-2", color: "#84cc16" },           // lime
+  { key: "Tier-3", label: "Tier-3", color: "#f59e0b" },           // amber
+  { key: "Tier-4", label: "Tier-4 (depleted)", color: "#dc2626" }, // red
+  { key: "(null)", label: "PDP / RES (unscored)", color: RECON_OTHER },
+];
+
+const _DEPLETION_COLOR = new Map(DEPLETION_TIERS.map((t) => [t.key, t.color]));
+
+export function colorForDepletion(tier: string | null | undefined): string {
+  return _DEPLETION_COLOR.get(tier ?? "(null)") ?? RECON_OTHER;
+}
+
+// MapLibre paint expression: match deplet_t -> color; null/unmatched -> slate.
+export function depletionColorExpression(): unknown {
+  const pairs: unknown[] = [];
+  for (const t of DEPLETION_TIERS) {
+    if (t.key === "(null)") continue;
+    pairs.push(t.key, t.color);
+  }
+  return ["match", ["get", "deplet_t"], ...pairs, RECON_OTHER];
+}

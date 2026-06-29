@@ -43,6 +43,7 @@ export interface GunbarrelWell {
   basin_blueox: string | null;            // delaware | midland
   formation_blueox_source: string | null; // pdp_join | inferred | crosswalk | null
   recon_status: string | null;            // realized_pud_to_pdp | remaining_pud | conflict | net_new_pdp | null
+  deplet_t: string | null;                // Novi depletion tier (Tier-1..4; Tier-4 = drained); null for PDP/RES
   tvd: number; ll_ft: number | null; offset_ft: number;
   in_filter?: boolean;          // set only by the Highgrade per-DSU gunbarrel
   metric_value?: number | null; // value of the selected screen metric (Highgrade)
@@ -112,9 +113,10 @@ interface MapState {
   excludedFormations: string[]; // UPPER formation names dropped from the rollup
   excludedSticks: number[];     // manually culled stick_ids (dropped from rollup/plot/export)
   unitFilter: string[];         // map-only: substring terms matched against unique_id (OR)
-  colorMode: ColorMode;         // map sticks: Blue Ox bench vs §6 reconciliation status
+  colorMode: ColorMode;         // map sticks: Blue Ox bench / §6 reconciliation status / depletion tier
   reconCounts: Record<string, number> | null; // recon_status -> stick count for current basin (legend)
   remainingOnly: boolean;       // map filter: among PUDs show only remaining (drillable)
+  excludeDepleted: boolean;     // map filter: drop offset-depleted (Tier-4) PUDs
   discountRate: DiscountRate;
   valueMetric: ValueMetric;
   production: ProductionAggregate | null;
@@ -147,6 +149,7 @@ interface MapState {
   setColorMode: (m: ColorMode) => void;
   loadReconCounts: () => Promise<void>;
   toggleRemainingOnly: () => void;
+  toggleExcludeDepleted: () => void;
   toggleStick: (id: number) => void;
   clearCulls: () => void;
   setDiscountRate: (r: DiscountRate) => void;
@@ -185,6 +188,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   colorMode: "bench",
   reconCounts: null,
   remainingOnly: false,
+  excludeDepleted: false,
   discountRate: 10,
   valueMetric: "npv",
   production: null,
@@ -205,7 +209,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   setHgGunbarrel: (g) => set({ hgGunbarrel: g, hgGunbarrelLoading: false }),
   closeHgGunbarrel: () => set({ hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false }),
   setBasin: (b) =>
-    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, selection: null, aoi: null, deals: null, excludedFormations: [], excludedSticks: [], unitFilter: [], reconCounts: null, remainingOnly: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, selection: null, aoi: null, deals: null, excludedFormations: [], excludedSticks: [], unitFilter: [], reconCounts: null, remainingOnly: false, excludeDepleted: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleCategory: (c) =>
     set((s) => ({
       categories: s.categories.includes(c)
@@ -246,6 +250,7 @@ export const useMapStore = create<MapState>((set, get) => ({
     }
   },
   toggleRemainingOnly: () => set((s) => ({ remainingOnly: !s.remainingOnly })),
+  toggleExcludeDepleted: () => set((s) => ({ excludeDepleted: !s.excludeDepleted })),
   toggleStick: (id) =>
     set((s) => ({
       excludedSticks: s.excludedSticks.includes(id)

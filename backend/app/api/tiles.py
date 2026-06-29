@@ -41,6 +41,7 @@ WITH bounds AS (SELECT ST_TileEnvelope(:z, :x, :y) AS env)
     w.formation_blueox,
     w.basin_blueox,
     w.recon_status,
+    w.deplet_t,
     w.operator,
     w.npv25,
     w.oil_eur,

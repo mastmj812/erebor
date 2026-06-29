@@ -5,7 +5,7 @@ import type {
   LineLayerSpecification,
 } from "maplibre-gl";
 
-import { blueoxColorExpression, statusColorExpression } from "./formations";
+import { blueoxColorExpression, depletionColorExpression, statusColorExpression } from "./formations";
 
 export const INTEL_SOURCE = "intel";
 export const POINTS_LAYER = "intel-points";
@@ -16,15 +16,18 @@ export const LINES_SRC_LAYER = "intel_lines";
 export type Category = "PDP" | "PUD" | "RES";
 export const CATEGORIES: Category[] = ["PDP", "PUD", "RES"];
 
-export type ColorMode = "bench" | "status";
+export type ColorMode = "bench" | "status" | "depletion";
 
 // Selected sticks (feature-state, keyed by stick_id via the source promoteId)
-// paint yellow; everything else takes the active color mode (Blue Ox bench, or
-// §6 reconciliation status). Same palettes as the SVG gun-barrel.
+// paint yellow; everything else takes the active color mode (Blue Ox bench, §6
+// reconciliation status, or Novi depletion tier). Same palettes as the gun-barrel.
 const SELECTED = ["boolean", ["feature-state", "selected"], false];
 
 export function colorExpr(mode: ColorMode): ExpressionSpecification {
-  const base = mode === "status" ? statusColorExpression() : blueoxColorExpression();
+  const base =
+    mode === "status" ? statusColorExpression()
+    : mode === "depletion" ? depletionColorExpression()
+    : blueoxColorExpression();
   return ["case", SELECTED, "#facc15", base] as unknown as ExpressionSpecification;
 }
 
@@ -41,6 +44,7 @@ export function stickFilter(
   excludedFormations: string[],
   units: string[] = [],
   remainingOnly = false,
+  excludeDepleted = false,
 ): FilterSpecification {
   const clauses: unknown[] = [
     cats.length === 0
@@ -76,6 +80,15 @@ export function stickFilter(
       "any",
       ["!=", ["get", "category"], "PUD"],
       ["==", ["get", "recon_status"], "remaining_pud"],
+    ]);
+  }
+  if (excludeDepleted) {
+    // Drop offset-depleted (Tier-4) PUDs — drained rock that overstates value.
+    // PDP/RES (deplet_t null) pass through.
+    clauses.push([
+      "any",
+      ["!=", ["get", "category"], "PUD"],
+      ["!=", ["get", "deplet_t"], "Tier-4"],
     ]);
   }
   if (clauses.length === 1) return clauses[0] as unknown as FilterSpecification;

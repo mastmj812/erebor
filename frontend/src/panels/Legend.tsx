@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-import { RECON_STATUS, blueoxLegend } from "../map/formations";
+import { DEPLETION_TIERS, RECON_STATUS, blueoxLegend } from "../map/formations";
 import { useMapStore } from "../store";
 
 const _fmt = new Intl.NumberFormat("en-US");
@@ -28,6 +28,20 @@ export function Legend() {
             {reconCounts && (
               <span className="legend-count">{_fmt.format(reconCounts[s.key] ?? 0)}</span>
             )}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (colorMode === "depletion") {
+    return (
+      <div className="panel legend">
+        <h3>Depletion (Novi tier)</h3>
+        {DEPLETION_TIERS.map((t) => (
+          <div className="item" key={t.key}>
+            <span className="swatch" style={{ background: t.color }} />
+            {t.label}
           </div>
         ))}
       </div>

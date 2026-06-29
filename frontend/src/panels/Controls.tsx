@@ -39,6 +39,8 @@ export function Controls() {
   const setColorMode = useMapStore((s) => s.setColorMode);
   const remainingOnly = useMapStore((s) => s.remainingOnly);
   const toggleRemainingOnly = useMapStore((s) => s.toggleRemainingOnly);
+  const excludeDepleted = useMapStore((s) => s.excludeDepleted);
+  const toggleExcludeDepleted = useMapStore((s) => s.toggleExcludeDepleted);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -121,10 +123,15 @@ export function Controls() {
       <div className="seg">
         <button className={colorMode === "bench" ? "active" : ""} onClick={() => setColorMode("bench")}>Bench</button>
         <button className={colorMode === "status" ? "active" : ""} onClick={() => setColorMode("status")}>Recon status</button>
+        <button className={colorMode === "depletion" ? "active" : ""} onClick={() => setColorMode("depletion")}>Depletion</button>
       </div>
       <div className="row" style={{ marginTop: 6 }}>
         <input id="remaining-only" type="checkbox" checked={remainingOnly} onChange={toggleRemainingOnly} />
         <label htmlFor="remaining-only">Remaining PUDs only</label>
+      </div>
+      <div className="row">
+        <input id="exclude-depleted" type="checkbox" checked={excludeDepleted} onChange={toggleExcludeDepleted} />
+        <label htmlFor="exclude-depleted">Exclude depleted (Tier-4)</label>
       </div>
 
       <h3 style={{ marginTop: 10 }}>Filter to unit(s)</h3>

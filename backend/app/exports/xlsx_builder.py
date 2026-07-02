@@ -6,7 +6,8 @@ Pure function of ``ExportData`` -> xlsx bytes; no DB, no HTTP. Sheet set:
   Assumptions        selection metadata + price deck + caveat
   {F} — meta         per-well table for formation F (PUD/RES only)
   {F} — forecast     ip_day grid: formation AVERAGE block only; each stream
-                     as daily rate + 30-day volume
+                     as daily rate + 30-day volume, PER 1,000 ft of lateral
+                     (anduin type-curve basis)
   Arps params        segmented decline params (source of the 50-yr tail)
 
 Built in regular (in-memory) openpyxl mode — a typical selection is a few
@@ -141,7 +142,20 @@ def _write_assumptions(ws, data: ExportData) -> None:
     ws.append(["manually_culled_wells", data.culled_count])
     ws.append(["forecast_horizon_days", 18250])
     ws.append(["forecast_step_days", STEP])
-    ws.append(["volume_convention", f"vol = daily rate × {STEP} (per {STEP}-day period)"])
+    ws.append([
+        "forecast_basis",
+        "PER 1,000 ft of lateral — each well's stream is normalized by its ll_ft, "
+        "then averaged across wells (matches the anduin type-curve basis). Wells "
+        "with no ll_ft are excluded from the average.",
+    ])
+    ws.append([
+        "forecast_rate_units",
+        f"oil BOPD/1000ft · gas MCFD/1000ft · water BWPD/1000ft (avg daily rate per {STEP}-day step)",
+    ])
+    ws.append([
+        "volume_convention",
+        f"vol = rate × {STEP} (per {STEP}-day period), also per 1,000 ft of lateral",
+    ])
     ws.append([
         "tail_convention",
         "rates beyond a well's forecast_end_day (meta tabs) are evaluated "
@@ -204,6 +218,8 @@ def _write_meta(
 
 
 def _write_forecast(ws, grid: list[int], streams: list[WellStream]) -> None:
+    # headers stay plain (per-1,000-ft basis is the SOP + documented on Assumptions;
+    # a "/1000ft" suffix reads as "divide by 1000" and invites double-scaling)
     header = ["ip_day"]
     for stream in _STREAMS:
         header.append(f"AVG {stream}_rate")
@@ -211,13 +227,17 @@ def _write_forecast(ws, grid: list[int], streams: list[WellStream]) -> None:
     ws.append(header)
     _bold_row(ws, 1, len(header))
 
-    n_wells = max(len(streams), 1)
+    # Per-1,000-ft type curve (matches the anduin TC basis): normalize each well
+    # by its own lateral length, then average across wells. Wells without a usable
+    # ll_ft are excluded from the normalized average.
+    norm = [(s, 1000.0 / s.ll_ft) for s in streams if s.ll_ft and s.ll_ft > 0]
+    denom = len(norm) or 1
     for i, day in enumerate(grid):
         row: list[float | int] = [day]
         for stream in _STREAMS:
-            avg = sum(getattr(s, stream)[i] for s in streams) / n_wells
-            row.append(avg)
-            row.append(avg * STEP)
+            per1000 = sum(getattr(s, stream)[i] * factor for s, factor in norm) / denom
+            row.append(per1000)
+            row.append(per1000 * STEP)
         ws.append(row)
 
     ws.freeze_panes = "B2"

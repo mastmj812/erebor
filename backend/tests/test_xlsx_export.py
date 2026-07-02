@@ -26,9 +26,9 @@ from app.exports.xlsx_builder import (
 GENERATED = datetime(2026, 6, 12, 12, 0, tzinfo=timezone.utc)
 
 
-def _loc(uid: str, cat: str, formation: str, npv10: float, **kw) -> dict:
+def _loc(uid: str, cat: str, formation_blueox: str, npv10: float, **kw) -> dict:
     base = {
-        "unique_id": uid, "category": cat, "formation": formation,
+        "unique_id": uid, "category": cat, "formation_blueox": formation_blueox,
         "operator": "OPCO", "pad_name": "PAD 1", "county": "LOVING",
         "fp_year": 2027, "tvd": 9000, "md": 19000, "ll_ft": 10000,
         "prop_load": 2400, "oil_eur": 500000, "gas_eur": 2000000,
@@ -62,12 +62,13 @@ def _arps(name: str, stream: str, q_start: float) -> dict:
 
 @pytest.fixture(scope="module")
 def data():
-    # W1 formation is lowercase on purpose: assemble must uppercase it.
+    # formation_blueox codes are already canonical (no case transform). Wells in
+    # WCA_1 carry DIFFERENT ll_ft so the per-1,000-ft normalization is testable.
     loc_rows = [
-        _loc("WELL A 1H", "PUD", "wolfcamp a", npv10=1e6),
-        _loc("WELL A 2H", "RES", "WOLFCAMP A", npv10=2e6),
-        _loc("WELL B 1H", "PUD", "BONE SPRING", npv10=3e6),
-        _loc("4230112345", "PDP", "WOLFCAMP A", npv10=9e9),
+        _loc("WELL A 1H", "PUD", "WCA_1", npv10=1e6, ll_ft=10000),
+        _loc("WELL A 2H", "RES", "WCA_1", npv10=2e6, ll_ft=5000),
+        _loc("WELL B 1H", "PUD", "BS2_C", npv10=3e6, ll_ft=8000),
+        _loc("4230112345", "PDP", "WCA_1", npv10=9e9),
     ]
     prod_rows = []
     for name, q in (("WELL A 1H", 100.0), ("WELL A 2H", 140.0), ("WELL B 1H", 60.0)):
@@ -90,36 +91,38 @@ def wb(data):
     return load_workbook(BytesIO(build_workbook(data)))
 
 
-def test_assemble_drops_pdp_and_uppercases(data):
+def test_assemble_drops_pdp_and_groups_by_blueox(data):
     assert data.pdp_count == 1
     assert all(r["category"] in ("PUD", "RES") for r in data.locations)
-    assert set(data.streams_by_formation) == {"BONE SPRING", "WOLFCAMP A"}
-    assert [s.name for s in data.streams_by_formation["WOLFCAMP A"]] == [
+    assert set(data.streams_by_formation) == {"BS2_C", "WCA_1"}
+    assert [s.name for s in data.streams_by_formation["WCA_1"]] == [
         "WELL A 1H", "WELL A 2H",
     ]
+    # ll_ft threads onto the stream for the per-1,000-ft basis.
+    assert [s.ll_ft for s in data.streams_by_formation["WCA_1"]] == [10000.0, 5000.0]
     # Grid: forecast days 30/60/90 + tail 120..18240 on 30-day cadence.
     assert data.grid[0] == 30
     assert data.grid[-1] == 18240
     assert all(b - a == 30 for a, b in zip(data.grid, data.grid[1:]))
     # PDP has no arps rows in the fixture, but the filter must hold anyway.
     assert all(r["novi_wellname"] != "4230112345" for r in data.arps_rows)
-    assert all(r["formation"] in ("BONE SPRING", "WOLFCAMP A") for r in data.arps_rows)
+    assert all(r["formation"] in ("BS2_C", "WCA_1") for r in data.arps_rows)
 
 
 def test_sheet_names_and_order(wb):
     assert wb.sheetnames == [
         "Summary",
         "Assumptions",
-        "BONE SPRING — meta",
-        "BONE SPRING — forecast",
-        "WOLFCAMP A — meta",
-        "WOLFCAMP A — forecast",
+        "BS2_C — meta",
+        "BS2_C — forecast",
+        "WCA_1 — meta",
+        "WCA_1 — forecast",
         "Arps params",
     ]
 
 
 def test_forecast_sheet_shape_and_math(wb, data):
-    ws = wb["WOLFCAMP A — forecast"]
+    ws = wb["WCA_1 — forecast"]
     assert ws.max_row == len(data.grid) + 1
     assert ws.max_column == 1 + 6  # ip_day + AVG {oil,gas,water} x {rate,vol}
     assert ws.freeze_panes == "B2"
@@ -131,25 +134,27 @@ def test_forecast_sheet_shape_and_math(wb, data):
         "AVG water_rate", "AVG water_vol",
     ]
 
-    # Sample row (ip_day 30): AVG == mean of the two wells; vol == rate*30.
+    # Per-1,000-ft basis: each well normalized by its own ll_ft, then averaged.
+    # ip_day 30 oil — A1H 100/(10000/1000)=10 ; A2H 140/(5000/1000)=28 ; mean=19.
     row = [c.value for c in ws[2]]
     assert row[0] == 30
-    assert row[1] == pytest.approx((100.0 + 140.0) / 2)  # AVG oil_rate
+    assert row[1] == pytest.approx((100.0 / 10 + 140.0 / 5) / 2)  # == 19.0
     for rate_idx in (1, 3, 5):
-        assert row[rate_idx + 1] == pytest.approx(row[rate_idx] * 30)
+        assert row[rate_idx + 1] == pytest.approx(row[rate_idx] * 30)  # vol == rate*30
 
     # Tail rows: arps exponential starts at q_start (t=0) and decays.
+    # oil q_start 50 for both -> A1H 50/10=5 ; A2H 50/5=10 ; mean=7.5.
     tail_row = [c.value for c in ws[5]]  # ip_day 120 == segment day_start
     assert tail_row[0] == 120
-    assert tail_row[1] == pytest.approx(50.0)  # both wells q_start oil = 50 -> avg 50
+    assert tail_row[1] == pytest.approx((50.0 / 10 + 50.0 / 5) / 2)  # == 7.5
     later_row = [c.value for c in ws[20]]
-    assert 0 < later_row[1] < 50.0
+    assert 0 < later_row[1] < 7.5
 
 
 def test_meta_sheet(wb, data):
-    ws = wb["WOLFCAMP A — meta"]
+    ws = wb["WCA_1 — meta"]
     assert ws.freeze_panes == "A6"
-    assert ws["B1"].value == "WOLFCAMP A"
+    assert ws["B1"].value == "WCA_1"
     assert ws["B2"].value == "2 (PUD 1 / RES 1)"
     header = [c.value for c in ws[5]]
     assert header == list(META_COLS)
@@ -163,7 +168,7 @@ def test_meta_sheet(wb, data):
 def test_summary_reconciles_with_meta(wb):
     ws = wb["Summary"]
     header = [c.value for c in ws[1]]
-    assert header == ["category", "formation", "count", *SUMMARY_SUMS]
+    assert header == ["category", "formation_blueox", "count", *SUMMARY_SUMS]
     rows = [[c.value for c in row] for row in ws.iter_rows(min_row=2)]
     cats = {r[0] for r in rows}
     assert "PDP" not in cats
@@ -194,6 +199,9 @@ def test_assumptions_sheet(wb):
     assert fields["excluded_formations"] == "AVALON"
     assert fields["manually_culled_wells"] == 2
     assert fields["wti_price"] == 70.0
+    # the per-1,000-ft forecast convention is documented for the reader
+    assert fields["forecast_basis"].startswith("PER 1,000 ft")
+    assert "/1000ft" in fields["forecast_rate_units"]
 
 
 def test_arps_sheet(wb, data):

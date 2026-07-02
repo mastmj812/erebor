@@ -37,15 +37,18 @@ def _warehouse_session_setup(dbapi_conn, _record):  # noqa: ANN001
     # pooler (Supabase/pgbouncer) strips it:
     #  - default_transaction_read_only: erebor never writes the warehouse; any
     #    accidental write raises ReadOnlySqlTransaction (SQLSTATE 25006).
-    #  - statement_timeout=0: large curated.intel_* spatial reads must not hit a
-    #    hosted instance's short default timeout.
+    #  - statement_timeout=300s: a generous CEILING, not the hosted default. Bounded
+    #    so a query stuck against a slow/unreachable pooler self-aborts (SQLSTATE
+    #    57014) and frees the worker — a thread blocked in a no-timeout DB read
+    #    can't be interrupted by Ctrl+C, which hangs `uvicorn --reload`. Still far
+    #    above any legit curated.intel_* spatial read.
     #  - search_path includes `extensions` so PostGIS types / ST_* resolve.
     prev = dbapi_conn.autocommit
     dbapi_conn.autocommit = True
     try:
         with dbapi_conn.cursor() as cur:
             cur.execute("SET default_transaction_read_only = on")
-            cur.execute("SET statement_timeout = 0")
+            cur.execute("SET statement_timeout = '300s'")
             cur.execute("SET search_path TO public, extensions")
     finally:
         dbapi_conn.autocommit = prev

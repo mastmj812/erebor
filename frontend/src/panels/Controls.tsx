@@ -33,6 +33,7 @@ export function Controls() {
   const setSelection = useMapStore((s) => s.setSelection);
   const deals = useMapStore((s) => s.deals);
   const setDeals = useMapStore((s) => s.setDeals);
+  const setDealZoom = useMapStore((s) => s.setDealZoom);
   const unitFilter = useMapStore((s) => s.unitFilter);
   const setUnitFilter = useMapStore((s) => s.setUnitFilter);
   const colorMode = useMapStore((s) => s.colorMode);
@@ -73,29 +74,20 @@ export function Controls() {
     }
   };
 
-  // Pick one deal (polygon) from the uploaded shapefile as the AOI.
-  const pickDeal = async (index: number) => {
+  // Display-only: zoom the map to one deal polygon. Selection stays a manual
+  // lasso/box draw — an uploaded shapefile never auto-selects sticks.
+  const zoomToDeal = (index: number) => {
     const d = useMapStore.getState().deals?.find((x) => x.index === index);
-    if (!d) return;
-    try {
-      setBusy("Selecting deal…");
-      const result = await selectByPolygon(d.geometry, basin, rule);
-      setSelection(result, d.geometry);
-    } catch (e) {
-      alert(`Deal selection failed: ${e}`);
-    } finally {
-      setBusy(null);
-    }
+    if (d) setDealZoom(d.geometry);
   };
 
   const onUpload = async (file: File) => {
     try {
-      setBusy("Reading deals…");
+      setBusy("Reading shapefile…");
       const ds = await uploadDeals(file);
-      setDeals(ds);
-      if (ds.length === 1) void pickDeal(ds[0].index); // single-polygon shapefile
+      setDeals(ds); // MapView displays the polygons + fits the view to them
     } catch (e) {
-      alert(`Deals upload failed: ${e}`);
+      alert(`Shapefile upload failed: ${e}`);
     } finally {
       setBusy(null);
       if (fileRef.current) fileRef.current.value = "";
@@ -164,22 +156,30 @@ export function Controls() {
         onChange={(e) => { const f = e.target.files?.[0]; if (f) void onUpload(f); }}
       />
       <div style={{ fontSize: 11, color: "#71717a", margin: "4px 0 6px" }}>
-        Upload a deals shapefile (.zip) — then pick one deal below.
+        Upload a shapefile (.zip) — displayed on the map only. Select wells with Lasso/Box.
       </div>
       {deals && deals.length > 0 && (
         <div className="row" style={{ marginBottom: 8 }}>
-          <label htmlFor="deal-pick" style={{ fontSize: 12 }}>Deal:</label>
+          <label htmlFor="deal-pick" style={{ fontSize: 12 }}>Zoom to:</label>
           <select
             id="deal-pick"
             style={{ flex: 1, fontSize: 12 }}
-            defaultValue=""
-            onChange={(e) => { if (e.target.value !== "") void pickDeal(Number(e.target.value)); }}
+            value=""
+            onChange={(e) => { if (e.target.value !== "") zoomToDeal(Number(e.target.value)); }}
           >
-            <option value="" disabled>{deals.length} deals — pick one…</option>
+            <option value="" disabled>{deals.length} polygon{deals.length > 1 ? "s" : ""}…</option>
             {deals.map((d) => (
               <option key={d.index} value={d.index}>{d.label}</option>
             ))}
           </select>
+          <button
+            type="button"
+            title="Remove the uploaded shapefile from the map"
+            style={{ fontSize: 11, cursor: "pointer" }}
+            onClick={() => setDeals(null)}
+          >
+            ✕
+          </button>
         </div>
       )}
 

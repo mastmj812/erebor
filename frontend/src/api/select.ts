@@ -15,24 +15,11 @@ export async function selectByPolygon(
   return r.json();
 }
 
+// Parse a shapefile .zip into display-only polygons (no selection is run).
 export async function uploadDeals(file: File): Promise<DealFeature[]> {
   const fd = new FormData();
   fd.append("file", file);
   const r = await fetch("/api/select/deals", { method: "POST", body: fd });
   if (!r.ok) throw new Error(`deals upload failed: ${await r.text()}`);
   return (await r.json()).deals;
-}
-
-export async function uploadShapefile(
-  file: File,
-  basin: string,
-  rule: SelectionRule,
-): Promise<SelectionResult & { aoi: GeoJSON.Geometry }> {
-  const fd = new FormData();
-  fd.append("file", file);
-  fd.append("basin", basin);
-  fd.append("rule", rule);
-  const r = await fetch("/api/select/shapefile", { method: "POST", body: fd });
-  if (!r.ok) throw new Error(`shapefile upload failed: ${await r.text()}`);
-  return r.json();
 }

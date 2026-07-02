@@ -292,6 +292,11 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
     params["basin"] = body.basin
     params["pad_name"] = body.pad_name
 
+    # Two arms: PUDs from curated.intel_locations (the screen's filter columns —
+    # spacing/complet/rq scores — only exist there); PDP context from
+    # curated.erebor_locations, whose PDP arm is curated producing horizontals
+    # (the same sticks the map shows), NOT the stale novi_intel PDP layer. PDP is
+    # always muted context: in_filter false, metric_value NULL (no Novi econ).
     sql = text(f"""
         WITH pad AS (
             -- one polygon per pad_name (raw_novi_intel.pads has duplicate rows)
@@ -311,15 +316,28 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
                ST_X(ST_EndPoint(w.wellstick_geom))   AS ex,
                ST_Y(ST_EndPoint(w.wellstick_geom))   AS ey
         FROM curated.intel_locations w
-        LEFT JOIN pad ON true
         LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = w.stick_id
         {_recon_join('w')}
         WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL AND w.tvd IS NOT NULL
-          AND (
-            (w.category = 'PUD' AND w.pad_name = :pad_name)
-            OR (w.category = 'PDP' AND pad.geom IS NOT NULL
-                AND ST_Contains(pad.geom, ST_LineInterpolatePoint(w.wellstick_geom, 0.5)))
-          )
+          AND w.category = 'PUD' AND w.pad_name = :pad_name
+
+        UNION ALL
+
+        SELECT w.stick_id, w.unique_id, w.category, UPPER(w.formation) AS formation,
+               w.formation_blueox, w.basin AS basin_blueox, w.formation_blueox_source,
+               w.deplet_t,
+               w.tvd, w.ll_ft, false AS in_filter,
+               NULL::double precision AS metric_value,
+               ST_X(ST_LineInterpolatePoint(w.wellstick_geom, 0.5)) AS mx,
+               ST_Y(ST_LineInterpolatePoint(w.wellstick_geom, 0.5)) AS my,
+               ST_X(ST_StartPoint(w.wellstick_geom)) AS sx,
+               ST_Y(ST_StartPoint(w.wellstick_geom)) AS sy,
+               ST_X(ST_EndPoint(w.wellstick_geom))   AS ex,
+               ST_Y(ST_EndPoint(w.wellstick_geom))   AS ey
+        FROM curated.erebor_locations w, pad
+        WHERE w.basin = :basin AND w.category = 'PDP'
+          AND w.wellstick_geom IS NOT NULL AND w.tvd IS NOT NULL
+          AND ST_Contains(pad.geom, ST_LineInterpolatePoint(w.wellstick_geom, 0.5))
     """)
     if expanding:
         sql = sql.bindparams(*expanding)

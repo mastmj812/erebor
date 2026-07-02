@@ -1,5 +1,6 @@
 """Vector tiles for the erebor map, rendered server-side by PostGIS from
-curated.intel_locations.
+curated.erebor_locations (PUD/RES = Novi inventory; PDP = curated producing
+horizontals — see sql/22 in engineering_db).
 
   * z <= 8  -> intel_points  (lateral heel point, cheap at low zoom)
   * z >= 9  -> intel_lines   (full wellstick LINESTRING)

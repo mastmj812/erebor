@@ -5,9 +5,12 @@ Split from the HTTP route on purpose: `gather_export_data` (queries) feeds
 `xlsx_builder.build_workbook`. A future "graduate DSU to finance" workflow
 can produce the same artifact by calling these directly — no HTTP involved.
 
-The workbook covers PUD/RES only. PDP sticks in the selection are counted
-(`pdp_count`, surfaced on the Assumptions tab) but excluded: their actuals
-live in the warehouse by API10 and they have no Novi forecast here.
+The workbook covers PUD/RES only (from curated.intel_locations — the full Novi
+row is what finance gets). PDP sticks in the selection are counted (`pdp_count`,
+surfaced on the Assumptions tab) but excluded: their actuals live in the
+warehouse by API10 and they have no Novi forecast here. The count comes from
+curated.erebor_locations (curated producing horizontals — the same PDP the map
+shows), NOT the stale novi_intel PDP layer.
 """
 
 from __future__ import annotations
@@ -59,6 +62,7 @@ class WellStream:
     name: str               # novi_wellname == unique_id
     formation: str          # Blue Ox formation_blueox code (the grouping dimension)
     forecast_end_day: int   # last Novi forecast ip_day
+    ll_ft: float | None = None  # completed lateral length (for the per-1,000-ft basis)
     oil: np.ndarray = field(repr=False, default=None)  # type: ignore[assignment]
     gas: np.ndarray = field(repr=False, default=None)  # type: ignore[assignment]
     water: np.ndarray = field(repr=False, default=None)  # type: ignore[assignment]
@@ -96,19 +100,25 @@ def assemble_export_data(
     excluded_formations: list[str],
     culled_count: int,
     generated_at: datetime | None = None,
+    pdp_count: int | None = None,
 ) -> ExportData:
     """Pure assembly: filter to PUD/RES, stitch forecast + Arps tail per well.
 
     ``loc_rows`` may contain all categories (PDP is counted, then dropped).
     ``prod_rows``/``arps_rows`` are the raw query rows for the included wells.
+    ``pdp_count`` overrides the derived count when the caller counts PDP from a
+    different relation (gather_export_data: curated.erebor_locations).
     """
-    pdp_count = sum(1 for r in loc_rows if r.get("category") == "PDP")
+    if pdp_count is None:
+        pdp_count = sum(1 for r in loc_rows if r.get("category") == "PDP")
     locations = [r for r in loc_rows if r.get("category") in _FUTURE_CATS]
     # Group/label by Blue Ox standardized formation (formation_blueox); uncoded
     # wells fall under '(unmapped)'. Raw Novi `formation` stays on each loc row.
     formation_by_name = {
         r["unique_id"]: (r.get("formation_blueox") or "(unmapped)") for r in locations
     }
+    # lateral length per well drives the per-1,000-ft forecast normalization
+    ll_by_name = {r["unique_id"]: r.get("ll_ft") for r in locations}
 
     fc_by_well: dict[str, list] = defaultdict(list)
     for r in prod_rows:
@@ -164,6 +174,7 @@ def assemble_export_data(
                 name=name,
                 formation=formation_by_name[name],
                 forecast_end_day=forecast_end[name],
+                ll_ft=(float(ll_by_name[name]) if ll_by_name.get(name) else None),
                 oil=oil,
                 gas=gas,
                 water=water,
@@ -213,8 +224,9 @@ def gather_export_data(session: Session, body: ExportBody) -> ExportData:
     if body.exclude_depleted:
         filt += " AND w.deplet_t IS DISTINCT FROM 'Tier-4'"
 
-    # Included locations: full curated row (minus geom) as JSON -> dict.
-    # All categories — PDP is needed for the Assumptions-tab count.
+    # Included locations: full Novi row (minus geom) as JSON -> dict. PUD/RES
+    # only — the workbook needs the complete intel columns; PDP is counted
+    # separately below from the curated spine.
     loc_rows = session.execute(
         text(f"""
             WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g)
@@ -224,7 +236,8 @@ def gather_export_data(session: Session, body: ExportBody) -> ExportData:
             FROM curated.intel_locations w
             LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = w.stick_id
             LEFT JOIN curated.reconciled_inventory rec ON rec.stick_id = w.stick_id, aoi
-            WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL AND {pred}
+            WHERE w.basin = :basin AND w.category IN ('PUD', 'RES')
+              AND w.wellstick_geom IS NOT NULL AND {pred}
               AND COALESCE(fb.formation_blueox, '(unmapped)') <> ALL((:xforms)::text[])
               AND w.unique_id <> ALL((:xwells)::text[]){filt}
             ORDER BY w.category, COALESCE(fb.formation_blueox, '(unmapped)'), w.unique_id
@@ -233,6 +246,28 @@ def gather_export_data(session: Session, body: ExportBody) -> ExportData:
     ).scalars().all()
     locations = list(loc_rows)
     names = _included_names(locations)
+
+    # PDP count for the Assumptions tab: curated producing horizontals from
+    # curated.erebor_locations — the SAME sticks the map/selection show — with
+    # the same on-screen filters applied (recon_status/deplet_t are matview
+    # columns; PDP culls arrive as unique_id = api10, matching the spine).
+    pdp_filt = ""
+    if body.remaining_only:
+        pdp_filt += " AND (w.recon_status IS NULL OR w.recon_status = 'remaining_pud')"
+    if body.exclude_depleted:
+        pdp_filt += " AND w.deplet_t IS DISTINCT FROM 'Tier-4'"
+    pdp_count = session.execute(
+        text(f"""
+            WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g)
+            SELECT count(*)
+            FROM curated.erebor_locations w, aoi
+            WHERE w.basin = :basin AND w.category = 'PDP'
+              AND w.wellstick_geom IS NOT NULL AND {pred}
+              AND COALESCE(w.formation_blueox, '(unmapped)') <> ALL((:xforms)::text[])
+              AND w.unique_id <> ALL((:xwells)::text[]){pdp_filt}
+        """),
+        params,
+    ).scalar()
 
     prod_rows = session.execute(
         text("""
@@ -263,4 +298,5 @@ def gather_export_data(session: Session, body: ExportBody) -> ExportData:
         rule=body.rule,
         excluded_formations=body.exclude_formations,
         culled_count=len(body.exclude_wells),
+        pdp_count=int(pdp_count or 0),
     )

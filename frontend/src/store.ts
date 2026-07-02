@@ -61,9 +61,10 @@ export interface SelectionStick {
   deplet_t: string | null;      // Novi depletion tier (Tier-4 = drained); null for PDP/RES
   pad_name: string | null;
   ll_ft: number | null;
-  npv5: number; npv10: number; npv15: number; npv20: number; npv25: number;
-  pv5: number; pv10: number; pv15: number; pv20: number; pv25: number;
-  oil_eur: number; gas_eur: number;
+  // Novi econ — NULL on PDP rows (curated producers carry no Novi screen value).
+  npv5: number | null; npv10: number | null; npv15: number | null; npv20: number | null; npv25: number | null;
+  pv5: number | null; pv10: number | null; pv15: number | null; pv20: number | null; pv25: number | null;
+  oil_eur: number | null; gas_eur: number | null;
 }
 export interface DealFeature {
   index: number;
@@ -111,7 +112,9 @@ interface MapState {
   selectionRule: SelectionRule;
   selection: SelectionResult | null;
   aoi: GeoJSON.Geometry | null;
-  deals: DealFeature[] | null; // uploaded multi-deal shapefile (pick one)
+  deals: DealFeature[] | null; // uploaded deals shapefile — displayed on the map only
+  // Zoom-to-deal request (fresh wrapper object each pick so repeats re-fire).
+  dealZoom: { geometry: GeoJSON.Geometry } | null;
   excludedFormations: string[]; // UPPER formation names dropped from the rollup
   excludedSticks: number[];     // manually culled stick_ids (dropped from rollup/plot/export)
   unitFilter: string[];         // map-only: substring terms matched against unique_id (OR)
@@ -147,6 +150,7 @@ interface MapState {
   setSelectionRule: (r: SelectionRule) => void;
   setSelection: (s: SelectionResult | null, aoi: GeoJSON.Geometry | null) => void;
   setDeals: (d: DealFeature[] | null) => void;
+  setDealZoom: (g: GeoJSON.Geometry | null) => void;
   toggleFormation: (f: string) => void;
   setUnitFilter: (u: string[]) => void;
   setColorMode: (m: ColorMode) => void;
@@ -186,6 +190,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   selection: null,
   aoi: null,
   deals: null,
+  dealZoom: null,
   excludedFormations: [],
   excludedSticks: [],
   unitFilter: [],
@@ -214,7 +219,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   setHgGunbarrel: (g) => set({ hgGunbarrel: g, hgGunbarrelLoading: false }),
   closeHgGunbarrel: () => set({ hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false }),
   setBasin: (b) =>
-    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, selection: null, aoi: null, deals: null, excludedFormations: [], excludedSticks: [], unitFilter: [], reconCounts: null, depletionCounts: null, remainingOnly: false, excludeDepleted: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], excludedSticks: [], unitFilter: [], reconCounts: null, depletionCounts: null, remainingOnly: false, excludeDepleted: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleCategory: (c) =>
     set((s) => ({
       categories: s.categories.includes(c)
@@ -237,7 +242,8 @@ export const useMapStore = create<MapState>((set, get) => ({
   // A new selection starts with all formations included, no culls, clears derived data.
   setSelection: (s, aoi) =>
     set({ selection: s, aoi, excludedFormations: [], excludedSticks: [], production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
-  setDeals: (d) => set({ deals: d }),
+  setDeals: (d) => set({ deals: d, dealZoom: null }),
+  setDealZoom: (g) => set({ dealZoom: g ? { geometry: g } : null }),
   toggleFormation: (f) =>
     set((s) => ({
       excludedFormations: s.excludedFormations.includes(f)

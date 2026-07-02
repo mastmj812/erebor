@@ -1,14 +1,18 @@
-"""AOI selection: return every Novi stick inside a drawn/uploaded polygon,
-grouped by category / formation / pad.
+"""AOI selection: return every stick inside a drawn polygon, grouped by
+category / formation / pad.
+
+Reads curated.erebor_locations — the SAME spine the map tiles render — so the
+selection matches what's on screen: PUD/RES are Novi inventory, PDP is producing
+curated horizontals (stick_id = -(api10), Novi econ columns NULL).
 
 Selection rule (toggleable — materially changes counts on depth-limited deals):
   * intersects : the lateral LINESTRING intersects the AOI  (ST_Intersects)
   * midpoint   : the lateral's midpoint falls inside the AOI (ST_Contains of
                  ST_LineInterpolatePoint(geom, 0.5))
 
-Shapefile upload parses the deal .zip (pyshp), reprojects to EPSG:4326 (pyproj
-from the .prj), and returns the AOI as a GeoJSON MultiPolygon — the frontend then
-runs /select with it, the same path a drawn polygon takes.
+Shapefile upload (/select/deals) parses the deal .zip (pyshp), reprojects to
+EPSG:4326 (pyproj from the .prj), and returns each polygon for DISPLAY only —
+selection is always an explicit lasso/box draw by the user.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ import zipfile
 from typing import Any, Literal
 
 import shapefile  # pyshp
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from pyproj import CRS, Transformer
 from sqlalchemy import text
@@ -42,19 +46,18 @@ def select_in_aoi(
     session: Session, aoi_geom: dict, basin: str, rule: Rule
 ) -> dict[str, Any]:
     pred = _RULE_PREDICATE[rule]
+    # formation_blueox / recon_status are baked into the matview — no joins.
     sql = text(f"""
         WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g)
         SELECT w.stick_id, w.unique_id, w.category, UPPER(w.formation) AS formation,
-               fb.formation_blueox,
-               rec.status AS recon_status, w.deplet_t,
+               w.formation_blueox,
+               w.recon_status, w.deplet_t,
                w.pad_name, w.ll_ft,
                w.npv5, w.npv10, w.npv15, w.npv20, w.npv25,
                w.pv5, w.pv10, w.pv15, w.pv20, w.pv25,
                w.oil_eur, w.gas_eur,
                w.wti_price, w.hh_price, w.ngl_price, w.wti_diff, w.hh_diff
-        FROM curated.intel_locations w
-        LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = w.stick_id
-        LEFT JOIN curated.reconciled_inventory rec ON rec.stick_id = w.stick_id, aoi
+        FROM curated.erebor_locations w, aoi
         WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL AND {pred}
     """)
     rows = session.execute(
@@ -74,10 +77,14 @@ def select_in_aoi(
     )
     sticks = [{c: r[c] for c in _COLS} for r in use]
 
-    deck = use[0] if use else {}
+    # PDP rows (curated producers) carry a NULL deck — derive the deck from the
+    # Novi PUD/RES rows only so an AOI whose first row is a producer still
+    # reports the screen's price assumptions.
+    decked = [r for r in use if r["wti_price"] is not None]
+    deck = decked[0] if decked else {}
     distinct_decks = len({
         (r["wti_price"], r["hh_price"], r["ngl_price"], r["wti_diff"], r["hh_diff"])
-        for r in use
+        for r in decked
     })
 
     return {
@@ -109,60 +116,8 @@ def select(body: SelectBody, session: Session = Depends(get_session)) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Shapefile upload -> reproject -> AOI MultiPolygon (then run selection)
-# ---------------------------------------------------------------------------
-def _shapefile_zip_to_aoi(data: bytes) -> dict:
-    """Parse a deal shapefile .zip into a GeoJSON MultiPolygon in EPSG:4326."""
-    with zipfile.ZipFile(io.BytesIO(data)) as z:
-        names = z.namelist()
-        shp = next((n for n in names if n.lower().endswith(".shp")), None)
-        if not shp:
-            raise HTTPException(400, "No .shp found in the uploaded zip.")
-        stem = shp[:-4].lower()
-
-        def member(ext: str) -> io.BytesIO | None:
-            for n in names:
-                if n.lower() == stem + ext:
-                    return io.BytesIO(z.read(n))
-            return None
-
-        prj = member(".prj")
-        src_crs = CRS.from_wkt(prj.read().decode("utf-8", "replace")) if prj else CRS.from_epsg(4326)
-        transformer = Transformer.from_crs(src_crs, CRS.from_epsg(4326), always_xy=True)
-        reader = shapefile.Reader(shp=member(".shp"), dbf=member(".dbf"), shx=member(".shx"))
-
-        def reproj_ring(ring: list) -> list:
-            return [list(transformer.transform(x, y)) for x, y in ring]
-
-        polygons: list = []
-        for shprec in reader.iterShapes():
-            gj = shprec.__geo_interface__
-            if gj["type"] == "Polygon":
-                polygons.append([reproj_ring(r) for r in gj["coordinates"]])
-            elif gj["type"] == "MultiPolygon":
-                for poly in gj["coordinates"]:
-                    polygons.append([reproj_ring(r) for r in poly])
-
-    if not polygons:
-        raise HTTPException(400, "Shapefile contains no polygon geometry.")
-    return {"type": "MultiPolygon", "coordinates": polygons}
-
-
-@router.post("/shapefile")
-async def select_shapefile(
-    file: UploadFile = File(...),
-    basin: Literal["delaware", "midland"] = Form(...),
-    rule: Rule = Form("intersects"),
-    session: Session = Depends(get_session),
-) -> dict:
-    aoi = _shapefile_zip_to_aoi(await file.read())
-    result = select_in_aoi(session, aoi, basin, rule)
-    result["aoi"] = aoi
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Multi-deal shapefile: return each polygon as a separate deal (one at a time)
+# Deals shapefile upload: return each polygon (reprojected) for map display.
+# No selection is run — the user lassos/boxes what they want by hand.
 # ---------------------------------------------------------------------------
 _LABEL_PREFS = ["deal_name", "dealname", "deal", "name", "prospect", "label", "title", "deal_id", "id"]
 

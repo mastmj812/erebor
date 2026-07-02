@@ -64,14 +64,19 @@ def outline(basin: str = _BASIN, session: Session = Depends(get_session)) -> Res
 
 @router.get("/basins")
 def basins(session: Session = Depends(get_session)) -> list[dict]:
-    """Per-basin stick counts + bbox (for the basin switcher and map fit)."""
+    """Per-basin stick counts + bbox (for the basin switcher and map fit).
+
+    Counts the same sticks the tiles render (curated.erebor_locations), so the
+    label under the basin switcher matches the map — PDP here is curated
+    producing horizontals, not the novi_intel PDP layer.
+    """
     rows = session.execute(text("""
         SELECT basin, n,
                ST_XMin(e) AS minx, ST_YMin(e) AS miny,
                ST_XMax(e) AS maxx, ST_YMax(e) AS maxy
         FROM (
           SELECT basin, count(*) AS n, ST_Extent(wellstick_geom) AS e
-          FROM curated.intel_locations GROUP BY basin
+          FROM curated.erebor_locations GROUP BY basin
         ) s
         ORDER BY basin
     """)).mappings().all()

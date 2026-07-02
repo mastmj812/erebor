@@ -49,11 +49,14 @@ Open http://localhost:5180.
   PDP/PUD/RES toggles, formation coloring + legend, pad/grid/outline overlays, hover popups. ✅
   - Deferred: land-grid section *labels* (grid renders as lines; Novi's grid attribute schema not
     yet mapped to a label field).
-- **Phase 2 — AOI selection.** Backend `/api/select` (polygon) + `/api/select/shapefile`
-  (upload→reproject via pyproj) over `curated.intel_locations`, with the intersects-vs-midpoint
-  rule. Frontend lasso/box draw, shapefile upload, rule toggle (re-runs on the current AOI),
-  yellow feature-state highlight of selected sticks, AOI outline, and a results panel
-  (counts by category / formation / pad). ✅
+- **Phase 2 — AOI selection.** Backend `/api/select` (polygon) + `/api/select/deals`
+  (shapefile upload→reproject via pyproj), with the intersects-vs-midpoint rule. Frontend
+  lasso/box draw, rule toggle (re-runs on the current AOI), yellow feature-state highlight of
+  selected sticks, AOI outline, and a results panel (counts by category / formation / pad).
+  Uploaded shapefiles are DISPLAY-ONLY (orange reference polygons + zoom-to-deal dropdown);
+  selection is always a manual lasso/box draw (2026-07-01; auto-select-on-upload removed).
+  Selection reads `curated.erebor_locations` (same spine as the tiles — PDP = curated
+  producing horizontals, not novi_intel PDP). ✅
 - **Phase 3 — formation filter + value rollup (screen).** `/api/select` returns per-(category,
   formation) NPV (all discount rates) + EUR sums + the price deck. Frontend: include/exclude
   formation checklist + discount-rate selector that recompute the rollup live (and drive the map

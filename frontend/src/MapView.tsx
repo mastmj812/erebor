@@ -25,9 +25,10 @@ import { DrawingController, bboxToPolygon, type GeoJsonPolygon } from "./map/dra
 import { choroplethFillColor } from "./map/highgradeColors";
 import { selectByPolygon } from "./api/select";
 import { fetchWellProduction } from "./api/production";
-import { basinBbox, useMapStore, type OverlayKey } from "./store";
+import { basinBbox, useMapStore, type DealFeature, type OverlayKey } from "./store";
 
 const AOI_SOURCE = "aoi";
+const DEALS_SOURCE = "deals";
 const HG_SOURCE = "hg-pads";
 const HG_FILL = "hg-pads-fill";
 const HG_LINE = "hg-pads-line";
@@ -164,6 +165,9 @@ export function MapView() {
   const drawMode = useMapStore((s) => s.drawMode);
   const selection = useMapStore((s) => s.selection);
   const aoi = useMapStore((s) => s.aoi);
+  const deals = useMapStore((s) => s.deals);
+  const dealZoom = useMapStore((s) => s.dealZoom);
+  const lastFitDealsRef = useRef<DealFeature[] | null>(null);
   const excludedFormations = useMapStore((s) => s.excludedFormations);
   const unitFilter = useMapStore((s) => s.unitFilter);
   const excludedSticks = useMapStore((s) => s.excludedSticks);
@@ -213,7 +217,7 @@ export function MapView() {
       map.addLayer(linesLayer);
       map.addLayer(pointsLayer);
 
-      // Committed AOI (drawn or uploaded) outline.
+      // Committed AOI (drawn) outline.
       map.addSource(AOI_SOURCE, { type: "geojson", data: EMPTY_FC });
       map.addLayer({
         id: "aoi-fill", type: "fill", source: AOI_SOURCE,
@@ -222,6 +226,24 @@ export function MapView() {
       map.addLayer({
         id: "aoi-line", type: "line", source: AOI_SOURCE,
         paint: { "line-color": "#2563eb", "line-width": 2, "line-dasharray": [2, 1] },
+      });
+
+      // Uploaded deals shapefile — display-only reference polygons (orange, so
+      // they read apart from the blue drawn AOI). Fill/line sit UNDER the stick
+      // layers to keep laterals crisp; labels go on top.
+      map.addSource(DEALS_SOURCE, { type: "geojson", data: EMPTY_FC });
+      map.addLayer({
+        id: "deals-fill", type: "fill", source: DEALS_SOURCE,
+        paint: { "fill-color": "#ea580c", "fill-opacity": 0.05 },
+      }, LINES_LAYER);
+      map.addLayer({
+        id: "deals-line", type: "line", source: DEALS_SOURCE,
+        paint: { "line-color": "#ea580c", "line-width": 2 },
+      }, LINES_LAYER);
+      map.addLayer({
+        id: "deals-label", type: "symbol", source: DEALS_SOURCE,
+        layout: { "text-field": ["get", "label"], "text-size": 12, "text-font": ["Noto Sans Regular"] },
+        paint: { "text-color": "#9a3412", "text-halo-color": "rgba(255,255,255,0.9)", "text-halo-width": 1.5 },
       });
 
       // Highgrade pad choropleth (hidden until the Highgrade tab is active).
@@ -352,6 +374,43 @@ export function MapView() {
     );
   }, [aoi, styleLoaded]);
 
+  // -------- uploaded deals shapefile: display + fit once per upload --------
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const src = map.getSource(DEALS_SOURCE) as maplibregl.GeoJSONSource | undefined;
+    if (!src) return;
+    src.setData(
+      deals
+        ? {
+            type: "FeatureCollection",
+            features: deals.map((d) => ({
+              type: "Feature",
+              properties: { label: d.label },
+              geometry: d.geometry,
+            })),
+          }
+        : EMPTY_FC,
+    );
+    // Fit to the whole shapefile only when a NEW upload lands (not on style
+    // reloads) so later panning/zooming isn't yanked back.
+    if (deals && deals.length && lastFitDealsRef.current !== deals) {
+      const bb = geomsBbox(deals.map((d) => d.geometry));
+      if (bb) map.fitBounds(bb, { padding: 60, duration: 600, maxZoom: 13 });
+    }
+    lastFitDealsRef.current = deals;
+  }, [deals, styleLoaded]);
+
+  // -------- zoom-to-deal (dropdown in Controls) --------
+  useEffect(() => {
+    if (!styleLoaded || !dealZoom) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const bb = geomsBbox([dealZoom.geometry]);
+    if (bb) map.fitBounds(bb, { padding: 60, duration: 600, maxZoom: 13 });
+  }, [dealZoom, styleLoaded]);
+
   // -------- basin change: swap tiles + refit + reset overlays --------
   useEffect(() => {
     if (!styleLoaded) return;
@@ -437,6 +496,27 @@ export function MapView() {
   }, [highgrade, styleLoaded]);
 
   return <div ref={containerRef} className="map-root" />;
+}
+
+// Combined [SW, NE] bounds of Polygon/MultiPolygon geometries (fitBounds input).
+function geomsBbox(geoms: GeoJSON.Geometry[]): [[number, number], [number, number]] | null {
+  let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+  const walk = (c: unknown): void => {
+    if (!Array.isArray(c)) return;
+    if (typeof c[0] === "number") {
+      const [x, y] = c as [number, number];
+      if (x < minx) minx = x;
+      if (x > maxx) maxx = x;
+      if (y < miny) miny = y;
+      if (y > maxy) maxy = y;
+      return;
+    }
+    for (const cc of c) walk(cc);
+  };
+  for (const g of geoms) {
+    if ("coordinates" in g) walk(g.coordinates);
+  }
+  return Number.isFinite(minx) ? [[minx, miny], [maxx, maxy]] : null;
 }
 
 function fmtInt(v: unknown): string {

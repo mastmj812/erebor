@@ -10,6 +10,11 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "pydantic-settings>=2.4",
     "openpyxl>=3.1",
+    # Shapefile deal-upload endpoint (app/api/select.py): pyshp parses the .shp,
+    # pyproj reprojects from the .prj to EPSG:4326. Runtime deps — a fresh
+    # install without them ImportErrors the whole API (CI caught this).
+    "pyshp>=2.3",
+    "pyproj>=3.5",
     # Shared decline-curve math (Phase 4); installed editable from the monorepo.
     "decline",
 ]

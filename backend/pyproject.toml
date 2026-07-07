@@ -10,6 +10,13 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "pydantic-settings>=2.4",
     "openpyxl>=3.1",
+    # numpy is imported directly (grid math); it was only reaching us transitively
+    # via `decline`, so declare it.
+    "numpy>=1.24",
+    # FastAPI needs python-multipart at runtime to parse multipart/form-data for
+    # the File() upload endpoint — without it the deal-upload route 500s. Not a
+    # static import, so it only surfaces on a fresh install (CI caught this).
+    "python-multipart>=0.0.9",
     # Shapefile deal-upload endpoint (app/api/select.py): pyshp parses the .shp,
     # pyproj reprojects from the .prj to EPSG:4326. Runtime deps — a fresh
     # install without them ImportErrors the whole API (CI caught this).

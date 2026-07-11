@@ -258,3 +258,38 @@ export function depletionColorExpression(): unknown {
   }
   return ["match", ["get", "deplet_t"], ...pairs, RECON_OTHER];
 }
+
+// ===========================================================================
+// Offset-PDP support (curated.intel_pdp_support, sql/30). A VERIFIABILITY
+// screen, NOT a quality screen: colors a stick by how many qualifying producing
+// offsets sit in the SAME bench within 3 mi. 0 (red) = scored but unsupported —
+// no nearby control, so the Novi ML forecast is unverifiable; 8+ (green) =
+// well-controlled. Pair with depletion mode (heavily depleted areas score HIGH
+// support yet are worthless). PDP sticks and unscorable PUDs have NO
+// pdp_count_3mi property in the MVT -> gray.
+// ===========================================================================
+const _SUP = { none: RECON_OTHER, c0: "#dc2626", c12: "#f97316", c37: "#f59e0b", c8: "#16a34a" };
+
+export const SUPPORT_TIERS: { key: string; label: string; color: string }[] = [
+  { key: "0", label: "0 — unsupported", color: _SUP.c0 },   // red
+  { key: "1", label: "1–2 offsets", color: _SUP.c12 },      // orange
+  { key: "3", label: "3–7 offsets", color: _SUP.c37 },      // amber
+  { key: "8", label: "8+ offsets", color: _SUP.c8 },        // green
+  { key: "(null)", label: "PDP / not scorable", color: _SUP.none },
+];
+
+// MapLibre paint: step() over pdp_count_3mi. The MVT omits null properties
+// per-feature, so PDP sticks and unscorable PUDs carry no pdp_count_3mi ->
+// coalesce to -1 -> gray. Stepped/categorical (NOT interpolate): the breaks are
+// meaningful offset counts and 0 (red) must read distinctly from "no data".
+export function supportColorExpression(): unknown {
+  const c = ["coalesce", ["get", "pdp_count_3mi"], -1];
+  return [
+    "step", c,
+    _SUP.none,       // < 0  -> not scorable / PDP (gray)
+    0, _SUP.c0,      // 0      unsupported (red)
+    1, _SUP.c12,     // 1–2    (orange)
+    3, _SUP.c37,     // 3–7    (amber)
+    8, _SUP.c8,      // 8+     (green)
+  ];
+}

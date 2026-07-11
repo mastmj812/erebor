@@ -41,11 +41,20 @@ FT_PER_M = 3.28084
 # Whitelists — every column/metric that can reach SQL is validated against these,
 # so list/range filters and the metric expression are never free-text-interpolated.
 CATEGORICAL: tuple[str, ...] = ("formation_blueox", "operator", "spacing_t", "deplet_t", "complet_t", "rqt")
+# Offset-PDP support scores (curated.intel_pdp_support, sql/30) that are FILTERABLE
+# in Highgrade. They live on the `sup` join, not intel_locations (see _num_sql /
+# _support_join). The export-only members (dist_3rd_nearest_ft, n_offsets_5mi, the
+# offset medians) are intentionally absent — they ship in the xlsx, not as filters.
+SUPPORT_NUMERIC: tuple[str, ...] = (
+    "pdp_count_1mi", "pdp_count_3mi", "pdp_count_5mi",
+    "dist_nearest_ft", "support_lateral_ft_5mi", "inflation_ratio",
+)
 NUMERIC: tuple[str, ...] = (
     "spacing_s", "deplet_s", "complet_s", "rqs",
     "npv5", "npv10", "npv15", "npv20", "npv25",
     "pv5", "pv10", "pv15", "pv20", "pv25",
     "oil_eur", "gas_eur", "ll_ft", "tvd", "fp_year",
+    *SUPPORT_NUMERIC,
 )
 # Selectable per-pad metrics. NPV/PV/EUR aggregate via sum|avg; well_count is a count.
 Metric = Literal[
@@ -81,6 +90,13 @@ def _blueox_join(left_alias: str) -> str:
     return f"LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = {left_alias}.stick_id"
 
 
+def _support_join(left_alias: str) -> str:
+    # Offset-PDP support scores (curated.intel_pdp_support, sql/30), joined as `sup`.
+    # UNIQUE on stick_id, so the LEFT JOIN never multiplies rows. Wired into every
+    # query that filters/aggregates a SUPPORT_NUMERIC column.
+    return f"LEFT JOIN curated.intel_pdp_support sup ON sup.stick_id = {left_alias}.stick_id"
+
+
 def _cat_sql(col: str) -> str:
     """SQL expression for a categorical column. formation_blueox is on the fb join
     (NULL -> '(unmapped)', matching the rest of the app); the other categoricals are
@@ -88,6 +104,16 @@ def _cat_sql(col: str) -> str:
     is aliased `il` (facets/pads) or `w` (gunbarrel)."""
     if col == "formation_blueox":
         return "COALESCE(fb.formation_blueox, '(unmapped)')"
+    return col
+
+
+def _num_sql(col: str) -> str:
+    """SQL ref for a numeric column. Support scores live on the `sup` join
+    (curated.intel_pdp_support); the rest are bare columns on the base table —
+    unambiguous, so they resolve whether the base is aliased `il` (facets/pads) or
+    `w` (gunbarrel), matching _cat_sql."""
+    if col in SUPPORT_NUMERIC:
+        return f"sup.{col}"
     return col
 
 
@@ -106,13 +132,14 @@ def facets(
         for c in CATEGORICAL
     )
     num_aggs = ",\n".join(
-        f"min(il.{c}) AS {c}_min, max(il.{c}) AS {c}_max" for c in NUMERIC
+        f"min({_num_sql(c)}) AS {c}_min, max({_num_sql(c)}) AS {c}_max" for c in NUMERIC
     )
     recon = "" if include_realized else f" AND {_DRILLABLE}"
     row = session.execute(
         text(
             f"SELECT {cat_aggs}, {num_aggs} "
             f"FROM curated.intel_locations il {_blueox_join('il')} {_recon_join('il')} "
+            f"{_support_join('il')} "
             f"WHERE {_PUD_BASE}{recon}"
         ),
         {"basin": basin},
@@ -172,11 +199,12 @@ def _build_filters(filters: HighgradeFilters) -> tuple[list[str], dict, list]:
         if col not in NUMERIC:
             continue  # silently ignore unknown columns rather than trust input
         lo, hi = bounds
+        ref = _num_sql(col)  # support scores -> sup.<col>; others stay bare (il/w safe)
         if lo is not None:
-            clauses.append(f"{col} >= :{col}_lo")
+            clauses.append(f"{ref} >= :{col}_lo")
             params[f"{col}_lo"] = lo
         if hi is not None:
-            clauses.append(f"{col} <= :{col}_hi")
+            clauses.append(f"{ref} <= :{col}_hi")
             params[f"{col}_hi"] = hi
 
     return clauses, params, expanding
@@ -203,7 +231,7 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
             SELECT il.pad_name,
                    {value_expr} AS value,
                    count(*)     AS n_wells
-            FROM curated.intel_locations il {_blueox_join('il')} {_recon_join('il')}
+            FROM curated.intel_locations il {_blueox_join('il')} {_recon_join('il')} {_support_join('il')}
             WHERE {_PUD_BASE} AND il.pad_name IS NOT NULL {filt_sql}{recon}
             GROUP BY il.pad_name
         ),
@@ -318,6 +346,7 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
         FROM curated.intel_locations w
         LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = w.stick_id
         {_recon_join('w')}
+        {_support_join('w')}
         WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL AND w.tvd IS NOT NULL
           AND w.category = 'PUD' AND w.pad_name = :pad_name
 

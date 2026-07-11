@@ -5,7 +5,12 @@ import type {
   LineLayerSpecification,
 } from "maplibre-gl";
 
-import { blueoxColorExpression, depletionColorExpression, statusColorExpression } from "./formations";
+import {
+  blueoxColorExpression,
+  depletionColorExpression,
+  statusColorExpression,
+  supportColorExpression,
+} from "./formations";
 
 export const INTEL_SOURCE = "intel";
 export const POINTS_LAYER = "intel-points";
@@ -16,7 +21,7 @@ export const LINES_SRC_LAYER = "intel_lines";
 export type Category = "PDP" | "PUD" | "RES";
 export const CATEGORIES: Category[] = ["PDP", "PUD", "RES"];
 
-export type ColorMode = "bench" | "status" | "depletion";
+export type ColorMode = "bench" | "status" | "depletion" | "support";
 
 // Selected sticks (feature-state, keyed by stick_id via the source promoteId)
 // paint yellow; everything else takes the active color mode (Blue Ox bench, §6
@@ -27,6 +32,7 @@ export function colorExpr(mode: ColorMode): ExpressionSpecification {
   const base =
     mode === "status" ? statusColorExpression()
     : mode === "depletion" ? depletionColorExpression()
+    : mode === "support" ? supportColorExpression()
     : blueoxColorExpression();
   return ["case", SELECTED, "#facc15", base] as unknown as ExpressionSpecification;
 }

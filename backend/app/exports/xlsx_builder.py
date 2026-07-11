@@ -51,14 +51,27 @@ META_COLS = (
     "oil_ip", "gas_ip", "ngl_ip", "water_ip",
     "npv5", "npv10", "npv15", "npv20", "npv25", "pv10",
     "dc_cost", "dcet_cost", "irr_pct",
+    # offset-PDP support family (curated.intel_pdp_support, sql/30) — full family
+    # on the export (the six UI filters + the export-only distances/medians/n).
+    "pdp_count_1mi", "pdp_count_3mi", "pdp_count_5mi",
+    "dist_nearest_ft", "dist_3rd_nearest_ft", "support_lateral_ft_5mi",
+    "n_offsets_5mi", "offset_median_eur_ft", "offset_median_cum12m_oil_per_ft",
+    "inflation_ratio",
 )
 _META_INT_COLS = {
     "fp_year", "tvd", "md", "ll_ft", "prop_load", "forecast_end_day",
     "oil_eur", "gas_eur", "ngl_eur", "water_eur",
     "npv5", "npv10", "npv15", "npv20", "npv25", "pv10",
     "dc_cost", "dcet_cost",
+    # support counts / distances / footage
+    "pdp_count_1mi", "pdp_count_3mi", "pdp_count_5mi",
+    "dist_nearest_ft", "dist_3rd_nearest_ft", "support_lateral_ft_5mi",
+    "n_offsets_5mi",
 }
-_META_DEC_COLS = {"oil_ip", "gas_ip", "ngl_ip", "water_ip", "irr_pct"}
+_META_DEC_COLS = {
+    "oil_ip", "gas_ip", "ngl_ip", "water_ip", "irr_pct",
+    "offset_median_eur_ft", "offset_median_cum12m_oil_per_ft", "inflation_ratio",
+}
 
 SUMMARY_SUMS = (
     "npv5", "npv10", "npv15", "npv20", "npv25",

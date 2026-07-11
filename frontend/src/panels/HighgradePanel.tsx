@@ -53,6 +53,10 @@ const RANGE_FIELDS: { col: string; label: string; money?: boolean }[] = [
   { col: "npv25", label: "NPV @ 25% ($)", money: true },
   { col: "oil_eur", label: "Oil EUR (bbl)" },
   { col: "ll_ft", label: "Lateral length (ft)" },
+  // offset-PDP support (curated.intel_pdp_support, sql/30) — verifiability screen
+  { col: "pdp_count_3mi", label: "PDP offsets (3 mi)" },
+  { col: "dist_nearest_ft", label: "Nearest PDP (ft)" },
+  { col: "inflation_ratio", label: "EUR/ft vs offsets (×)" },
 ];
 
 const EMPTY_CATS: Record<CategoricalField, string[]> = {

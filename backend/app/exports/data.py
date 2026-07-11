@@ -231,11 +231,25 @@ def gather_export_data(session: Session, body: ExportBody) -> ExportData:
         text(f"""
             WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g)
             SELECT to_jsonb(w) - 'wellstick_geom'
-                   || jsonb_build_object('formation_blueox',
-                                         COALESCE(fb.formation_blueox, '(unmapped)')) AS r
+                   || jsonb_build_object(
+                          'formation_blueox', COALESCE(fb.formation_blueox, '(unmapped)'),
+                          -- offset-PDP support family (curated.intel_pdp_support, sql/30):
+                          -- standalone matview, so these do NOT ride to_jsonb(w).
+                          'pdp_count_1mi', sup.pdp_count_1mi,
+                          'pdp_count_3mi', sup.pdp_count_3mi,
+                          'pdp_count_5mi', sup.pdp_count_5mi,
+                          'dist_nearest_ft', sup.dist_nearest_ft,
+                          'dist_3rd_nearest_ft', sup.dist_3rd_nearest_ft,
+                          'support_lateral_ft_5mi', sup.support_lateral_ft_5mi,
+                          'n_offsets_5mi', sup.n_offsets_5mi,
+                          'offset_median_eur_ft', sup.offset_median_eur_ft,
+                          'offset_median_cum12m_oil_per_ft', sup.offset_median_cum12m_oil_per_ft,
+                          'inflation_ratio', sup.inflation_ratio
+                      ) AS r
             FROM curated.intel_locations w
             LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = w.stick_id
-            LEFT JOIN curated.reconciled_inventory rec ON rec.stick_id = w.stick_id, aoi
+            LEFT JOIN curated.reconciled_inventory rec ON rec.stick_id = w.stick_id
+            LEFT JOIN curated.intel_pdp_support sup ON sup.stick_id = w.stick_id, aoi
             WHERE w.basin = :basin AND w.category IN ('PUD', 'RES')
               AND w.wellstick_geom IS NOT NULL AND {pred}
               AND COALESCE(fb.formation_blueox, '(unmapped)') <> ALL((:xforms)::text[])

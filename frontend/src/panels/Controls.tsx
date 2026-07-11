@@ -116,6 +116,7 @@ export function Controls() {
         <button className={colorMode === "bench" ? "active" : ""} onClick={() => setColorMode("bench")}>Bench</button>
         <button className={colorMode === "status" ? "active" : ""} onClick={() => setColorMode("status")}>Recon status</button>
         <button className={colorMode === "depletion" ? "active" : ""} onClick={() => setColorMode("depletion")}>Depletion</button>
+        <button className={colorMode === "support" ? "active" : ""} onClick={() => setColorMode("support")}>PDP support</button>
       </div>
       <div className="row" style={{ marginTop: 6 }}>
         <input id="remaining-only" type="checkbox" checked={remainingOnly} onChange={toggleRemainingOnly} />

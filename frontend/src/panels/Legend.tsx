@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-import { DEPLETION_TIERS, RECON_STATUS, blueoxLegend } from "../map/formations";
+import { DEPLETION_TIERS, RECON_STATUS, SUPPORT_TIERS, blueoxLegend } from "../map/formations";
 import { useMapStore } from "../store";
 
 const _fmt = new Intl.NumberFormat("en-US");
@@ -50,6 +50,23 @@ export function Legend() {
             )}
           </div>
         ))}
+      </div>
+    );
+  }
+
+  if (colorMode === "support") {
+    return (
+      <div className="panel legend">
+        <h3>PDP support (3 mi, in-bench)</h3>
+        {SUPPORT_TIERS.map((t) => (
+          <div className="item" key={t.key}>
+            <span className="swatch" style={{ background: t.color }} />
+            <span className="legend-label">{t.label}</span>
+          </div>
+        ))}
+        <div style={{ fontSize: 11, color: "#71717a", marginTop: 4 }}>
+          Verifiability, not quality — depleted areas score high. Pair with Depletion.
+        </div>
       </div>
     );
   }

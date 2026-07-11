@@ -47,6 +47,11 @@ WITH bounds AS (SELECT ST_TileEnvelope(:z, :x, :y) AS env)
     w.npv25,
     w.oil_eur,
     w.ll_ft,
+    -- Offset-PDP support (curated.intel_pdp_support via sql/22): the two the map
+    -- colors/labels by. inflation_ratio is already rounded to 2 dp in the matview
+    -- (keeps the MVT value pool small); PDP rows are NULL (not applicable).
+    w.pdp_count_3mi,
+    w.inflation_ratio,
     ST_AsMVTGeom(
       ST_Transform({geom_expr}, 3857),
       (SELECT env FROM bounds), 4096, 64, true

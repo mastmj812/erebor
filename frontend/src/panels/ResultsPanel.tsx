@@ -20,6 +20,7 @@ const fmtInt = (v: number) => Math.round(v).toLocaleString();
 export function ResultsPanel() {
   const sel = useMapStore((s) => s.selection);
   const excluded = useMapStore((s) => s.excludedFormations);
+  const formationFilter = useMapStore((s) => s.formationFilter);
   const toggleFormation = useMapStore((s) => s.toggleFormation);
   const excludedSticks = useMapStore((s) => s.excludedSticks);
   const clearCulls = useMapStore((s) => s.clearCulls);
@@ -48,7 +49,7 @@ export function ResultsPanel() {
       const culledNames = excludedSticks
         .map((id) => byId.get(id))
         .filter((n): n is string => !!n);
-      await exportSelection(aoi, basin, rule, culledNames, excluded, filename, remainingOnly, excludeDepleted);
+      await exportSelection(aoi, basin, rule, culledNames, excluded, filename, remainingOnly, excludeDepleted, formationFilter);
     } catch (e) {
       alert(`Export failed: ${e}`);
     } finally {
@@ -59,6 +60,7 @@ export function ResultsPanel() {
   const valKey = `${metric}${rate}` as keyof SelectionStick;
   const exForm = new Set(excluded);
   const exStick = new Set(excludedSticks);
+  const formInc = new Set(formationFilter); // Controls formation picker; empty = all
 
   const cats: Record<string, { count: number; value: number }> = {
     PDP: { count: 0, value: 0 }, PUD: { count: 0, value: 0 }, RES: { count: 0, value: 0 },
@@ -79,6 +81,7 @@ export function ResultsPanel() {
   const pads = new Set<string>();
   for (const s of sel.sticks) {
     if (exStick.has(s.stick_id)) { culled++; continue; } // culled -> contributes to nothing
+    if (formInc.size && !formInc.has(s.formation_blueox ?? "(unmapped)")) { filtered++; continue; } // formation picker
     if (!passesMapFilter(s)) { filtered++; continue; }   // hidden by a map filter
     const v = Number(s[valKey]);
     const fkey = s.formation_blueox ?? "(unmapped)"; // Blue Ox code is the rollup dimension
@@ -103,7 +106,7 @@ export function ResultsPanel() {
       <div className="count">
         {includedCount.toLocaleString()} of {sel.count.toLocaleString()} sticks in rollup
         {excluded.length ? ` · ${excluded.length} formation${excluded.length > 1 ? "s" : ""} off` : ""}
-        {filtered > 0 ? ` · ${filtered.toLocaleString()} filtered (remaining/depletion)` : ""}
+        {filtered > 0 ? ` · ${filtered.toLocaleString()} filtered (formation/remaining/depletion)` : ""}
         {sel.truncated ? " · capped 20k" : ""}
       </div>
       {culled > 0 && (

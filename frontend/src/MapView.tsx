@@ -169,6 +169,7 @@ export function MapView() {
   const dealZoom = useMapStore((s) => s.dealZoom);
   const lastFitDealsRef = useRef<DealFeature[] | null>(null);
   const excludedFormations = useMapStore((s) => s.excludedFormations);
+  const formationFilter = useMapStore((s) => s.formationFilter);
   const unitFilter = useMapStore((s) => s.unitFilter);
   const excludedSticks = useMapStore((s) => s.excludedSticks);
   const colorMode = useMapStore((s) => s.colorMode);
@@ -437,11 +438,11 @@ export function MapView() {
     if (!styleLoaded) return;
     const map = mapRef.current;
     if (!map) return;
-    const filt = stickFilter(categories, excludedFormations, unitFilter, remainingOnly, excludeDepleted);
+    const filt = stickFilter(categories, excludedFormations, unitFilter, remainingOnly, excludeDepleted, formationFilter);
     for (const id of [POINTS_LAYER, LINES_LAYER]) {
       if (map.getLayer(id)) map.setFilter(id, filt);
     }
-  }, [categories, excludedFormations, unitFilter, remainingOnly, excludeDepleted, styleLoaded]);
+  }, [categories, excludedFormations, formationFilter, unitFilter, remainingOnly, excludeDepleted, styleLoaded]);
 
   // -------- color mode: Blue Ox bench vs §6 reconciliation status --------
   useEffect(() => {

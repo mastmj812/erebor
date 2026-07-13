@@ -12,6 +12,7 @@ export async function exportSelection(
   filename: string,
   remainingOnly = false,
   excludeDepleted = false,
+  includeFormations: string[] = [],
 ): Promise<void> {
   const r = await fetch("/api/export", {
     method: "POST",
@@ -22,6 +23,7 @@ export async function exportSelection(
       rule,
       exclude_wells: excludeWells,
       exclude_formations: excludeFormations,
+      include_formations: includeFormations,
       remaining_only: remainingOnly,
       exclude_depleted: excludeDepleted,
       filename,

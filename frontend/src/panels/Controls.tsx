@@ -1,8 +1,10 @@
 import { useRef, useState } from "react";
 
 import { selectByPolygon, uploadDeals } from "../api/select";
+import { blueoxLegend, colorForBlueox } from "../map/formations";
 import { CATEGORIES, categoryLabel } from "../map/sticksLayers";
 import { useMapStore, type OverlayKey, type SelectionRule } from "../store";
+import { ChipGroup } from "./ChipGroup";
 
 const OVERLAY_LABELS: Record<OverlayKey, string> = {
   pads: "Pad / DSU polygons",
@@ -40,6 +42,9 @@ export function Controls() {
   const setUnitFilter = useMapStore((s) => s.setUnitFilter);
   const colorMode = useMapStore((s) => s.colorMode);
   const setColorMode = useMapStore((s) => s.setColorMode);
+  const formationFilter = useMapStore((s) => s.formationFilter);
+  const toggleMapFormation = useMapStore((s) => s.toggleMapFormation);
+  const clearMapFormations = useMapStore((s) => s.clearMapFormations);
   const remainingOnly = useMapStore((s) => s.remainingOnly);
   const toggleRemainingOnly = useMapStore((s) => s.toggleRemainingOnly);
   const excludeDepleted = useMapStore((s) => s.excludeDepleted);
@@ -58,6 +63,8 @@ export function Controls() {
   };
 
   const count = basinsMeta.find((m) => m.basin === basin)?.count;
+  // formation_blueox codes present in this basin (same set the Legend shows).
+  const formationCodes = blueoxLegend(basin).flatMap((g) => g.codes.map((c) => c.code));
 
   // Changing the rule re-runs selection on the current AOI (the toggle
   // materially changes counts — keep it live rather than forcing a redraw).
@@ -112,6 +119,23 @@ export function Controls() {
           <label htmlFor={`cat-${c}`}>{categoryLabel(c)} ({CATEGORY_HINT[c]})</label>
         </div>
       ))}
+
+      <div style={{ marginTop: 10 }}>
+        <ChipGroup
+          label="Formations (Blue Ox)"
+          hint="Empty = all benches. Click to scout/screen specific ones — scopes the map, the selection rollup, and the export."
+          options={formationCodes}
+          selected={formationFilter}
+          onToggle={toggleMapFormation}
+          swatch={(code) => colorForBlueox(basin, code)}
+        />
+        {formationFilter.length > 0 && (
+          <div style={{ fontSize: 11, color: "#71717a", marginTop: 2 }}>
+            {formationFilter.length} bench{formationFilter.length === 1 ? "" : "es"} ·{" "}
+            <button type="button" onClick={() => clearMapFormations()} style={{ fontSize: 11, cursor: "pointer" }}>clear</button>
+          </div>
+        )}
+      </div>
 
       <h3 style={{ marginTop: 10 }}>Color sticks by</h3>
       <div className="seg">

@@ -45,7 +45,8 @@ class ExportBody(BaseModel):
     basin: Literal["delaware", "midland"]
     rule: Rule = "intersects"
     exclude_wells: list[str] = []       # culled well names (unique_id)
-    exclude_formations: list[str] = []  # formation_blueox codes turned off
+    exclude_formations: list[str] = []  # formation_blueox codes turned off (post-selection trim)
+    include_formations: list[str] = []  # map formation picker: [] = all, else only these codes
     remaining_only: bool = False        # drop realized/phantom/conflict PUDs (keep RES)
     exclude_depleted: bool = False      # drop Tier-4 (offset-depleted) PUDs
     filename: str | None = None         # user-chosen workbook name (sans .xlsx)
@@ -213,8 +214,14 @@ def gather_export_data(session: Session, body: ExportBody) -> ExportData:
         "aoi": json.dumps(body.aoi),
         "basin": body.basin,
         "xforms": body.exclude_formations,
+        "incforms": body.include_formations,
         "xwells": body.exclude_wells,
     }
+    # Map formation picker (INCLUDE). Empty list => no constraint; otherwise keep
+    # only these formation_blueox codes. Applied to both the PUD/RES rows and the
+    # PDP count so the workbook + Assumptions tab match the on-screen scope.
+    inc = ("AND (cardinality((:incforms)::text[]) = 0 OR COALESCE({fb}, '(unmapped)') "
+           "= ANY((:incforms)::text[]))")
     # Mirror the map/rollup filters so the workbook value matches the on-screen
     # total (see ResultsPanel). PDP carry null recon/deplet_t and survive both —
     # they're counted then dropped from the workbook either way.
@@ -253,6 +260,7 @@ def gather_export_data(session: Session, body: ExportBody) -> ExportData:
             WHERE w.basin = :basin AND w.category IN ('PUD', 'RES')
               AND w.wellstick_geom IS NOT NULL AND {pred}
               AND COALESCE(fb.formation_blueox, '(unmapped)') <> ALL((:xforms)::text[])
+              {inc.format(fb="fb.formation_blueox")}
               AND w.unique_id <> ALL((:xwells)::text[]){filt}
             ORDER BY w.category, COALESCE(fb.formation_blueox, '(unmapped)'), w.unique_id
         """),
@@ -278,6 +286,7 @@ def gather_export_data(session: Session, body: ExportBody) -> ExportData:
             WHERE w.basin = :basin AND w.category = 'PDP'
               AND w.wellstick_geom IS NOT NULL AND {pred}
               AND COALESCE(w.formation_blueox, '(unmapped)') <> ALL((:xforms)::text[])
+              {inc.format(fb="w.formation_blueox")}
               AND w.unique_id <> ALL((:xwells)::text[]){pdp_filt}
         """),
         params,

@@ -116,7 +116,8 @@ interface MapState {
   deals: DealFeature[] | null; // uploaded deals shapefile — displayed on the map only
   // Zoom-to-deal request (fresh wrapper object each pick so repeats re-fire).
   dealZoom: { geometry: GeoJSON.Geometry } | null;
-  excludedFormations: string[]; // UPPER formation names dropped from the rollup
+  excludedFormations: string[]; // formation_blueox codes dropped from the rollup (post-selection trim)
+  formationFilter: string[];    // map-scouting INCLUDE filter (empty = all); scopes map + rollup + export
   excludedSticks: number[];     // manually culled stick_ids (dropped from rollup/plot/export)
   unitFilter: string[];         // map-only: substring terms matched against unique_id (OR)
   colorMode: ColorMode;         // map sticks: Blue Ox bench / §6 reconciliation status / depletion tier
@@ -154,6 +155,8 @@ interface MapState {
   setDeals: (d: DealFeature[] | null) => void;
   setDealZoom: (g: GeoJSON.Geometry | null) => void;
   toggleFormation: (f: string) => void;
+  toggleMapFormation: (code: string) => void;
+  clearMapFormations: () => void;
   setUnitFilter: (u: string[]) => void;
   setColorMode: (m: ColorMode) => void;
   loadReconCounts: () => Promise<void>;
@@ -195,6 +198,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   deals: null,
   dealZoom: null,
   excludedFormations: [],
+  formationFilter: [],
   excludedSticks: [],
   unitFilter: [],
   colorMode: "bench",
@@ -223,7 +227,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   setHgGunbarrel: (g) => set({ hgGunbarrel: g, hgGunbarrelLoading: false }),
   closeHgGunbarrel: () => set({ hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false }),
   setBasin: (b) =>
-    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], excludedSticks: [], unitFilter: [], reconCounts: null, depletionCounts: null, supportCounts: null, remainingOnly: false, excludeDepleted: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], formationFilter: [], excludedSticks: [], unitFilter: [], reconCounts: null, depletionCounts: null, supportCounts: null, remainingOnly: false, excludeDepleted: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleCategory: (c) =>
     set((s) => ({
       categories: s.categories.includes(c)
@@ -254,6 +258,15 @@ export const useMapStore = create<MapState>((set, get) => ({
         ? s.excludedFormations.filter((x) => x !== f)
         : [...s.excludedFormations, f],
     })),
+  // Map-scouting INCLUDE filter — persists across selections (only reset on basin
+  // change), so scoping to a bench survives drawing/redrawing an AOI.
+  toggleMapFormation: (code) =>
+    set((s) => ({
+      formationFilter: s.formationFilter.includes(code)
+        ? s.formationFilter.filter((x) => x !== code)
+        : [...s.formationFilter, code],
+    })),
+  clearMapFormations: () => set({ formationFilter: [] }),
   setUnitFilter: (u) => set({ unitFilter: u }),
   setColorMode: (m) => set({ colorMode: m }),
   loadReconCounts: async () => {

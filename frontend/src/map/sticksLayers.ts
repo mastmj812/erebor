@@ -63,12 +63,19 @@ export function stickFilter(
   units: string[] = [],
   remainingOnly = false,
   excludeDepleted = false,
+  formationFilter: string[] = [],
 ): FilterSpecification {
   const clauses: unknown[] = [
     cats.length === 0
       ? ["==", ["get", "category"], "__none__"]
       : ["in", ["get", "category"], ["literal", cats]],
   ];
+  if (formationFilter.length > 0) {
+    // Map-scouting INCLUDE filter (Controls formation picker): show only these
+    // formation_blueox codes. A feature with null formation_blueox (unmapped) is
+    // not in the list -> hidden while a filter is active.
+    clauses.push(["in", ["get", "formation_blueox"], ["literal", formationFilter]]);
+  }
   if (excludedFormations.length > 0) {
     // excludedFormations are formation_blueox codes (the rollup/exclude dimension).
     clauses.push(["!", ["in", ["get", "formation_blueox"], ["literal", excludedFormations]]]);

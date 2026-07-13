@@ -63,8 +63,12 @@ export function Controls() {
   };
 
   const count = basinsMeta.find((m) => m.basin === basin)?.count;
-  // formation_blueox codes present in this basin (same set the Legend shows).
-  const formationCodes = blueoxLegend(basin).flatMap((g) => g.codes.map((c) => c.code));
+  // formation_blueox codes present in this basin (same set the Legend shows),
+  // plus an "(unmapped)" chip for sticks with no bench (NULL formation_blueox).
+  const formationCodes = [
+    ...blueoxLegend(basin).flatMap((g) => g.codes.map((c) => c.code)),
+    "(unmapped)",
+  ];
 
   // Changing the rule re-runs selection on the current AOI (the toggle
   // materially changes counts — keep it live rather than forcing a redraw).

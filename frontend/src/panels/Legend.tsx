@@ -12,13 +12,16 @@ export function Legend() {
   const loadReconCounts = useMapStore((s) => s.loadReconCounts);
   const depletionCounts = useMapStore((s) => s.depletionCounts);
   const loadDepletionCounts = useMapStore((s) => s.loadDepletionCounts);
+  const supportCounts = useMapStore((s) => s.supportCounts);
+  const loadSupportCounts = useMapStore((s) => s.loadSupportCounts);
 
-  // Pull per-status / per-tier stick counts for whichever color mode is active;
-  // both are cleared on basin change, so these refetch per basin.
+  // Pull per-status / per-tier / per-support-bucket stick counts for whichever
+  // color mode is active; all are cleared on basin change, so these refetch per basin.
   useEffect(() => {
     if (colorMode === "status") loadReconCounts();
     if (colorMode === "depletion") loadDepletionCounts();
-  }, [colorMode, basin, loadReconCounts, loadDepletionCounts]);
+    if (colorMode === "support") loadSupportCounts();
+  }, [colorMode, basin, loadReconCounts, loadDepletionCounts, loadSupportCounts]);
 
   if (colorMode === "status") {
     return (
@@ -62,10 +65,14 @@ export function Legend() {
           <div className="item" key={t.key}>
             <span className="swatch" style={{ background: t.color }} />
             <span className="legend-label">{t.label}</span>
+            {supportCounts && (
+              <span className="legend-count">{_fmt.format(supportCounts[t.key] ?? 0)}</span>
+            )}
           </div>
         ))}
         <div style={{ fontSize: 11, color: "#71717a", marginTop: 4 }}>
-          Verifiability, not quality — depleted areas score high. Pair with Depletion.
+          Counts over BASE_CASE + EMERGING (scored). Verifiability, not quality —
+          depleted areas score high; pair with Depletion.
         </div>
       </div>
     );

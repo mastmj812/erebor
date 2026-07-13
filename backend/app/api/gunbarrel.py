@@ -67,7 +67,7 @@ def gunbarrel(body: GbBody, session: Session = Depends(get_session)) -> dict:
             WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g)
             SELECT w.stick_id, w.unique_id, w.category, UPPER(w.formation) AS formation,
                    w.formation_blueox, w.basin_blueox, w.formation_blueox_source,
-                   w.recon_status, w.deplet_t,
+                   w.recon_status, w.deplet_t, w.pdp_count_3mi,
                    w.tvd, w.ll_ft,
                    ST_X(ST_LineInterpolatePoint(w.wellstick_geom, 0.5)) AS mx,
                    ST_Y(ST_LineInterpolatePoint(w.wellstick_geom, 0.5)) AS my,
@@ -121,6 +121,7 @@ def gunbarrel(body: GbBody, session: Session = Depends(get_session)) -> dict:
             "formation_blueox_source": r["formation_blueox_source"],
             "recon_status": r["recon_status"],
             "deplet_t": r["deplet_t"],
+            "pdp_count_3mi": r["pdp_count_3mi"],  # PUD/RES offset support; NULL for PDP
             "tvd": float(r["tvd"]),
             "ll_ft": float(r["ll_ft"]) if r["ll_ft"] is not None else None,
             "offset_ft": round(offset_ft, 1),

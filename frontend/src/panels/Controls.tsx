@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 
 import { selectByPolygon, uploadDeals } from "../api/select";
-import { CATEGORIES } from "../map/sticksLayers";
+import { CATEGORIES, categoryLabel } from "../map/sticksLayers";
 import { useMapStore, type OverlayKey, type SelectionRule } from "../store";
 
 const OVERLAY_LABELS: Record<OverlayKey, string> = {
@@ -12,10 +12,12 @@ const OVERLAY_LABELS: Record<OverlayKey, string> = {
   sections: "Sections (numbered, z≥11)",
 };
 
-const CATEGORY_LABELS: Record<string, string> = {
-  PDP: "PDP (producing)",
-  PUD: "PUD (undeveloped)",
-  RES: "RESOURCE",
+// Native inventory-tier names + a short descriptor. category wire values are
+// unchanged (PUD=BASE_CASE, RES=EMERGING); see sticksLayers.categoryLabel.
+const CATEGORY_HINT: Record<string, string> = {
+  PDP: "producing",
+  PUD: "undeveloped",
+  RES: "resource",
 };
 
 export function Controls() {
@@ -107,7 +109,7 @@ export function Controls() {
       {CATEGORIES.map((c) => (
         <div className="row" key={c}>
           <input id={`cat-${c}`} type="checkbox" checked={categories.includes(c)} onChange={() => toggleCategory(c)} />
-          <label htmlFor={`cat-${c}`}>{CATEGORY_LABELS[c]}</label>
+          <label htmlFor={`cat-${c}`}>{categoryLabel(c)} ({CATEGORY_HINT[c]})</label>
         </div>
       ))}
 
@@ -120,7 +122,7 @@ export function Controls() {
       </div>
       <div className="row" style={{ marginTop: 6 }}>
         <input id="remaining-only" type="checkbox" checked={remainingOnly} onChange={toggleRemainingOnly} />
-        <label htmlFor="remaining-only">Remaining PUDs only</label>
+        <label htmlFor="remaining-only">Remaining BASE_CASE only</label>
       </div>
       <div className="row">
         <input id="exclude-depleted" type="checkbox" checked={excludeDepleted} onChange={toggleExcludeDepleted} />

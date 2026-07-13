@@ -21,6 +21,18 @@ export const LINES_SRC_LAYER = "intel_lines";
 export type Category = "PDP" | "PUD" | "RES";
 export const CATEGORIES: Category[] = ["PDP", "PUD", "RES"];
 
+// Display labels: Novi's native inventory-tier names. `category` (the wire/tile
+// value) stays PDP/PUD/RES as the legacy alias — PUD=BASE_CASE, RES=EMERGING — so
+// only the UI reads native; the API, tiles, and filter logic are unchanged.
+export const CATEGORY_LABEL: Record<Category, string> = {
+  PDP: "PDP",
+  PUD: "BASE_CASE",
+  RES: "EMERGING",
+};
+export function categoryLabel(c: string): string {
+  return CATEGORY_LABEL[c as Category] ?? c;
+}
+
 export type ColorMode = "bench" | "status" | "depletion" | "support";
 
 // Selected sticks (feature-state, keyed by stick_id via the source promoteId)

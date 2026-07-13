@@ -116,7 +116,7 @@ export function HighgradeGunbarrelModal() {
       <div className="win-body" ref={bodyRef}>
         {loading && <div className="count">Loading gunbarrel…</div>}
         {!loading && data && data.wells.length === 0 && (
-          <div className="count">No PUD or PDP wells found in this unit.</div>
+          <div className="count">No BASE_CASE or PDP wells found in this unit.</div>
         )}
         {!loading && data && data.wells.length > 0 && (
           <PadChart pad={data} exForm={NO_EXFORM} isMuted={(w) => !w.in_filter}

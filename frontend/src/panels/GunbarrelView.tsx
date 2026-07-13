@@ -1,7 +1,18 @@
 import { useState } from "react";
 
 import { fetchGunbarrel } from "../api/gunbarrel";
-import { BLUEOX_SOURCES, RECON_STATUS, colorForBlueox, colorForFormation, colorForSource, colorForStatus } from "../map/formations";
+import {
+  BLUEOX_SOURCES,
+  RECON_STATUS,
+  SUPPORT_TIERS,
+  colorForBlueox,
+  colorForFormation,
+  colorForSource,
+  colorForStatus,
+  colorForSupport,
+  supportBucketKey,
+} from "../map/formations";
+import { categoryLabel } from "../map/sticksLayers";
 import { useMapStore, type GunbarrelPad, type GunbarrelWell } from "../store";
 
 const M = { l: 46, r: 10, t: 18, b: 26 };
@@ -69,7 +80,7 @@ function GbTooltip({ w, x, y, muted, interactive, metricLabel, formatMetric }: {
       <div className="gb-tip-name">{w.unique_id}</div>
       <table className="gb-tip-tbl">
         <tbody>
-          <tr><td>Category</td><td>{w.category}</td></tr>
+          <tr><td>Category</td><td>{categoryLabel(w.category)}</td></tr>
           <tr><td>Formation</td><td>{w.formation}</td></tr>
           <tr><td>Blue Ox</td><td>
             {w.formation_blueox ?? "—"}
@@ -78,6 +89,11 @@ function GbTooltip({ w, x, y, muted, interactive, metricLabel, formatMetric }: {
           {w.deplet_t && (
             <tr><td>Depletion</td><td style={w.deplet_t === "Tier-4" ? { color: "#dc2626", fontWeight: 600 } : undefined}>
               {w.deplet_t}{w.deplet_t === "Tier-4" ? " — depleted" : ""}
+            </td></tr>
+          )}
+          {w.pdp_count_3mi != null && (
+            <tr><td>PDP support</td><td style={w.pdp_count_3mi === 0 ? { color: "#dc2626", fontWeight: 600 } : undefined}>
+              {w.pdp_count_3mi} offset{w.pdp_count_3mi === 1 ? "" : "s"} @3mi{w.pdp_count_3mi === 0 ? " — unsupported" : ""}
             </td></tr>
           )}
           <tr><td>TVD</td><td>{Math.round(w.tvd).toLocaleString()} ft</td></tr>
@@ -164,7 +180,7 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
   const st = useMapStore;
   // Spot-check coloring: Blue Ox bench code, or the resolution source
   // (pdp_join / crosswalk / inferred) so the inferred sub-bench calls stand out.
-  const [colorMode, setColorMode] = useState<"bench" | "source" | "status">("bench");
+  const [colorMode, setColorMode] = useState<"bench" | "source" | "status" | "support">("bench");
 
   if (!sel || !aoi) return <div className="count">Draw or upload an AOI to see the gunbarrel.</div>;
 
@@ -209,7 +225,9 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
       ? colorForSource(w.formation_blueox_source)
       : colorMode === "status"
         ? colorForStatus(w.recon_status)
-        : colorForBlueox(w.basin_blueox, w.formation_blueox);
+        : colorMode === "support"
+          ? colorForSupport(w.pdp_count_3mi)
+          : colorForBlueox(w.basin_blueox, w.formation_blueox);
 
   // Swatch legend for the active color mode, limited to what's loaded.
   const allWells = gb.pads.flatMap((p) => p.wells);
@@ -222,6 +240,10 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
       ? RECON_STATUS.filter((s) =>
           allWells.some((w) => (w.recon_status ?? "(null)") === s.key),
         ).map((s) => ({ label: s.label, color: s.color }))
+      : colorMode === "support"
+      ? SUPPORT_TIERS.filter((t) =>
+          allWells.some((w) => supportBucketKey(w.pdp_count_3mi) === t.key),
+        ).map((t) => ({ label: t.label, color: t.color }))
       : Array.from(
           new Map(
             allWells
@@ -253,16 +275,17 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
       </div>
       <div className="count">
         {allWells.length} wells ({["PUD", "PDP", "RES"]
-          .map((cat) => `${allWells.filter((w) => w.category === cat).length} ${cat}`)
+          .map((cat) => `${allWells.filter((w) => w.category === cat).length} ${categoryLabel(cat)}`)
           .join(" · ")}) · shape = category · click a marker to cull / restore
         <span style={{ marginLeft: 10 }}>
           color:
           <button style={modeBtn(colorMode === "bench")} onClick={() => setColorMode("bench")}>Blue Ox bench</button>
           <button style={modeBtn(colorMode === "source")} onClick={() => setColorMode("source")}>source</button>
           <button style={modeBtn(colorMode === "status")} onClick={() => setColorMode("status")}>status</button>
+          <button style={modeBtn(colorMode === "support")} onClick={() => setColorMode("support")}>PDP support</button>
         </span>
         <span className="gb-legend">
-          <span>○ PUD</span> <span>● PDP</span> <span>△ RES</span> <span>dashed = culled</span>
+          <span>○ BASE_CASE</span> <span>● PDP</span> <span>△ EMERGING</span> <span>dashed = culled</span>
         </span>
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 10px", padding: "4px 6px", fontSize: 10, color: "#52525b" }}>

@@ -5,7 +5,7 @@ import { colorForBlueox } from "../map/formations";
 import { useMapStore, type DiscountRate, type SelectionStick } from "../store";
 
 const CAT_ORDER = ["PDP", "PUD", "RES"] as const;
-const CAT_LABEL: Record<string, string> = { PDP: "PDP", PUD: "PUD", RES: "RESOURCE" };
+const CAT_LABEL: Record<string, string> = { PDP: "PDP", PUD: "BASE_CASE", RES: "EMERGING" };
 const RATES: DiscountRate[] = [5, 10, 15, 20, 25];
 
 function fmtUSD(v: number): string {
@@ -154,7 +154,7 @@ export function ResultsPanel() {
           </tr>
         </tbody>
       </table>
-      <div className="count">{fmtInt(futureLoc)} future locations (PUD + RESOURCE) · {pads.size} pads</div>
+      <div className="count">{fmtInt(futureLoc)} future locations (BASE_CASE + EMERGING) · {pads.size} pads</div>
 
       <h3 style={{ marginTop: 10 }}>Formations (include / exclude)</h3>
       {CAT_ORDER.map((c) => {
@@ -189,7 +189,7 @@ export function ResultsPanel() {
       </div>
       <div className="caveat">
         Screening number from Novi’s economics on one flat deck — not the authoritative valuation.
-        Convention: value PDP at <b>PV</b> (capex sunk), PUD/RESOURCE at <b>NPV</b> (net of drilling
+        Convention: value PDP at <b>PV</b> (capex sunk), BASE_CASE/EMERGING at <b>NPV</b> (net of drilling
         cost). Run your model on the workbook export.
       </div>
     </div>

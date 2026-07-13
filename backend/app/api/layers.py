@@ -122,3 +122,28 @@ def depletion_counts(basin: str = _BASIN, session: Session = Depends(get_session
         GROUP BY 1
     """), {"basin": basin}).mappings().all()
     return {r["tier"]: int(r["n"]) for r in rows}
+
+
+@router.get("/support_counts")
+def support_counts(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict[str, int]:
+    """Offset-PDP support bucket counts for the basin (support-mode legend).
+
+    Unlike recon/depletion counts, this covers ONLY the SCORED population
+    (PUD/RES) — PDP is not scored, so counting it would swamp the legend with a
+    huge '(null)' bucket. Buckets match the frontend SUPPORT_TIERS keys
+    (pdp_count_3mi: 0 / 1–2 / 3–7 / 8+); unscorable (NULL) is keyed '(null)'.
+    """
+    rows = session.execute(text("""
+        SELECT CASE
+                 WHEN pdp_count_3mi IS NULL THEN '(null)'
+                 WHEN pdp_count_3mi = 0     THEN '0'
+                 WHEN pdp_count_3mi <= 2    THEN '1'
+                 WHEN pdp_count_3mi <= 7    THEN '3'
+                 ELSE '8'
+               END AS bucket, count(*) AS n
+        FROM curated.erebor_locations
+        WHERE basin = :basin AND category IN ('PUD', 'RES')
+          AND wellstick_geom IS NOT NULL
+        GROUP BY 1
+    """), {"basin": basin}).mappings().all()
+    return {r["bucket"]: int(r["n"]) for r in rows}

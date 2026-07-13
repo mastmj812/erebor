@@ -176,17 +176,17 @@ export function HighgradePanel() {
         <button className={basin === "delaware" ? "active" : ""} onClick={() => setBasin("delaware")}>Delaware</button>
         <button className={basin === "midland" ? "active" : ""} onClick={() => setBasin("midland")}>Midland</button>
       </div>
-      <div className="count">Screen undeveloped (PUD) inventory → highlight target pads.</div>
+      <div className="count">Screen undeveloped (BASE_CASE) inventory → highlight target pads.</div>
 
       <h3>Inventory</h3>
       <div className="seg sm">
         <button className={!includeRealized ? "active" : ""} onClick={() => setIncludeRealized(false)}>Drillable only</button>
-        <button className={includeRealized ? "active" : ""} onClick={() => setIncludeRealized(true)}>All Novi PUDs</button>
+        <button className={includeRealized ? "active" : ""} onClick={() => setIncludeRealized(true)}>All Novi BASE_CASE</button>
       </div>
       <div className="count" style={{ margin: "2px 0 10px" }}>
         {includeRealized
-          ? "Every Novi PUD, including locations §6 reconciliation flags as already drilled."
-          : "Remaining + conflict only; excludes PUDs reconciliation matched to existing production (realized / phantom)."}
+          ? "Every Novi BASE_CASE location, including those §6 reconciliation flags as already drilled."
+          : "Remaining + conflict only; excludes BASE_CASE locations reconciliation matched to existing production (realized / phantom)."}
       </div>
 
       <h3>Metric (per pad)</h3>

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import { fetchDepletionCounts, fetchReconCounts } from "./api/recon";
+import { fetchDepletionCounts, fetchReconCounts, fetchSupportCounts } from "./api/recon";
 import type { HighgradeFilters } from "./api/highgrade";
 import { CATEGORIES, type Category, type ColorMode } from "./map/sticksLayers";
 
@@ -44,6 +44,7 @@ export interface GunbarrelWell {
   formation_blueox_source: string | null; // pdp_join | inferred | crosswalk | null
   recon_status: string | null;            // realized_pud_to_pdp | remaining_pud | conflict | net_new_pdp | null
   deplet_t: string | null;                // Novi depletion tier (Tier-1..4; Tier-4 = drained); null for PDP/RES
+  pdp_count_3mi: number | null;           // offset-PDP support (3 mi, in-bench); null for PDP / unscorable
   tvd: number; ll_ft: number | null; offset_ft: number;
   in_filter?: boolean;          // set only by the Highgrade per-DSU gunbarrel
   metric_value?: number | null; // value of the selected screen metric (Highgrade)
@@ -121,6 +122,7 @@ interface MapState {
   colorMode: ColorMode;         // map sticks: Blue Ox bench / §6 reconciliation status / depletion tier
   reconCounts: Record<string, number> | null; // recon_status -> stick count for current basin (legend)
   depletionCounts: Record<string, number> | null; // deplet_t -> stick count for current basin (legend)
+  supportCounts: Record<string, number> | null; // pdp support bucket -> PUD/RES count for current basin (legend)
   remainingOnly: boolean;       // map filter: among PUDs show only remaining (drillable)
   excludeDepleted: boolean;     // map filter: drop offset-depleted (Tier-4) PUDs
   discountRate: DiscountRate;
@@ -156,6 +158,7 @@ interface MapState {
   setColorMode: (m: ColorMode) => void;
   loadReconCounts: () => Promise<void>;
   loadDepletionCounts: () => Promise<void>;
+  loadSupportCounts: () => Promise<void>;
   toggleRemainingOnly: () => void;
   toggleExcludeDepleted: () => void;
   toggleStick: (id: number) => void;
@@ -197,6 +200,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   colorMode: "bench",
   reconCounts: null,
   depletionCounts: null,
+  supportCounts: null,
   remainingOnly: false,
   excludeDepleted: false,
   discountRate: 10,
@@ -219,7 +223,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   setHgGunbarrel: (g) => set({ hgGunbarrel: g, hgGunbarrelLoading: false }),
   closeHgGunbarrel: () => set({ hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false }),
   setBasin: (b) =>
-    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], excludedSticks: [], unitFilter: [], reconCounts: null, depletionCounts: null, remainingOnly: false, excludeDepleted: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], excludedSticks: [], unitFilter: [], reconCounts: null, depletionCounts: null, supportCounts: null, remainingOnly: false, excludeDepleted: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleCategory: (c) =>
     set((s) => ({
       categories: s.categories.includes(c)
@@ -266,6 +270,14 @@ export const useMapStore = create<MapState>((set, get) => ({
       set({ depletionCounts: await fetchDepletionCounts(get().basin) });
     } catch (e) {
       console.warn("loadDepletionCounts failed", e);
+    }
+  },
+  loadSupportCounts: async () => {
+    if (get().supportCounts) return; // cached for the current basin (cleared by setBasin)
+    try {
+      set({ supportCounts: await fetchSupportCounts(get().basin) });
+    } catch (e) {
+      console.warn("loadSupportCounts failed", e);
     }
   },
   // Both filters also drive the gun-barrel server query; clear the loaded

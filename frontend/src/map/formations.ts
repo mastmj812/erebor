@@ -278,6 +278,22 @@ export const SUPPORT_TIERS: { key: string; label: string; color: string }[] = [
   { key: "(null)", label: "PDP / not scorable", color: _SUP.none },
 ];
 
+const _SUP_BY_KEY = new Map(SUPPORT_TIERS.map((t) => [t.key, t.color]));
+
+// Bucket a pdp_count_3mi value to its SUPPORT_TIERS key (the step() breakpoints:
+// 0 / 1–2 / 3–7 / 8+ ; null = not scorable). Shared by the gunbarrel color mode +
+// its legend so both agree with the map's supportColorExpression.
+export function supportBucketKey(count: number | null | undefined): string {
+  if (count == null) return "(null)";
+  if (count === 0) return "0";
+  if (count <= 2) return "1";
+  if (count <= 7) return "3";
+  return "8";
+}
+export function colorForSupport(count: number | null | undefined): string {
+  return _SUP_BY_KEY.get(supportBucketKey(count)) ?? _SUP.none;
+}
+
 // MapLibre paint: step() over pdp_count_3mi. The MVT omits null properties
 // per-feature, so PDP sticks and unscorable PUDs carry no pdp_count_3mi ->
 // coalesce to -1 -> gray. Stepped/categorical (NOT interpolate): the breaks are

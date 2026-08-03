@@ -7,6 +7,7 @@ export function TabSwitcher() {
     <div className="tabswitch seg">
       <button className={appMode === "map" ? "active" : ""} onClick={() => setAppMode("map")}>Map</button>
       <button className={appMode === "highgrade" ? "active" : ""} onClick={() => setAppMode("highgrade")}>Highgrade</button>
+      <button className={appMode === "accuracy" ? "active" : ""} onClick={() => setAppMode("accuracy")}>Accuracy</button>
     </div>
   );
 }

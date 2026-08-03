@@ -23,10 +23,21 @@ function ticks(max: number, n = 5): number[] {
   return Array.from({ length: n + 1 }, (_, i) => i * step);
 }
 
+// Signed-y variant: n ticks spanning [min, max] (used only when signedY).
+function spanTicks(min: number, max: number, n = 6): number[] {
+  const step = (max - min) / n;
+  if (step <= 0) return [min];
+  return Array.from({ length: n + 1 }, (_, i) => min + i * step);
+}
+
 export function LineChart({
-  series, width = 540, height = 230, xlabel, ylabel,
+  series, width = 540, height = 230, xlabel, ylabel, signedY = false,
 }: {
   series: Series[]; width?: number; height?: number; xlabel: string; ylabel: string;
+  // signedY: y-axis spans the data's [min, max] (allowing negatives) instead of
+  // anchoring at 0, and a zero line is drawn — for % -error series. Y zoom
+  // shrinks both extents toward 0.
+  signedY?: boolean;
 }) {
   // Zoom factor >= 1; visible axis max = dataMax / zoom (anchored at origin).
   const [xZoom, setXZoom] = useState(1);
@@ -40,14 +51,19 @@ export function LineChart({
   const svgH = Math.max(120, height - SLIDER);
 
   const pad = { l: 58, r: 12, t: 10, b: 28 };
+  const allYs = series.flatMap((s) => s.ys);
   const xDataMax = Math.max(1, ...series.flatMap((s) => s.xs));
-  const yDataMax = Math.max(1, ...series.flatMap((s) => s.ys)) * 1.05;
+  const yDataMax = Math.max(signedY ? 0 : 1, ...allYs) * 1.05;
+  const yDataMin = signedY ? Math.min(0, ...allYs) * 1.05 : 0;
   const xmax = xDataMax / xZoom;
   const ymax = yDataMax / yZoom;
+  const ymin = yDataMin / yZoom; // 0 unless signedY
+  const yr = ymax - ymin || 1;
   const iw = svgW - pad.l - pad.r;
   const ih = svgH - pad.t - pad.b;
   const sx = (x: number) => pad.l + (x / xmax) * iw;
-  const sy = (y: number) => pad.t + ih - (y / ymax) * ih;
+  const sy = (y: number) => pad.t + ih - ((y - ymin) / yr) * ih;
+  const yTicks = signedY ? spanTicks(ymin, ymax) : ticks(ymax);
 
   const fmtY = (v: number) =>
     Math.abs(v) >= 1e6 ? `${(v / 1e6).toFixed(1)}M`
@@ -72,7 +88,10 @@ export function LineChart({
           {/* axes */}
           <line x1={pad.l} y1={pad.t} x2={pad.l} y2={pad.t + ih} stroke="#a1a1aa" />
           <line x1={pad.l} y1={pad.t + ih} x2={pad.l + iw} y2={pad.t + ih} stroke="#a1a1aa" />
-          {ticks(ymax).map((t, i) => (
+          {signedY && ymin < 0 && ymax > 0 && (
+            <line x1={pad.l} y1={sy(0)} x2={pad.l + iw} y2={sy(0)} stroke="#71717a" strokeWidth={1} />
+          )}
+          {yTicks.map((t, i) => (
             <g key={`y${i}`}>
               <line x1={pad.l - 3} y1={sy(t)} x2={pad.l + iw} y2={sy(t)} stroke="#f1f1f3" />
               <text x={pad.l - 5} y={sy(t) + 3} textAnchor="end" fill="#71717a">{fmtY(t)}</text>

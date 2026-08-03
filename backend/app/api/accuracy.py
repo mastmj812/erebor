@@ -501,15 +501,20 @@ def _stream_series(rows, s: str) -> dict:
 
 @router.get("/well")
 def well(api10: str = _API10, session: Session = Depends(get_session)) -> dict:
-    """One well's forecast-vs-actual series + a neighborhood gunbarrel.
+    """One well's forecast-vs-actual series + a gunbarrel.
 
-    Gunbarrel population: the subject well, its comparison sticks (the
+    Gunbarrel frame is DSU-FIRST: the Novi DSU polygon (raw_novi_intel.pads)
+    containing the subject's lateral midpoint defines the well set — every
+    producing well and Novi PUD/RES stick whose midpoint falls in that unit
+    (the same population rule as the Highgrade per-DSU gunbarrel; blind PDPs
+    carry no pad_name, so containment is spatial). Falls back to a 1-mi
+    radius when no pad polygon contains the well. The comparison sticks (the
     reconciled match(es) on the direct tier, the live representative set on
-    the proxy tier — same SSOT selector and tolerances the matview used), and
-    context within 1 mi: producing wells (curated.wells geography index) and
-    Novi PUD/RES sticks (curated.intel_locations geography index). Projection:
-    lateral midpoints onto the axis perpendicular to the neighborhood's mean
-    heel->toe direction — same math as /api/gunbarrel and /api/highgrade."""
+    the proxy tier — same SSOT selector and tolerances the matview used) are
+    ALWAYS unioned in, even when they reach outside the unit — they are the
+    forecast benchmark. Projection: lateral midpoints onto the axis
+    perpendicular to the set's mean heel->toe direction — same math as
+    /api/gunbarrel and /api/highgrade."""
     rows = session.execute(
         text("""
             SELECT * FROM curated.intel_forecast_accuracy
@@ -548,13 +553,20 @@ def well(api10: str = _API10, session: Session = Depends(get_session)) -> dict:
         ).scalars().all()
     comp_set = set(comp)
 
-    # Neighborhood: subject + producing wells + Novi sticks within 1 mi.
-    # Both spatial predicates ride the sql/26 geography expression indexes.
-    ws = session.execute(
+    # Frame: the Novi DSU containing the subject's lateral midpoint, if any.
+    dsu_pad = session.execute(
         text("""
-            WITH subject AS (
-                SELECT geom FROM curated.producing_reference WHERE api10 = :api10
-            )
+            SELECT p.pad_name
+            FROM raw_novi_intel.pads p
+            JOIN curated.producing_reference s ON s.api10 = :api10
+            WHERE p.basin = :basin AND p.geom IS NOT NULL AND p.pad_name IS NOT NULL
+              AND ST_Contains(p.geom, ST_LineInterpolatePoint(s.geom, 0.5))
+            ORDER BY p.pad_id LIMIT 1
+        """),
+        {"api10": api10, "basin": basin},
+    ).scalar()
+
+    _PDP_COLS = """
             SELECT 'pdp' AS kind, pr.api10 AS well_key, NULL::bigint AS stick_id,
                    pr.operator, pr.code AS formation_blueox, 'PDP' AS category,
                    pr.tvd, pr.ll_ft,
@@ -562,13 +574,8 @@ def well(api10: str = _API10, session: Session = Depends(get_session)) -> dict:
                    ST_Y(ST_LineInterpolatePoint(pr.geom, 0.5)) AS my,
                    ST_X(ST_StartPoint(pr.geom)) AS sx, ST_Y(ST_StartPoint(pr.geom)) AS sy,
                    ST_X(ST_EndPoint(pr.geom)) AS ex, ST_Y(ST_EndPoint(pr.geom)) AS ey
-            FROM curated.producing_reference pr
-            JOIN curated.wells w ON w.api10 = pr.api10, subject
-            WHERE ST_DWithin(w.wellstick_geom::geography, subject.geom::geography, :radius)
-              AND pr.tvd IS NOT NULL
-
-            UNION ALL
-
+    """
+    _STICK_COLS = """
             SELECT 'stick' AS kind, NULL AS well_key, il.stick_id,
                    il.operator, fb.formation_blueox, il.category,
                    il.tvd, il.ll_ft,
@@ -578,15 +585,81 @@ def well(api10: str = _API10, session: Session = Depends(get_session)) -> dict:
                    ST_Y(ST_StartPoint(il.wellstick_geom)) AS sy,
                    ST_X(ST_EndPoint(il.wellstick_geom)) AS ex,
                    ST_Y(ST_EndPoint(il.wellstick_geom)) AS ey
+    """
+
+    if dsu_pad is not None:
+        # DSU frame: midpoint containment against the pad polygon (GiST
+        # ST_Intersects prefilter on the lateral geometries).
+        context_sql = f"""
+            WITH pad AS (
+                SELECT geom FROM raw_novi_intel.pads
+                WHERE basin = :basin AND pad_name = :pad_name AND geom IS NOT NULL
+                ORDER BY pad_id LIMIT 1
+            )
+            {_PDP_COLS}
+            FROM curated.producing_reference pr, pad
+            WHERE ST_Intersects(pr.geom, pad.geom)
+              AND ST_Contains(pad.geom, ST_LineInterpolatePoint(pr.geom, 0.5))
+              AND pr.tvd IS NOT NULL
+            UNION ALL
+            {_STICK_COLS}
+            FROM curated.intel_locations il
+            LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = il.stick_id,
+                 pad
+            WHERE il.category IN ('PUD', 'RES')
+              AND il.wellstick_geom IS NOT NULL AND il.tvd IS NOT NULL
+              AND ST_Intersects(il.wellstick_geom, pad.geom)
+              AND ST_Contains(pad.geom, ST_LineInterpolatePoint(il.wellstick_geom, 0.5))
+        """
+        ctx_params: dict = {"basin": basin, "pad_name": dsu_pad}
+    else:
+        # Radius fallback: no DSU polygon contains the well. The geography
+        # predicates ride the sql/26 expression indexes.
+        context_sql = f"""
+            WITH subject AS (
+                SELECT geom FROM curated.producing_reference WHERE api10 = :api10
+            )
+            {_PDP_COLS}
+            FROM curated.producing_reference pr
+            JOIN curated.wells w ON w.api10 = pr.api10, subject
+            WHERE ST_DWithin(w.wellstick_geom::geography, subject.geom::geography, :radius)
+              AND pr.tvd IS NOT NULL
+            UNION ALL
+            {_STICK_COLS}
             FROM curated.intel_locations il
             LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = il.stick_id,
                  subject
             WHERE il.category IN ('PUD', 'RES')
               AND il.wellstick_geom IS NOT NULL AND il.tvd IS NOT NULL
               AND ST_DWithin(il.wellstick_geom::geography, subject.geom::geography, :radius)
-        """),
-        {"api10": api10, "radius": _REP_RADIUS_M},
-    ).mappings().all()
+        """
+        ctx_params = {"api10": api10, "radius": _REP_RADIUS_M}
+
+    ws = list(session.execute(text(context_sql), ctx_params).mappings().all())
+
+    # The comparison sticks are always in the chart, even outside the DSU —
+    # they are the forecast benchmark. Same for the subject well itself
+    # (containment can miss it on a NULL-tvd edge only).
+    if comp_set:
+        comp_sql = text(f"""
+            {_STICK_COLS}
+            FROM curated.intel_locations il
+            LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = il.stick_id
+            WHERE il.stick_id IN :comp_ids
+              AND il.wellstick_geom IS NOT NULL AND il.tvd IS NOT NULL
+        """).bindparams(bindparam("comp_ids", expanding=True))
+        ws += session.execute(comp_sql, {"comp_ids": list(comp_set)}).mappings().all()
+
+    # Dedupe (a comparison stick inside the DSU appears in both arms).
+    seen: set = set()
+    deduped = []
+    for w in ws:
+        key = (w["kind"], w["well_key"], w["stick_id"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(w)
+    ws = deduped
 
     # Perpendicular-axis projection (shared math; see module docstring).
     lat0 = sum(w["my"] for w in ws) / len(ws)
@@ -655,5 +728,10 @@ def well(api10: str = _API10, session: Session = Depends(get_session)) -> dict:
             "gas": _stream_series(rows, "gas"),
             "water": _stream_series(rows, "water"),
         },
-        "gunbarrel": {"well_count": len(gb_wells), "wells": gb_wells},
+        "gunbarrel": {
+            "frame": "dsu" if dsu_pad is not None else "radius",
+            "frame_pad_name": dsu_pad,
+            "well_count": len(gb_wells),
+            "wells": gb_wells,
+        },
     }

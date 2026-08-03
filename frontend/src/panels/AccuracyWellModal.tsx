@@ -13,12 +13,13 @@ const COMPARISON_BLUE = "#2563eb";
 const STREAMS: Phase[] = ["oil", "gas", "water"];
 const UNITS: Record<Phase, string> = { oil: "bbl", gas: "Mcf", water: "bbl" };
 
-// Adapt the accuracy neighborhood wells to PadChart's GunbarrelWell contract.
+// Adapt the accuracy gunbarrel wells to PadChart's GunbarrelWell contract.
 // PDP context rows have no stick_id — synthesize a stable negative key from
 // the api10 (the erebor_locations convention).
-function toPadChart(api10: string, wells: AccGunbarrelWell[]): {
-  pad: GunbarrelPad; role: Map<number, AccGunbarrelWell["role"]>;
-} {
+function toPadChart(
+  wells: AccGunbarrelWell[],
+  label: string,
+): { pad: GunbarrelPad; role: Map<number, AccGunbarrelWell["role"]> } {
   const role = new Map<number, AccGunbarrelWell["role"]>();
   const mapped: GunbarrelWell[] = wells.map((w) => {
     const id = w.stick_id ?? -Number(w.api10 ?? 0);
@@ -40,7 +41,7 @@ function toPadChart(api10: string, wells: AccGunbarrelWell[]): {
     };
   });
   return {
-    pad: { pad_name: `${api10} neighborhood (1 mi)`, well_count: mapped.length, wells: mapped },
+    pad: { pad_name: label, well_count: mapped.length, wells: mapped },
     role,
   };
 }
@@ -134,7 +135,12 @@ export function AccuracyWellModal() {
 
   const isDirect = data?.tier === "direct";
   const usePerft = perft || !isDirect;
-  const gb = data ? toPadChart(data.api10, data.gunbarrel.wells) : null;
+  const gbLabel = data
+    ? data.gunbarrel.frame === "dsu"
+      ? `DSU ${data.gunbarrel.frame_pad_name}`
+      : `${data.api10} neighborhood (1 mi — no Novi DSU here)`
+    : "";
+  const gb = data ? toPadChart(data.gunbarrel.wells, gbLabel) : null;
   const ss = data ? seriesFor(data.series[stream], data.series.mop, usePerft) : null;
   const unit = `${UNITS[stream]}${usePerft ? "/ft" : ""}`;
   const horizon = useMapStore.getState().accHorizon;
@@ -218,7 +224,10 @@ export function AccuracyWellModal() {
                   }}
                   width={700} height={260} />
                 <div className="count">
-                  ● black = this well · {isDirect ? "blue = its matched Novi stick(s)" : "blue = its benchmark rep sticks"} · grey = context (1-mi radius, PDP solid / PUD-RES hollow)
+                  ● black = this well · {isDirect ? "blue = its matched Novi stick(s)" : "blue = its benchmark rep sticks"} · grey = other wells{" "}
+                  {data.gunbarrel.frame === "dsu"
+                    ? "in the Novi DSU (benchmark sticks shown even if outside it)"
+                    : "within 1 mi"} · PDP solid / PUD-RES hollow
                 </div>
               </>
             )}

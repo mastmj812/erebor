@@ -96,7 +96,12 @@ export interface AccWellDetail {
     gas: AccStreamSeries;
     water: AccStreamSeries;
   };
-  gunbarrel: { well_count: number; wells: AccGunbarrelWell[] };
+  gunbarrel: {
+    frame: "dsu" | "radius";
+    frame_pad_name: string | null;
+    well_count: number;
+    wells: AccGunbarrelWell[];
+  };
 }
 
 export async function fetchAccWells(basin: string): Promise<AccWellsResponse> {

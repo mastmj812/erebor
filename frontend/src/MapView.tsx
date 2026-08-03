@@ -23,8 +23,8 @@ import {
 } from "./map/sticksLayers";
 import { DrawingController, bboxToPolygon, type GeoJsonPolygon } from "./map/drawing";
 import { choroplethFillColor } from "./map/highgradeColors";
-import { accuracyLineColor } from "./map/accuracyColors";
-import { accErrProp } from "./api/accuracy";
+import { accuracyGridFill, accuracyLineColor } from "./map/accuracyColors";
+import { accErrProp, fetchAccSelection } from "./api/accuracy";
 import { selectByPolygon } from "./api/select";
 import { fetchWellProduction } from "./api/production";
 import { basinBbox, useMapStore, type DealFeature, type OverlayKey } from "./store";
@@ -37,6 +37,9 @@ const HG_LINE = "hg-pads-line";
 const ACC_SOURCE = "acc-wells";
 const ACC_LINE = "acc-wells-line";
 const ACC_HIT = "acc-wells-hit";
+const ACC_GRID_SOURCE = "acc-grid";
+const ACC_GRID_FILL = "acc-grid-fill";
+const ACC_GRID_LINE = "acc-grid-line";
 const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
 
 let pmtilesRegistered = false;
@@ -189,6 +192,8 @@ export function MapView() {
   const accHorizon = useMapStore((s) => s.accHorizon);
   const accBench = useMapStore((s) => s.accBench);
   const accOperator = useMapStore((s) => s.accOperator);
+  const accMapView = useMapStore((s) => s.accMapView);
+  const accGrid = useMapStore((s) => s.accGrid);
 
   // -------- init map (once) --------
   useEffect(() => {
@@ -197,9 +202,23 @@ export function MapView() {
     loadBasins();
 
     const runSelect = async (poly: GeoJsonPolygon) => {
-      const { basin: b, selectionRule } = useMapStore.getState();
+      const st = useMapStore.getState();
+      // The draw tools are mode-aware: on the Accuracy tab a lasso/box selects
+      // blind wells for the aggregate forecast-vs-actual modal instead of
+      // running the Map tab's stick valuation.
+      if (st.appMode === "accuracy") {
+        st.setAccSelectionLoading(true);
+        try {
+          const res = await fetchAccSelection({ basin: st.basin, aoi: poly, rule: st.selectionRule });
+          useMapStore.getState().setAccSelection(res, poly);
+        } catch (e) {
+          console.error("accuracy selection failed", e);
+          useMapStore.getState().setAccSelection(null, poly);
+        }
+        return;
+      }
       try {
-        const result = await selectByPolygon(poly, b, selectionRule);
+        const result = await selectByPolygon(poly, st.basin, st.selectionRule);
         useMapStore.getState().setSelection(result, poly);
       } catch (e) {
         console.error("selection failed", e);
@@ -312,10 +331,49 @@ export function MapView() {
       };
       map.on("mousemove", ACC_HIT, onAccMove);
       map.on("mouseleave", ACC_HIT, () => { map.getCanvas().style.cursor = ""; popupRef.current?.remove(); });
-      // Click a well -> open its forecast-vs-actual modal.
+      // Click a well -> open its forecast-vs-actual modal (not while drawing).
       map.on("click", ACC_HIT, (e: MapMouseEvent & { features?: MapGeoJSONFeature[] }) => {
+        if (useMapStore.getState().drawMode !== "off") return;
         const api10 = e.features?.[0]?.properties?.api10 as string | undefined;
         if (api10) { popupRef.current?.remove(); useMapStore.getState().openAccWell(api10); }
+      });
+
+      // Regional bias grid (Accuracy tab, "Regional grid" view): mean error
+      // per map cell. Click a cell -> the aggregate selection modal for its
+      // wells (the cell polygon becomes the AOI).
+      map.addSource(ACC_GRID_SOURCE, { type: "geojson", data: EMPTY_FC });
+      map.addLayer({
+        id: ACC_GRID_FILL, type: "fill", source: ACC_GRID_SOURCE,
+        layout: { visibility: "none" },
+        paint: { "fill-color": "#9ca3af", "fill-opacity": 0.72 },
+      });
+      map.addLayer({
+        id: ACC_GRID_LINE, type: "line", source: ACC_GRID_SOURCE,
+        layout: { visibility: "none" },
+        paint: { "line-color": "#1f2937", "line-width": 0.4, "line-opacity": 0.45 },
+      });
+      const onGridMove = (e: MapMouseEvent & { features?: MapGeoJSONFeature[] }) => {
+        const f = e.features?.[0];
+        if (!f) return;
+        map.getCanvas().style.cursor = "pointer";
+        popupRef.current!.setLngLat(e.lngLat).setHTML(gridPopupHtml(f.properties)).addTo(map);
+      };
+      map.on("mousemove", ACC_GRID_FILL, onGridMove);
+      map.on("mouseleave", ACC_GRID_FILL, () => { map.getCanvas().style.cursor = ""; popupRef.current?.remove(); });
+      map.on("click", ACC_GRID_FILL, (e: MapMouseEvent & { features?: MapGeoJSONFeature[] }) => {
+        if (useMapStore.getState().drawMode !== "off") return;
+        const f = e.features?.[0];
+        if (!f || f.geometry.type !== "Polygon") return;
+        popupRef.current?.remove();
+        const poly = f.geometry as GeoJsonPolygon;
+        const st = useMapStore.getState();
+        st.setAccSelectionLoading(true);
+        fetchAccSelection({ basin: st.basin, aoi: poly, rule: st.selectionRule })
+          .then((res) => useMapStore.getState().setAccSelection(res, poly))
+          .catch((err) => {
+            console.error("grid cell selection failed", err);
+            useMapStore.getState().setAccSelection(null, poly);
+          });
       });
 
       // Draw controller: lasso / box -> run selection.
@@ -521,8 +579,9 @@ export function MapView() {
     };
     show([POINTS_LAYER, LINES_LAYER], appMode === "map");
     show([HG_FILL, HG_LINE], appMode === "highgrade");
-    show([ACC_LINE, ACC_HIT], appMode === "accuracy");
-  }, [appMode, styleLoaded]);
+    show([ACC_LINE, ACC_HIT], appMode === "accuracy" && accMapView === "wells");
+    show([ACC_GRID_FILL, ACC_GRID_LINE], appMode === "accuracy" && accMapView === "grid");
+  }, [appMode, accMapView, styleLoaded]);
 
   // -------- highgrade result -> choropleth data + color scale --------
   useEffect(() => {
@@ -550,6 +609,19 @@ export function MapView() {
     if (!src) return;
     src.setData(accWells ?? EMPTY_FC);
   }, [accWells, styleLoaded]);
+
+  // -------- accuracy regional grid -> cell data + bias paint --------
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const src = map.getSource(ACC_GRID_SOURCE) as maplibregl.GeoJSONSource | undefined;
+    if (!src) return;
+    src.setData(accGrid?.cells ?? EMPTY_FC);
+    if (map.getLayer(ACC_GRID_FILL)) {
+      map.setPaintProperty(ACC_GRID_FILL, "fill-color", accuracyGridFill() as never);
+    }
+  }, [accGrid, styleLoaded]);
 
   // -------- accuracy paint (error property) + client-side filters --------
   useEffect(() => {
@@ -622,6 +694,21 @@ function padPopupHtml(p: Record<string, unknown>, metric: string, agg: string): 
         <tr><td>Wells</td><td>${fmtInt(p.n_wells)}</td></tr>
         ${acresRow}
       </table>
+    </div>`;
+}
+
+function gridPopupHtml(p: Record<string, unknown>): string {
+  const bias = typeof p.bias === "number" ? `${p.bias >= 0 ? "+" : ""}${(p.bias * 100).toFixed(0)}%` : "—";
+  const mae = typeof p.mae === "number" ? `${(p.mae * 100).toFixed(0)}%` : "—";
+  const thin = typeof p.n === "number" && p.n < 3;
+  return `
+    <div>
+      <div class="mtt-name">${fmtInt(p.n)} well${p.n === 1 ? "" : "s"}${thin ? " (thin — grey)" : ""}</div>
+      <table class="mtt-table">
+        <tr><td>Bias</td><td>${bias}</td></tr>
+        <tr><td>MAE</td><td>${mae}</td></tr>
+      </table>
+      <div style="font-size:10px;color:#71717a">click for well detail</div>
     </div>`;
 }
 

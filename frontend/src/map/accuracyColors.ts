@@ -49,6 +49,19 @@ export function accuracyLineColor(prop: string): unknown {
   ];
 }
 
+// Regional-grid fill: bias-colored, grey for thin cells (n < minN).
+export function accuracyGridFill(minN = 3): unknown {
+  return [
+    "case",
+    ["<", ["get", "n"], minN],
+    ACC_NULL_GREY,
+    [
+      "interpolate", ["linear"], ["get", "bias"],
+      ...STOPS.flatMap(([x, c]) => [x, c]),
+    ],
+  ];
+}
+
 // CSS gradient for the legend ramp (left = under, right = over).
 export const ACC_GRADIENT_CSS = `linear-gradient(to right, ${STOPS.map(
   ([x, c]) => `${c} ${((x + 0.5) / 1.0) * 100}%`,

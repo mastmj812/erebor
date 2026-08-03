@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { fetchAccSummary, fetchAccWells, ACC_HORIZONS, type AccSummary } from "../api/accuracy";
+import { fetchAccGrid, fetchAccSummary, fetchAccWells, ACC_HORIZONS, type AccSummary } from "../api/accuracy";
 import { accuracyColor } from "../map/accuracyColors";
 import { colorForBlueox } from "../map/formations";
 import { useMapStore, type Phase } from "../store";
@@ -37,6 +37,14 @@ export function AccuracyPanel() {
   const toggleOperator = useMapStore((s) => s.toggleAccOperator);
   const clearFilters = useMapStore((s) => s.clearAccFilters);
 
+  const drawMode = useMapStore((s) => s.drawMode);
+  const setDrawMode = useMapStore((s) => s.setDrawMode);
+  const selectionRule = useMapStore((s) => s.selectionRule);
+  const setSelectionRule = useMapStore((s) => s.setSelectionRule);
+  const clearAccSelection = useMapStore((s) => s.clearAccSelection);
+  const mapView = useMapStore((s) => s.accMapView);
+  const setMapView = useMapStore((s) => s.setAccMapView);
+
   const [error, setError] = useState<string | null>(null);
   const [opSearch, setOpSearch] = useState("");
 
@@ -62,6 +70,18 @@ export function AccuracyPanel() {
       });
     return () => { live = false; };
   }, [basin, tier, stream, norm, horizon, bench, operator]);
+
+  // Regional bias grid: (re)fetch while the grid view is active. Basin-wide
+  // per-bench/operator averages hide regional structure — the grid is the
+  // per-bench answer: filter to a bench, read WHERE it runs hot or cold.
+  useEffect(() => {
+    if (mapView !== "grid") return;
+    let live = true;
+    fetchAccGrid({ basin, tier, stream, norm, horizon, bench, operator })
+      .then((g) => { if (live) useMapStore.getState().setAccGrid(g); })
+      .catch((e) => { if (live) setError(String(e)); });
+    return () => { live = false; };
+  }, [mapView, basin, tier, stream, norm, horizon, bench, operator]);
 
   // Facet options come from the loaded wells layer (no extra endpoint).
   const { benchOptions, operatorOptions } = useMemo(() => {
@@ -132,6 +152,35 @@ export function AccuracyPanel() {
         ))}
       </div>
 
+      <h3>Map view</h3>
+      <div className="seg sm">
+        <button className={mapView === "wells" ? "active" : ""} onClick={() => setMapView("wells")}>Wells</button>
+        <button className={mapView === "grid" ? "active" : ""} onClick={() => setMapView("grid")}>Regional grid</button>
+      </div>
+      <div className="count" style={{ margin: "2px 0 8px" }}>
+        {mapView === "grid"
+          ? "Mean error per ~6-mi cell under the active filters (grey = under 3 wells). Filter to one bench to read its regional bias; click a cell for its wells."
+          : "One lateral per well, colored by its own error."}
+      </div>
+
+      <h3>Select wells</h3>
+      <div className="seg sm">
+        <button className={drawMode === "lasso" ? "active" : ""}
+          onClick={() => setDrawMode(drawMode === "lasso" ? "off" : "lasso")}>Lasso</button>
+        <button className={drawMode === "box" ? "active" : ""}
+          onClick={() => setDrawMode(drawMode === "box" ? "off" : "box")}>Box</button>
+        <button onClick={() => { setDrawMode("off"); clearAccSelection(); }}>Clear</button>
+      </div>
+      <div className="seg sm" style={{ marginTop: 4 }}>
+        <button className={selectionRule === "intersects" ? "active" : ""}
+          onClick={() => setSelectionRule("intersects")}>Intersects</button>
+        <button className={selectionRule === "midpoint" ? "active" : ""}
+          onClick={() => setSelectionRule("midpoint")}>Midpoint</button>
+      </div>
+      <div className="count" style={{ margin: "2px 0 8px" }}>
+        Draw around wells → aggregate forecast vs actual + per-well drill-down.
+      </div>
+
       {error && <div className="caveat" style={{ color: "#991b1b", background: "#fef2f2", borderColor: "#fecaca" }}>{error}</div>}
 
       {h && (
@@ -183,42 +232,6 @@ export function AccuracyPanel() {
         <>
           <h3 style={{ marginTop: 10 }}>Per-well error @ {horizon} mo</h3>
           <ErrHistogram edges={summary.histogram.bin_edges} counts={summary.histogram.counts} />
-        </>
-      )}
-
-      {summary && summary.by_bench.length > 0 && (
-        <>
-          <h3 style={{ marginTop: 10 }}>By bench</h3>
-          <table className="acc-table">
-            <tbody>
-              {summary.by_bench.slice(0, 10).map((b) => (
-                <tr key={b.formation_blueox}>
-                  <td>{b.formation_blueox}</td>
-                  <td style={{ color: (b.bias_pct ?? 0) < -0.1 ? "#b91c1c" : undefined }}>{pct(b.bias_pct)}</td>
-                  <td>{pct(b.mae_pct, false)}</td>
-                  <td className="acc-n">{b.n}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
-
-      {summary && summary.by_operator.length > 0 && (
-        <>
-          <h3 style={{ marginTop: 10 }}>By operator (top {summary.by_operator.length})</h3>
-          <table className="acc-table">
-            <tbody>
-              {summary.by_operator.map((o) => (
-                <tr key={o.operator}>
-                  <td className="acc-op">{o.operator}</td>
-                  <td style={{ color: (o.bias_pct ?? 0) < -0.1 ? "#b91c1c" : undefined }}>{pct(o.bias_pct)}</td>
-                  <td>{pct(o.mae_pct, false)}</td>
-                  <td className="acc-n">{o.n}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </>
       )}
 

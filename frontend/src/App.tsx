@@ -1,6 +1,7 @@
 import { MapView } from "./MapView";
 import { AccuracyLegend } from "./panels/AccuracyLegend";
 import { AccuracyPanel } from "./panels/AccuracyPanel";
+import { AccuracySelectionModal } from "./panels/AccuracySelectionModal";
 import { AccuracyWellModal } from "./panels/AccuracyWellModal";
 import { BottomPanel } from "./panels/BottomPanel";
 import { Controls } from "./panels/Controls";
@@ -37,6 +38,7 @@ export function App() {
         <>
           <AccuracyPanel />
           <AccuracyLegend />
+          <AccuracySelectionModal />
           <AccuracyWellModal />
         </>
       )}

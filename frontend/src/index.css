@@ -203,3 +203,5 @@ button.link { background: none; border: none; color: #2563eb; cursor: pointer; f
 .acc-badge-proxy { background: #fef3c7; color: #92400e; }
 .acc-badge-warn { background: #fee2e2; color: #991b1b; text-transform: none; }
 .acc-charts { display: flex; gap: 8px; flex-wrap: wrap; }
+.acc-selrow { cursor: pointer; }
+.acc-selrow:hover td { background: #f4f4f5; }

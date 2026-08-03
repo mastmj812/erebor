@@ -2,8 +2,10 @@ import { create } from "zustand";
 
 import { fetchDepletionCounts, fetchReconCounts, fetchSupportCounts } from "./api/recon";
 import type {
+  AccGrid,
   AccHorizon,
   AccNorm,
+  AccSelection,
   AccSummary,
   AccTier,
   AccWellDetail,
@@ -125,6 +127,10 @@ interface MapState {
   accWellApi10: string | null;               // clicked well (modal open when non-null)
   accWell: AccWellDetail | null;
   accWellLoading: boolean;
+  accSelection: AccSelection | null;         // lasso/box aggregate (modal open when non-null or loading)
+  accSelectionLoading: boolean;
+  accMapView: "wells" | "grid";              // per-well laterals vs regional bias cells
+  accGrid: AccGrid | null;
   basin: "delaware" | "midland";
   categories: Category[];
   overlays: Record<OverlayKey, boolean>;
@@ -178,6 +184,11 @@ interface MapState {
   openAccWell: (api10: string) => void;
   setAccWell: (w: AccWellDetail | null) => void;
   closeAccWell: () => void;
+  setAccSelectionLoading: (b: boolean) => void;
+  setAccSelection: (sel: AccSelection | null, aoi: GeoJSON.Geometry | null) => void;
+  clearAccSelection: () => void;
+  setAccMapView: (v: "wells" | "grid") => void;
+  setAccGrid: (g: AccGrid | null) => void;
   setBasin: (b: "delaware" | "midland") => void;
   toggleCategory: (c: Category) => void;
   toggleOverlay: (k: OverlayKey) => void;
@@ -232,6 +243,10 @@ export const useMapStore = create<MapState>((set, get) => ({
   accWellApi10: null,
   accWell: null,
   accWellLoading: false,
+  accSelection: null,
+  accSelectionLoading: false,
+  accMapView: "wells",
+  accGrid: null,
   basin: "delaware",
   categories: [...CATEGORIES],
   overlays: { pads: false, grid: false, outline: true, blocks: false, sections: false },
@@ -297,8 +312,15 @@ export const useMapStore = create<MapState>((set, get) => ({
   openAccWell: (api10) => set({ accWellApi10: api10, accWell: null, accWellLoading: true }),
   setAccWell: (w) => set({ accWell: w, accWellLoading: false }),
   closeAccWell: () => set({ accWellApi10: null, accWell: null, accWellLoading: false }),
+  setAccSelectionLoading: (b) => set({ accSelectionLoading: b }),
+  // Shares the map-tab `aoi` field for the drawn outline (the AOI layers are
+  // mode-agnostic, matching how a Map-tab AOI stays visible in Highgrade).
+  setAccSelection: (sel, aoi) => set({ accSelection: sel, aoi, accSelectionLoading: false }),
+  clearAccSelection: () => set({ accSelection: null, accSelectionLoading: false, aoi: null }),
+  setAccMapView: (v) => set({ accMapView: v }),
+  setAccGrid: (g) => set({ accGrid: g }),
   setBasin: (b) =>
-    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWells: null, accSummary: null, accSummaryLoading: false, accTier: "all", accBench: [], accOperator: [], accWellApi10: null, accWell: null, accWellLoading: false, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], formationFilter: [], excludedSticks: [], unitFilter: [], reconCounts: null, depletionCounts: null, supportCounts: null, remainingOnly: false, excludeDepleted: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWells: null, accSummary: null, accSummaryLoading: false, accTier: "all", accBench: [], accOperator: [], accWellApi10: null, accWell: null, accWellLoading: false, accSelection: null, accSelectionLoading: false, accMapView: "wells", accGrid: null, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], formationFilter: [], excludedSticks: [], unitFilter: [], reconCounts: null, depletionCounts: null, supportCounts: null, remainingOnly: false, excludeDepleted: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleCategory: (c) =>
     set((s) => ({
       categories: s.categories.includes(c)

@@ -31,6 +31,7 @@ import math
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
@@ -270,6 +271,214 @@ def summary(
         "ll_ratio": {"mean": _f(ll_ratio["mean"]), "p10": _f(ll_ratio["p10"]),
                      "p90": _f(ll_ratio["p90"])},
         "histogram": {"bin_edges": bin_edges, "counts": counts},
+    }
+
+
+# ---------------------------------------------------------------------------
+# grid (regional bias choropleth: mean error per map cell, per bench filter)
+# ---------------------------------------------------------------------------
+@router.get("/grid")
+def grid(
+    basin: str = _BASIN,
+    tier: Tier = "all",
+    stream: Stream = "oil",
+    norm: Norm = "perft",
+    horizon: int = Query(6, ge=1, le=24),
+    bench: list[str] | None = Query(None),
+    operator: list[str] | None = Query(None),
+    cell: float = Query(0.1, ge=0.02, le=0.5),  # degrees; 0.1 ≈ 6 mi N-S
+    session: Session = Depends(get_session),
+) -> dict:
+    """Regional forecast bias: wells snapped to `cell`-degree map cells (by
+    lateral midpoint), mean/mae percent error per cell at the horizon month.
+    Basin-wide per-bench or per-operator means hide exactly this — the point
+    is WHERE a bench's forecast runs hot or cold. Cells always return their n;
+    the client greys thin cells rather than hiding them."""
+    err = _ERR_COL[(stream, norm)]
+    clauses = ["a.basin = :basin", "NOT a.is_latest_reported",
+               "a.mop = :horizon", f"a.{err} IS NOT NULL"]
+    params: dict = {"basin": basin, "horizon": horizon, "cell": cell}
+    expanding = []
+    if tier != "all":
+        clauses.append("a.tier = :tier")
+        params["tier"] = tier
+    if bench:
+        clauses.append("COALESCE(a.formation_blueox, '(unmapped)') IN :bench")
+        params["bench"] = list(bench)
+        expanding.append(bindparam("bench", expanding=True))
+    if operator:
+        clauses.append("a.operator IN :operator")
+        params["operator"] = list(operator)
+        expanding.append(bindparam("operator", expanding=True))
+    where = " AND ".join(clauses)
+
+    sql = text(f"""
+        WITH pts AS (
+            SELECT floor(ST_X(ST_LineInterpolatePoint(pr.geom, 0.5)) / :cell) * :cell AS x0,
+                   floor(ST_Y(ST_LineInterpolatePoint(pr.geom, 0.5)) / :cell) * :cell AS y0,
+                   a.{err} AS err
+            FROM curated.intel_forecast_accuracy a
+            JOIN curated.producing_reference pr ON pr.api10 = a.api10
+            WHERE {where}
+        ),
+        cells AS (
+            SELECT x0, y0, count(*) AS n, avg(err) AS bias, avg(abs(err)) AS mae
+            FROM pts GROUP BY x0, y0
+        )
+        SELECT jsonb_build_object(
+            'type', 'FeatureCollection',
+            'features', COALESCE(jsonb_agg(
+                jsonb_build_object(
+                    'type', 'Feature',
+                    'geometry', ST_AsGeoJSON(ST_MakeEnvelope(x0, y0, x0 + :cell, y0 + :cell, 4326))::jsonb,
+                    'properties', jsonb_build_object(
+                        'x0', x0, 'y0', y0, 'n', n,
+                        'bias', round(bias::numeric, 4), 'mae', round(mae::numeric, 4)
+                    )
+                )), '[]'::jsonb)
+        )::text
+        FROM cells
+    """)
+    if expanding:
+        sql = sql.bindparams(*expanding)
+    fc = json.loads(session.execute(sql, params).scalar())
+    return {
+        "basin": basin, "stream": stream, "norm": norm, "horizon": horizon,
+        "cell_deg": cell, "cell_count": len(fc["features"]), "cells": fc,
+    }
+
+
+# ---------------------------------------------------------------------------
+# selection (lasso/box AOI -> aggregate forecast vs actual + member wells)
+# ---------------------------------------------------------------------------
+class SelectionBody(BaseModel):
+    basin: Literal["delaware", "midland"]
+    aoi: dict  # GeoJSON geometry (Polygon), same contract as /api/select
+    rule: Literal["intersects", "midpoint"] = "intersects"
+
+
+# AOI predicate against the drilled lateral (curated.producing_reference.geom)
+# — same two rules as /api/select.
+_SEL_PRED = {
+    "intersects": "ST_Intersects(pr.geom, aoi.g)",
+    "midpoint": "ST_Contains(aoi.g, ST_LineInterpolatePoint(pr.geom, 0.5))",
+}
+
+_STREAMS: tuple[str, ...] = ("oil", "gas", "water")
+_WELLS_CAP = 500
+
+
+@router.post("/selection")
+def selection(body: SelectionBody, session: Session = Depends(get_session)) -> dict:
+    """Aggregate forecast-vs-actual for the blind wells inside a drawn AOI.
+
+    Per stream and aligned month: the per-well MEAN of the per-ft cums (actual
+    and forecast, both required non-null so the two curves cover the same well
+    set at each mop) plus bias/MAE, and — for the direct-tier subset — SUMMED
+    raw volumes (field total). is_latest_reported rows are excluded. n per mop
+    declines as reporting lag censors the calendar tail; the client shows it.
+
+    Also returns the member wells (capped at 500) with per-horizon per-ft
+    errors for the drill-down table.
+    """
+    per_ft_aggs = ",\n".join(
+        f"""count(*) FILTER (WHERE actual_cum_{s}_perft IS NOT NULL AND fcst_cum_{s}_perft IS NOT NULL) AS n_{s},
+            avg(actual_cum_{s}_perft) FILTER (WHERE actual_cum_{s}_perft IS NOT NULL AND fcst_cum_{s}_perft IS NOT NULL) AS act_{s},
+            avg(fcst_cum_{s}_perft)   FILTER (WHERE actual_cum_{s}_perft IS NOT NULL AND fcst_cum_{s}_perft IS NOT NULL) AS fc_{s},
+            avg(pct_err_{s}_perft)      AS bias_{s},
+            avg(abs(pct_err_{s}_perft)) AS mae_{s},
+            count(*) FILTER (WHERE actual_cum_{s} IS NOT NULL AND fcst_cum_{s} IS NOT NULL) AS n_{s}_raw,
+            sum(actual_cum_{s}) FILTER (WHERE actual_cum_{s} IS NOT NULL AND fcst_cum_{s} IS NOT NULL) AS act_{s}_raw,
+            sum(fcst_cum_{s})   FILTER (WHERE actual_cum_{s} IS NOT NULL AND fcst_cum_{s} IS NOT NULL) AS fc_{s}_raw"""
+        for s in _STREAMS
+    )
+    sel_cte = f"""
+        WITH aoi AS (
+            SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g
+        ),
+        sel AS (
+            SELECT pr.api10
+            FROM curated.producing_reference pr, aoi
+            WHERE {_SEL_PRED[body.rule]}
+              AND EXISTS (SELECT 1 FROM curated.intel_forecast_accuracy a
+                          WHERE a.api10 = pr.api10 AND a.basin = :basin)
+        )
+    """
+    params = {"aoi": json.dumps(body.aoi), "basin": body.basin}
+
+    by_month_rows = session.execute(
+        text(f"""
+            {sel_cte}
+            SELECT a.mop, {per_ft_aggs}
+            FROM curated.intel_forecast_accuracy a
+            JOIN sel ON sel.api10 = a.api10
+            WHERE NOT a.is_latest_reported
+            GROUP BY a.mop ORDER BY a.mop
+        """),
+        params,
+    ).mappings().all()
+
+    err_props = ",\n".join(
+        f"max(pct_err_{s}_perft) FILTER (WHERE mop = {h} AND NOT is_latest_reported) AS err{h}_{s}_perft"
+        for h in HORIZONS
+        for s in _STREAMS
+    )
+    well_rows = session.execute(
+        text(f"""
+            {sel_cte}
+            SELECT a.api10,
+                   max(a.tier)              AS tier,
+                   max(a.operator)          AS operator,
+                   COALESCE(max(a.formation_blueox), '(unmapped)') AS formation_blueox,
+                   max(a.mop)               AS n_months,
+                   bool_or(a.low_n)         AS low_n,
+                   {err_props}
+            FROM curated.intel_forecast_accuracy a
+            JOIN sel ON sel.api10 = a.api10
+            GROUP BY a.api10
+            ORDER BY a.api10
+        """),
+        params,
+    ).mappings().all()
+
+    def _f(v):
+        return float(v) if v is not None else None
+
+    by_month: dict = {}
+    for s in _STREAMS:
+        by_month[s] = {
+            "mop": [int(r["mop"]) for r in by_month_rows],
+            "n": [int(r[f"n_{s}"]) for r in by_month_rows],
+            "actual_perft": [_f(r[f"act_{s}"]) for r in by_month_rows],
+            "fcst_perft": [_f(r[f"fc_{s}"]) for r in by_month_rows],
+            "bias": [_f(r[f"bias_{s}"]) for r in by_month_rows],
+            "mae": [_f(r[f"mae_{s}"]) for r in by_month_rows],
+            "n_raw": [int(r[f"n_{s}_raw"]) for r in by_month_rows],
+            "actual_raw": [_f(r[f"act_{s}_raw"]) for r in by_month_rows],
+            "fcst_raw": [_f(r[f"fc_{s}_raw"]) for r in by_month_rows],
+        }
+
+    wells = [
+        {
+            "api10": r["api10"], "tier": r["tier"], "operator": r["operator"],
+            "formation_blueox": r["formation_blueox"],
+            "n_months": int(r["n_months"]), "low_n": bool(r["low_n"]),
+            **{
+                f"err{h}_{s}_perft": _f(r[f"err{h}_{s}_perft"])
+                for h in HORIZONS for s in _STREAMS
+            },
+        }
+        for r in well_rows[:_WELLS_CAP]
+    ]
+    return {
+        "basin": body.basin,
+        "rule": body.rule,
+        "well_count": len(well_rows),
+        "direct_count": sum(1 for r in well_rows if r["tier"] == "direct"),
+        "proxy_count": sum(1 for r in well_rows if r["tier"] == "proxy"),
+        "truncated": len(well_rows) > _WELLS_CAP,
+        "wells": wells,
+        "by_month": by_month,
     }
 
 

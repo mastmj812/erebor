@@ -125,6 +125,83 @@ export async function fetchAccSummary(p: {
   return r.json();
 }
 
+// Regional bias grid: mean error per map cell (choropleth).
+export interface AccGrid {
+  basin: string;
+  stream: string;
+  norm: AccNorm;
+  horizon: number;
+  cell_deg: number;
+  cell_count: number;
+  cells: GeoJSON.FeatureCollection;
+}
+
+export async function fetchAccGrid(p: {
+  basin: string;
+  tier: AccTier;
+  stream: string;
+  norm: AccNorm;
+  horizon: number;
+  bench: string[];
+  operator: string[];
+}): Promise<AccGrid> {
+  const q = new URLSearchParams({
+    basin: p.basin, tier: p.tier, stream: p.stream, norm: p.norm,
+    horizon: String(p.horizon),
+  });
+  for (const b of p.bench) q.append("bench", b);
+  for (const o of p.operator) q.append("operator", o);
+  const r = await fetch(`/api/accuracy/grid?${q.toString()}`);
+  if (!r.ok) throw new Error(`accuracy grid failed: ${r.status}`);
+  return r.json();
+}
+
+// Aggregate forecast-vs-actual for a drawn AOI (lasso/box selection).
+export interface AccSelStream {
+  mop: number[];
+  n: number[];
+  actual_perft: (number | null)[];
+  fcst_perft: (number | null)[];
+  bias: (number | null)[];
+  mae: (number | null)[];
+  n_raw: number[];
+  actual_raw: (number | null)[];
+  fcst_raw: (number | null)[];
+}
+export interface AccSelWell {
+  api10: string;
+  tier: "direct" | "proxy";
+  operator: string | null;
+  formation_blueox: string;
+  n_months: number;
+  low_n: boolean;
+  [err: string]: unknown; // err{h}_{stream}_perft
+}
+export interface AccSelection {
+  basin: string;
+  rule: string;
+  well_count: number;
+  direct_count: number;
+  proxy_count: number;
+  truncated: boolean;
+  wells: AccSelWell[];
+  by_month: Record<string, AccSelStream>;
+}
+
+export async function fetchAccSelection(body: {
+  basin: string;
+  aoi: GeoJSON.Geometry;
+  rule: string;
+}): Promise<AccSelection> {
+  const r = await fetch("/api/accuracy/selection", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`accuracy selection failed: ${r.status}`);
+  return r.json();
+}
+
 export async function fetchAccWell(api10: string): Promise<AccWellDetail> {
   const r = await fetch(`/api/accuracy/well?api10=${api10}`);
   if (!r.ok) throw new Error(`accuracy well failed: ${r.status}`);

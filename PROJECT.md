@@ -90,3 +90,10 @@ Open http://localhost:5180.
 
 `/api/health`, `/api/basins`, `/api/tiles/{z}/{x}/{y}.mvt?basin=`, `/api/layers/{pads,land_grid,
 outline}.geojson?basin=`, `/api/basemap/permian.pmtiles` (range-served).
+
+Accuracy tab (reads curated.intel_forecast_accuracy, engineering_db sql/38):
+`/api/accuracy/wells?basin=` (map FeatureCollection, per-horizon 3/6/9/12 errors as
+properties), `/api/accuracy/summary?basin=&tier=&stream=&norm=&horizon=&bench=&operator=`
+(bias/MAE headline + by-month/tier/bench/operator slices + histogram),
+`/api/accuracy/well?api10=` (forecast-vs-actual series + 1-mi neighborhood gunbarrel with
+comparison sticks flagged).

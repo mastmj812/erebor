@@ -1,4 +1,7 @@
 import { MapView } from "./MapView";
+import { AccuracyLegend } from "./panels/AccuracyLegend";
+import { AccuracyPanel } from "./panels/AccuracyPanel";
+import { AccuracyWellModal } from "./panels/AccuracyWellModal";
 import { BottomPanel } from "./panels/BottomPanel";
 import { Controls } from "./panels/Controls";
 import { HighgradeGunbarrelModal } from "./panels/HighgradeGunbarrelModal";
@@ -15,18 +18,26 @@ export function App() {
     <div className="app">
       <MapView />
       <TabSwitcher />
-      {appMode === "map" ? (
+      {appMode === "map" && (
         <>
           <Controls />
           <Legend />
           <ResultsPanel />
           <BottomPanel />
         </>
-      ) : (
+      )}
+      {appMode === "highgrade" && (
         <>
           <HighgradePanel />
           <HighgradeLegend />
           <HighgradeGunbarrelModal />
+        </>
+      )}
+      {appMode === "accuracy" && (
+        <>
+          <AccuracyPanel />
+          <AccuracyLegend />
+          <AccuracyWellModal />
         </>
       )}
     </div>

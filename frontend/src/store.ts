@@ -1,6 +1,13 @@
 import { create } from "zustand";
 
 import { fetchDepletionCounts, fetchReconCounts, fetchSupportCounts } from "./api/recon";
+import type {
+  AccHorizon,
+  AccNorm,
+  AccSummary,
+  AccTier,
+  AccWellDetail,
+} from "./api/accuracy";
 import type { HighgradeFilters } from "./api/highgrade";
 import { CATEGORIES, type Category, type ColorMode } from "./map/sticksLayers";
 
@@ -10,7 +17,7 @@ export interface BasinMeta {
   bbox: [number, number, number, number];
 }
 
-export type AppMode = "map" | "highgrade";
+export type AppMode = "map" | "highgrade" | "accuracy";
 export type OverlayKey = "pads" | "grid" | "outline" | "blocks" | "sections";
 export type DrawMode = "off" | "lasso" | "box";
 export type SelectionRule = "intersects" | "midpoint";
@@ -105,6 +112,19 @@ interface MapState {
   hgGunbarrelPad: string | null;             // clicked DSU (modal open when non-null)
   hgGunbarrel: GunbarrelPad | null;          // loaded per-DSU wells
   hgGunbarrelLoading: boolean;
+  // Accuracy tab: Novi forecast vs realized actuals (curated.intel_forecast_accuracy).
+  accWells: GeoJSON.FeatureCollection | null; // /accuracy/wells layer data (per basin)
+  accSummary: AccSummary | null;
+  accSummaryLoading: boolean;
+  accTier: AccTier;
+  accStream: Phase;
+  accNorm: AccNorm;        // per-ft (both tiers) vs raw volumes (direct only)
+  accHorizon: AccHorizon;  // headline month (3/6/9/12)
+  accBench: string[];      // bench filter (empty = all)
+  accOperator: string[];   // operator filter (empty = all)
+  accWellApi10: string | null;               // clicked well (modal open when non-null)
+  accWell: AccWellDetail | null;
+  accWellLoading: boolean;
   basin: "delaware" | "midland";
   categories: Category[];
   overlays: Record<OverlayKey, boolean>;
@@ -145,6 +165,19 @@ interface MapState {
   openHgGunbarrel: (padName: string) => void;
   setHgGunbarrel: (g: GunbarrelPad | null) => void;
   closeHgGunbarrel: () => void;
+  setAccWells: (fc: GeoJSON.FeatureCollection | null) => void;
+  setAccSummary: (s: AccSummary | null) => void;
+  setAccSummaryLoading: (b: boolean) => void;
+  setAccTier: (t: AccTier) => void;
+  setAccStream: (p: Phase) => void;
+  setAccNorm: (n: AccNorm) => void;
+  setAccHorizon: (h: AccHorizon) => void;
+  toggleAccBench: (code: string) => void;
+  toggleAccOperator: (op: string) => void;
+  clearAccFilters: () => void;
+  openAccWell: (api10: string) => void;
+  setAccWell: (w: AccWellDetail | null) => void;
+  closeAccWell: () => void;
   setBasin: (b: "delaware" | "midland") => void;
   toggleCategory: (c: Category) => void;
   toggleOverlay: (k: OverlayKey) => void;
@@ -187,6 +220,18 @@ export const useMapStore = create<MapState>((set, get) => ({
   hgGunbarrelPad: null,
   hgGunbarrel: null,
   hgGunbarrelLoading: false,
+  accWells: null,
+  accSummary: null,
+  accSummaryLoading: false,
+  accTier: "all",
+  accStream: "oil",
+  accNorm: "perft",
+  accHorizon: 6,
+  accBench: [],
+  accOperator: [],
+  accWellApi10: null,
+  accWell: null,
+  accWellLoading: false,
   basin: "delaware",
   categories: [...CATEGORIES],
   overlays: { pads: false, grid: false, outline: true, blocks: false, sections: false },
@@ -219,15 +264,41 @@ export const useMapStore = create<MapState>((set, get) => ({
   bottomTab: "production",
   gunbarrel: null,
   gunbarrelLoading: false,
-  setAppMode: (m) => set({ appMode: m, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false }),
+  setAppMode: (m) => set({ appMode: m, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWellApi10: null, accWell: null, accWellLoading: false }),
   setHighgrade: (h) => set({ highgrade: h }),
   setHighgradeFilters: (f) => set({ highgradeFilters: f }),
   setHgIncludeRealized: (b) => set({ hgIncludeRealized: b }),
   openHgGunbarrel: (padName) => set({ hgGunbarrelPad: padName, hgGunbarrel: null, hgGunbarrelLoading: true }),
   setHgGunbarrel: (g) => set({ hgGunbarrel: g, hgGunbarrelLoading: false }),
   closeHgGunbarrel: () => set({ hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false }),
+  setAccWells: (fc) => set({ accWells: fc }),
+  setAccSummary: (s) => set({ accSummary: s, accSummaryLoading: false }),
+  setAccSummaryLoading: (b) => set({ accSummaryLoading: b }),
+  setAccTier: (t) =>
+    // Raw-volume errors only exist on the direct tier — leaving raw selected
+    // while switching away would blank the map, so fall back to per-ft.
+    set((s) => ({ accTier: t, accNorm: t === "direct" ? s.accNorm : "perft" })),
+  setAccStream: (p) => set({ accStream: p }),
+  setAccNorm: (n) => set({ accNorm: n }),
+  setAccHorizon: (h) => set({ accHorizon: h }),
+  toggleAccBench: (code) =>
+    set((s) => ({
+      accBench: s.accBench.includes(code)
+        ? s.accBench.filter((x) => x !== code)
+        : [...s.accBench, code],
+    })),
+  toggleAccOperator: (op) =>
+    set((s) => ({
+      accOperator: s.accOperator.includes(op)
+        ? s.accOperator.filter((x) => x !== op)
+        : [...s.accOperator, op],
+    })),
+  clearAccFilters: () => set({ accTier: "all", accBench: [], accOperator: [] }),
+  openAccWell: (api10) => set({ accWellApi10: api10, accWell: null, accWellLoading: true }),
+  setAccWell: (w) => set({ accWell: w, accWellLoading: false }),
+  closeAccWell: () => set({ accWellApi10: null, accWell: null, accWellLoading: false }),
   setBasin: (b) =>
-    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], formationFilter: [], excludedSticks: [], unitFilter: [], reconCounts: null, depletionCounts: null, supportCounts: null, remainingOnly: false, excludeDepleted: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWells: null, accSummary: null, accSummaryLoading: false, accTier: "all", accBench: [], accOperator: [], accWellApi10: null, accWell: null, accWellLoading: false, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], formationFilter: [], excludedSticks: [], unitFilter: [], reconCounts: null, depletionCounts: null, supportCounts: null, remainingOnly: false, excludeDepleted: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleCategory: (c) =>
     set((s) => ({
       categories: s.categories.includes(c)

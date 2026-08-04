@@ -96,11 +96,11 @@ export function Controls() {
 
   const onUpload = async (file: File) => {
     try {
-      setBusy("Reading shapefile…");
+      setBusy("Reading deal file…");
       const ds = await uploadDeals(file);
       setDeals(ds); // MapView displays the polygons + fits the view to them
     } catch (e) {
-      alert(`Shapefile upload failed: ${e}`);
+      alert(`Deal upload failed: ${e}`);
     } finally {
       setBusy(null);
       if (fileRef.current) fileRef.current.value = "";
@@ -182,12 +182,12 @@ export function Controls() {
       <input
         ref={fileRef}
         type="file"
-        accept=".zip"
+        accept=".zip,.gpkg"
         style={{ fontSize: 12, width: "100%" }}
         onChange={(e) => { const f = e.target.files?.[0]; if (f) void onUpload(f); }}
       />
       <div style={{ fontSize: 11, color: "#71717a", margin: "4px 0 6px" }}>
-        Upload a shapefile (.zip) — displayed on the map only. Select wells with Lasso/Box.
+        Upload a shapefile (.zip) or GeoPackage (.gpkg) — displayed on the map only. Select wells with Lasso/Box.
       </div>
       {deals && deals.length > 0 && (
         <div className="row" style={{ marginBottom: 8 }}>

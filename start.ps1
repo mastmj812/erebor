@@ -2,9 +2,10 @@
 #
 #   Right-click -> "Run with PowerShell", or from a terminal:  .\start.ps1
 #
-# The 'oilgas' warehouse (postgresql-x64-18 service) auto-starts on boot, so the
-# only thing this does is launch the two dev servers (each in its own window so
-# you can watch logs / Ctrl+C them) and open the app once the backend is healthy.
+# The 'oilgas' warehouse lives on Supabase (Supavisor transaction pooler :6543,
+# DSN in backend\.env), so the only thing this does is launch the two dev servers
+# (each in its own window so you can watch logs / Ctrl+C them) and open the app
+# once the backend is healthy.
 #
 #   .\start.ps1            # start both, open the browser
 #   .\start.ps1 -NoBrowser # start both, don't open the browser
@@ -21,13 +22,37 @@ function Test-Port([int]$port) {
     $null -ne (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
 }
 
-# --- 1. Warehouse reachable? (oilgas on :5432) ---------------------------------
-if (-not (Test-Port 5432)) {
-    Write-Warning "Nothing is listening on localhost:5432 - the 'oilgas' warehouse may be down."
-    Write-Host   "  Try: Start-Service postgresql-x64-18    (then re-run this script)"
+# --- 1. Warehouse reachable? (Supabase oilgas via the transaction pooler) ------
+# The backend reads DATABASE_URL from backend\.env (Supabase Supavisor pooler,
+# :6543). There is no local Postgres in the loop anymore - this checks the
+# remote pooler is reachable so we don't launch a stack that can't query.
+$envFile = Join-Path $backend ".env"
+$dsn = $null
+if (Test-Path $envFile) {
+    $line = Get-Content $envFile | Where-Object { $_ -match '^\s*DATABASE_URL\s*=' } | Select-Object -Last 1
+    if ($line) { $dsn = ($line -split '=', 2)[1].Trim().Trim('"').Trim("'") }
+}
+if (-not $dsn) {
+    Write-Warning "DATABASE_URL not found in backend\.env - the backend cannot reach the warehouse."
+    Write-Host   "  Set it to the Supabase transaction-pooler DSN (...pooler.supabase.com:6543)."
     Read-Host "Press Enter to continue anyway, or Ctrl+C to abort"
+} elseif ($dsn -match '@([^@/]+):(\d+)/') {
+    $dbHost = $Matches[1]; $dbPort = [int]$Matches[2]
+    $reachable = $false
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $async = $client.BeginConnect($dbHost, $dbPort, $null, $null)
+        if ($async.AsyncWaitHandle.WaitOne(5000)) { $client.EndConnect($async); $reachable = $true }
+    } catch {}
+    $client.Close()
+    if ($reachable) {
+        Write-Host "[ok] warehouse reachable at ${dbHost}:${dbPort}" -ForegroundColor Green
+    } else {
+        Write-Warning "Cannot reach ${dbHost}:${dbPort} - check the network / Supabase status."
+        Read-Host "Press Enter to continue anyway, or Ctrl+C to abort"
+    }
 } else {
-    Write-Host "[ok] warehouse port 5432 is listening" -ForegroundColor Green
+    Write-Host "[warn] could not parse host:port from DATABASE_URL - skipping the reachability check" -ForegroundColor Yellow
 }
 
 # --- 2. Backend (uvicorn :8077) ------------------------------------------------

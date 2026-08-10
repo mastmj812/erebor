@@ -24,8 +24,9 @@ backend/ (FastAPI, :8077)  ──proxied /api──▶  frontend/ (React + MapLi
 
 ## Run (local dev)
 
-Prereqs: Python 3.14 venv at `.venv` (backend deps + `decline` installed); Node LTS; the
-`oilgas` Postgres running on localhost:5432 with `curated.intel_*` built.
+Prereqs: Python 3.14 venv at `.venv` (backend deps + `decline` installed); Node LTS; a
+`backend/.env` with `DATABASE_URL` pointing at the Supabase `oilgas` warehouse (Supavisor
+transaction pooler, `:6543`) with `curated.intel_*` built.
 
 ```powershell
 # backend (terminal 1)

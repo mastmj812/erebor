@@ -10,9 +10,11 @@ Selection rule (toggleable — materially changes counts on depth-limited deals)
   * midpoint   : the lateral's midpoint falls inside the AOI (ST_Contains of
                  ST_LineInterpolatePoint(geom, 0.5))
 
-Shapefile upload (/select/deals) parses the deal .zip (pyshp), reprojects to
-EPSG:4326 (pyproj from the .prj), and returns each polygon for DISPLAY only —
-selection is always an explicit lasso/box draw by the user.
+Deal upload (/select/deals) accepts a zipped shapefile (pyshp + the .prj) or a
+GeoPackage (app.gpkg_reader — land-department deliverable with Type=DSU/Tract
+rows; the DSUs are shown). Either way each polygon is reprojected to EPSG:4326
+and returned for DISPLAY only — selection is always an explicit lasso/box draw
+by the user.
 """
 
 from __future__ import annotations
@@ -26,10 +28,12 @@ import shapefile  # pyshp
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from pyproj import CRS, Transformer
+from shapely.geometry import mapping as shapely_mapping
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_session
+from app.gpkg_reader import pick_label, read_gpkg, sniff_format, split_roles
 
 router = APIRouter(prefix="/select", tags=["select"])
 
@@ -141,6 +145,43 @@ def _reproject_geom(gj: dict, tf: Transformer) -> dict | None:
 
 
 def _parse_deals(data: bytes) -> list[dict]:
+    """Deal upload -> one entry per polygon (4326). Dispatches on file magic:
+    'PK' = zipped shapefile, SQLite header = GeoPackage."""
+    kind = sniff_format(data)
+    if kind == "zip":
+        return _parse_deals_zip(data)
+    if kind == "gpkg":
+        return _parse_deals_gpkg(data)
+    raise HTTPException(400, "Upload a zipped shapefile (.zip) or a GeoPackage (.gpkg).")
+
+
+def _parse_deals_gpkg(data: bytes) -> list[dict]:
+    """GeoPackage -> display polygons. Rows typed 'DSU' are the mapped units
+    (Tract rows are skipped — this app has nowhere to show their attributes);
+    files without a Type column show every polygon."""
+    try:
+        layers = read_gpkg(data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    deals: list[dict] = []
+    for layer in layers:
+        tf = Transformer.from_crs(layer.crs, CRS.from_epsg(4326), always_xy=True)
+        dsus, tracts, generic = split_roles(layer.features)
+        chosen = dsus if dsus else generic if generic else tracts
+        for f in chosen:
+            geom = _reproject_geom(shapely_mapping(f.geometry), tf)
+            if geom is None:
+                continue
+            i = len(deals)
+            deals.append({"index": i,
+                          "label": pick_label(f.attributes, f"Deal {i + 1}"),
+                          "geometry": geom})
+    if not deals:
+        raise HTTPException(400, "GeoPackage contains no polygon geometry.")
+    return deals
+
+
+def _parse_deals_zip(data: bytes) -> list[dict]:
     """Parse a deals .zip into one entry per polygon (reprojected to 4326)."""
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         names = z.namelist()
@@ -179,5 +220,6 @@ def _parse_deals(data: bytes) -> list[dict]:
 
 @router.post("/deals")
 async def upload_deals(file: UploadFile = File(...)) -> dict:
-    """Parse a multi-polygon deals shapefile; the frontend picks one to select."""
+    """Parse a multi-polygon deals shapefile (.zip) or GeoPackage (.gpkg);
+    the frontend displays the polygons and offers zoom-to-deal."""
     return {"deals": _parse_deals(await file.read())}

@@ -22,6 +22,9 @@ dependencies = [
     # install without them ImportErrors the whole API (CI caught this).
     "pyshp>=2.3",
     "pyproj>=3.5",
+    # GeoPackage deal-upload path (app/gpkg_reader.py): shapely decodes the WKB
+    # inside the gpkg blobs. Binary wheels only — no GDAL/system deps.
+    "shapely>=2",
     # Shared decline-curve math (Phase 4); installed editable from the monorepo.
     "decline",
 ]

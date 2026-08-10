@@ -7,9 +7,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Direct read DSN for engineering_db's oilgas DB (curated.intel_*).
+    # Read DSN for the oilgas warehouse - the Supabase Supavisor transaction
+    # pooler (:6543), set via DATABASE_URL in backend/.env. The default below
+    # deliberately cannot resolve (.invalid TLD), so a missing .env fails loud
+    # on the first query instead of silently hitting a local Postgres. Engine
+    # creation is lazy, so tests (which never touch the DB) are unaffected.
     database_url: str = Field(
-        default="postgresql+psycopg://postgres:postgres@localhost:5432/oilgas",
+        default="postgresql+psycopg://set-database-url@in-backend-dotenv.invalid:6543/postgres",
         alias="DATABASE_URL",
     )
     pmtiles_path: Path = Field(

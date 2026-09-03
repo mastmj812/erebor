@@ -38,6 +38,20 @@ M_PER_DEG_LAT = 110540.0
 M_PER_DEG_LON = 111320.0
 FT_PER_M = 3.28084
 
+
+def _canonical_axis(perp: tuple[float, float]) -> tuple[tuple[float, float], str, str]:
+    """Canonicalize the cross-section axis to the suite-wide gunbarrel reading
+    (same rule as anduin's dossier/inspect charts and narvi's panel): a ~N-S
+    lateral set (axis runs E-W) reads W -> E, a ~E-W set (axis runs N-S) reads
+    N -> S. The mean heel->toe direction is data-order arbitrary, so the
+    DOMINANT compass component of the perpendicular decides and the sign flips
+    to match. Copy-shared with gunbarrel.py / accuracy.py (like the projection
+    constants). Returns (axis, left_label, right_label)."""
+    px, py = perp  # (east, north) components
+    if abs(px) >= abs(py):  # axis runs E-W: +offset = East
+        return ((-px, -py) if px < 0 else (px, py)), "W", "E"
+    return ((-px, -py) if py > 0 else (px, py)), "N", "S"  # +offset = South
+
 # Whitelists — every column/metric that can reach SQL is validated against these,
 # so list/range filters and the metric expression are never free-text-interpolated.
 CATEGORICAL: tuple[str, ...] = ("formation_blueox", "operator", "spacing_t", "deplet_t", "complet_t", "rqt")
@@ -392,6 +406,7 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
         mids.append(to_m(w["mx"], w["my"]))
     norm = math.hypot(dx, dy)
     perp = (1.0, 0.0) if norm < 1e-9 else (-(dy / norm), dx / norm)
+    perp, axis_left, axis_right = _canonical_axis(perp)
     cx = sum(m[0] for m in mids) / len(mids)
     cy = sum(m[1] for m in mids) / len(mids)
 
@@ -411,4 +426,8 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
             "metric_value": float(w["metric_value"]) if w["metric_value"] is not None else None,
         })
     wells.sort(key=lambda x: x["offset_ft"])
-    return {"pad_name": body.pad_name, "well_count": len(wells), "wells": wells}
+    return {
+        "pad_name": body.pad_name, "well_count": len(wells),
+        "axis_left": axis_left, "axis_right": axis_right,
+        "wells": wells,
+    }

@@ -145,6 +145,12 @@ export function PadChart({ pad, exForm, isMuted, onToggle, width, height, metric
           <line x1={sx(0)} y1={M.t} x2={sx(0)} y2={height - M.b} stroke="#e4e4e7" strokeDasharray="2 2" />
         )}
         <text x={width / 2} y={height - 6} textAnchor="middle" fontSize="9" fill="#52525b">offset (ft)</text>
+        {pad.axis_left && (
+          <text x={M.l + 4} y={height - 6} textAnchor="start" fontSize="9" fill="#52525b">← {pad.axis_left}</text>
+        )}
+        {pad.axis_right && (
+          <text x={width - M.r - 4} y={height - 6} textAnchor="end" fontSize="9" fill="#52525b">{pad.axis_right} →</text>
+        )}
         {wells.map((w) => {
           const cx = sx(w.offset_ft), cy = sy(w.tvd);
           return (

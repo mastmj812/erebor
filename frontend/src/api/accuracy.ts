@@ -100,6 +100,9 @@ export interface AccWellDetail {
     frame: "dsu" | "radius";
     frame_pad_name: string | null;
     well_count: number;
+    // Compass letters for the offset axis ends (W→E / N→S read).
+    axis_left?: string;
+    axis_right?: string;
     wells: AccGunbarrelWell[];
   };
 }

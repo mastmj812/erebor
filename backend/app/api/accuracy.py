@@ -48,6 +48,20 @@ M_PER_DEG_LAT = 110540.0
 M_PER_DEG_LON = 111320.0
 FT_PER_M = 3.28084
 
+
+def _canonical_axis(perp: tuple[float, float]) -> tuple[tuple[float, float], str, str]:
+    """Canonicalize the cross-section axis to the suite-wide gunbarrel reading
+    (same rule as anduin's dossier/inspect charts and narvi's panel): a ~N-S
+    lateral set (axis runs E-W) reads W -> E, a ~E-W set (axis runs N-S) reads
+    N -> S. The mean heel->toe direction is data-order arbitrary, so the
+    DOMINANT compass component of the perpendicular decides and the sign flips
+    to match. Copy-shared with gunbarrel.py / highgrade.py (like the projection
+    constants). Returns (axis, left_label, right_label)."""
+    px, py = perp  # (east, north) components
+    if abs(px) >= abs(py):  # axis runs E-W: +offset = East
+        return ((-px, -py) if px < 0 else (px, py)), "W", "E"
+    return ((-px, -py) if py > 0 else (px, py)), "N", "S"  # +offset = South
+
 HORIZONS: tuple[int, ...] = (3, 6, 9, 12)
 Stream = Literal["oil", "gas", "water"]
 Norm = Literal["perft", "raw"]
@@ -679,6 +693,7 @@ def well(api10: str = _API10, session: Session = Depends(get_session)) -> dict:
         mids.append(to_m(w["mx"], w["my"]))
     norm_len = math.hypot(dx, dy)
     perp = (1.0, 0.0) if norm_len < 1e-9 else (-(dy / norm_len), dx / norm_len)
+    perp, axis_left, axis_right = _canonical_axis(perp)
     cx = sum(m[0] for m in mids) / len(mids)
     cy = sum(m[1] for m in mids) / len(mids)
 
@@ -732,6 +747,7 @@ def well(api10: str = _API10, session: Session = Depends(get_session)) -> dict:
             "frame": "dsu" if dsu_pad is not None else "radius",
             "frame_pad_name": dsu_pad,
             "well_count": len(gb_wells),
+            "axis_left": axis_left, "axis_right": axis_right,
             "wells": gb_wells,
         },
     }

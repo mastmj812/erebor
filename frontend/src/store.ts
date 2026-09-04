@@ -58,7 +58,13 @@ export interface GunbarrelWell {
   in_filter?: boolean;          // set only by the Highgrade per-DSU gunbarrel
   metric_value?: number | null; // value of the selected screen metric (Highgrade)
 }
-export interface GunbarrelPad { pad_name: string; well_count: number; wells: GunbarrelWell[] }
+export interface GunbarrelPad {
+  pad_name: string; well_count: number;
+  // Compass letters for the offset axis ends (suite-wide read: W→E for
+  // ~N-S lateral sets, N→S for ~E-W). Absent on pre-axis payloads.
+  axis_left?: string; axis_right?: string;
+  wells: GunbarrelWell[];
+}
 export interface GunbarrelData { pad_count: number; pads: GunbarrelPad[] }
 
 export interface SelectionStick {

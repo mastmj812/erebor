@@ -19,6 +19,8 @@ const UNITS: Record<Phase, string> = { oil: "bbl", gas: "Mcf", water: "bbl" };
 function toPadChart(
   wells: AccGunbarrelWell[],
   label: string,
+  axisLeft?: string,
+  axisRight?: string,
 ): { pad: GunbarrelPad; role: Map<number, AccGunbarrelWell["role"]> } {
   const role = new Map<number, AccGunbarrelWell["role"]>();
   const mapped: GunbarrelWell[] = wells.map((w) => {
@@ -41,7 +43,11 @@ function toPadChart(
     };
   });
   return {
-    pad: { pad_name: label, well_count: mapped.length, wells: mapped },
+    pad: {
+      pad_name: label, well_count: mapped.length,
+      axis_left: axisLeft, axis_right: axisRight,
+      wells: mapped,
+    },
     role,
   };
 }
@@ -140,7 +146,9 @@ export function AccuracyWellModal() {
       ? `DSU ${data.gunbarrel.frame_pad_name}`
       : `${data.api10} neighborhood (1 mi — no Novi DSU here)`
     : "";
-  const gb = data ? toPadChart(data.gunbarrel.wells, gbLabel) : null;
+  const gb = data
+    ? toPadChart(data.gunbarrel.wells, gbLabel, data.gunbarrel.axis_left, data.gunbarrel.axis_right)
+    : null;
   const ss = data ? seriesFor(data.series[stream], data.series.mop, usePerft) : null;
   const unit = `${UNITS[stream]}${usePerft ? "/ft" : ""}`;
   const horizon = useMapStore.getState().accHorizon;

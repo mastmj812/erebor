@@ -46,7 +46,7 @@ const HG_OVERLAYS: { key: OverlayKey; label: string }[] = [
 ];
 
 // numeric range sliders (min/max entry, seeded with the facet bounds)
-const RANGE_FIELDS: { col: string; label: string; money?: boolean }[] = [
+const RANGE_FIELDS: { col: string; label: string; money?: boolean; hint?: string }[] = [
   { col: "rqs", label: "Rock-quality score" },
   { col: "spacing_s", label: "Spacing score" },
   { col: "deplet_s", label: "Depletion score" },
@@ -58,6 +58,12 @@ const RANGE_FIELDS: { col: string; label: string; money?: boolean }[] = [
   { col: "pdp_count_3mi", label: "PDP offsets (3 mi)" },
   { col: "dist_nearest_ft", label: "Nearest PDP (ft)" },
   { col: "inflation_ratio", label: "EUR/ft vs offsets (×)" },
+  // depth-plausibility screens (sql/30, 2026-09 WCB_2 deep-TVD audit). Any bound
+  // also drops blank-valued sticks (no same-bench / no WCA PDP within 3 mi).
+  { col: "tvd_excess_3mi_ft", label: "TVD vs deepest offset (ft)",
+    hint: "Stick TVD minus the deepest same-bench producer within 3 mi. > 200 ft = deeper than anything developed locally (suspect Novi landing) — max 200 on by default; clearing it also readmits sticks with no in-bench PDP within 3 mi." },
+  { col: "wca_delta_ft", label: "TVD below WCA PDP (ft)",
+    hint: "Stick TVD minus the local WCA producer median (3 mi). Real WCB_2 lands 400–700 ft below WCA — set that band when screening WCB_2." },
 ];
 
 const EMPTY_CATS: Record<CategoricalField, string[]> = {
@@ -75,6 +81,14 @@ const DEFAULT_CATS: Record<CategoricalField, string[]> = {
 
 type RangeMap = Record<string, [number | null, number | null]>;
 
+// Depth-anomaly default (2026-09 WCB_2 deep-TVD audit): sticks landed > 200 ft
+// deeper than any same-bench producer within 3 mi are suspect Novi landings —
+// visible on the map, excluded from the default screen. The <= 200 bound also
+// drops NULL rows (no same-bench PDP within 3 mi / unscored bench) — those are
+// unverifiable, the same class the pdp_count_3mi floor targets. Clear the range
+// to screen the full set.
+const DEFAULT_RANGES: RangeMap = { tvd_excess_3mi_ft: [null, 200] };
+
 export function HighgradePanel() {
   const basin = useMapStore((s) => s.basin);
   const setBasin = useMapStore((s) => s.setBasin);
@@ -89,7 +103,7 @@ export function HighgradePanel() {
 
   const [facets, setFacets] = useState<HighgradeFacets | null>(null);
   const [cats, setCats] = useState<Record<CategoricalField, string[]>>({ ...EMPTY_CATS });
-  const [ranges, setRanges] = useState<RangeMap>({});
+  const [ranges, setRanges] = useState<RangeMap>({ ...DEFAULT_RANGES });
   const [metric, setMetric] = useState<HighgradeMetric>("npv25");
   const [agg, setAgg] = useState<HighgradeAgg>("sum");
   const [opSearch, setOpSearch] = useState("");
@@ -100,7 +114,7 @@ export function HighgradePanel() {
   // realized toggle — those selections stay valid across the wider/narrower set.
   useEffect(() => {
     setCats({ ...DEFAULT_CATS });
-    setRanges({});
+    setRanges({ ...DEFAULT_RANGES });
     setOpSearch("");
   }, [basin]);
 
@@ -162,7 +176,7 @@ export function HighgradePanel() {
 
   const reset = () => {
     setCats({ ...DEFAULT_CATS });
-    setRanges({});
+    setRanges({ ...DEFAULT_RANGES });
     setHighgrade(null);
     setHighgradeFilters(null);
     closeHgGunbarrel();
@@ -256,10 +270,11 @@ export function HighgradePanel() {
           </div>
 
           <h3 style={{ marginTop: 10 }}>Ranges</h3>
-          {RANGE_FIELDS.map(({ col, label, money: m }) => (
+          {RANGE_FIELDS.map(({ col, label, money: m, hint }) => (
             <RangeRow
               key={col}
               label={label}
+              hint={hint}
               bounds={facets.numeric[col]}
               value={ranges[col] ?? [null, null]}
               money={m}
@@ -297,9 +312,10 @@ export function HighgradePanel() {
 }
 
 function RangeRow({
-  label, bounds, value, money, onChange,
+  label, hint, bounds, value, money, onChange,
 }: {
   label: string;
+  hint?: string;
   bounds: { min: number | null; max: number | null } | undefined;
   value: [number | null, number | null];
   money?: boolean;
@@ -308,7 +324,7 @@ function RangeRow({
   const ph = (v: number | null) => (v == null ? "" : money ? Math.round(v).toString() : trim(v));
   return (
     <div className="hg-range">
-      <div className="hg-range-label">{label}</div>
+      <div className="hg-range-label" title={hint}>{label}{hint ? " ⓘ" : ""}</div>
       <div className="hg-range-inputs">
         <input
           type="number" inputMode="decimal" placeholder={`min ${ph(bounds?.min ?? null)}`}

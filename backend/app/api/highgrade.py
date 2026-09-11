@@ -58,10 +58,17 @@ CATEGORICAL: tuple[str, ...] = ("formation_blueox", "operator", "spacing_t", "de
 # Offset-PDP support scores (curated.intel_pdp_support, sql/30) that are FILTERABLE
 # in Highgrade. They live on the `sup` join, not intel_locations (see _num_sql /
 # _support_join). The export-only members (dist_3rd_nearest_ft, n_offsets_5mi, the
-# offset medians) are intentionally absent — they ship in the xlsx, not as filters.
+# offset medians, offset_median_tvd, tvd_delta_ft) are intentionally absent — they
+# ship in the xlsx, not as filters. tvd_excess_3mi_ft / wca_delta_ft are the
+# depth-plausibility screens from the 2026-09 WCB_2 deep-TVD audit: excess > 200 ft
+# = deeper than any same-bench producer within 3 mi (suspect Novi landing);
+# wca_delta band [400, 700] = the real WCB_2 landing convention below WCA.
+# NOTE range-filter NULL semantics: any bound on these drops NULL rows — i.e.
+# frontier sticks (no same-bench PDP in 3 mi) and unscorable sticks — by design.
 SUPPORT_NUMERIC: tuple[str, ...] = (
     "pdp_count_1mi", "pdp_count_3mi", "pdp_count_5mi",
     "dist_nearest_ft", "support_lateral_ft_5mi", "inflation_ratio",
+    "tvd_excess_3mi_ft", "wca_delta_ft",
 )
 NUMERIC: tuple[str, ...] = (
     "spacing_s", "deplet_s", "complet_s", "rqs",

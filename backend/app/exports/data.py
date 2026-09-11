@@ -251,7 +251,12 @@ def gather_export_data(session: Session, body: ExportBody) -> ExportData:
                           'n_offsets_5mi', sup.n_offsets_5mi,
                           'offset_median_eur_ft', sup.offset_median_eur_ft,
                           'offset_median_cum12m_oil_per_ft', sup.offset_median_cum12m_oil_per_ft,
-                          'inflation_ratio', sup.inflation_ratio
+                          'inflation_ratio', sup.inflation_ratio,
+                          -- depth context (sql/30, 2026-09 WCB_2 deep-TVD audit)
+                          'offset_median_tvd', sup.offset_median_tvd,
+                          'tvd_delta_ft', sup.tvd_delta_ft,
+                          'tvd_excess_3mi_ft', sup.tvd_excess_3mi_ft,
+                          'wca_delta_ft', sup.wca_delta_ft
                       ) AS r
             FROM curated.intel_locations w
             LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = w.stick_id

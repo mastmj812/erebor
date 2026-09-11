@@ -57,16 +57,20 @@ META_COLS = (
     "dist_nearest_ft", "dist_3rd_nearest_ft", "support_lateral_ft_5mi",
     "n_offsets_5mi", "offset_median_eur_ft", "offset_median_cum12m_oil_per_ft",
     "inflation_ratio",
+    # depth context (sql/30, 2026-09 WCB_2 deep-TVD audit): the depth the ratio
+    # was computed against + the unguarded local plausibility measures
+    "offset_median_tvd", "tvd_delta_ft", "tvd_excess_3mi_ft", "wca_delta_ft",
 )
 _META_INT_COLS = {
     "fp_year", "tvd", "md", "ll_ft", "prop_load", "forecast_end_day",
     "oil_eur", "gas_eur", "ngl_eur", "water_eur",
     "npv5", "npv10", "npv15", "npv20", "npv25", "pv10",
     "dc_cost", "dcet_cost",
-    # support counts / distances / footage
+    # support counts / distances / footage / depth context (all whole feet)
     "pdp_count_1mi", "pdp_count_3mi", "pdp_count_5mi",
     "dist_nearest_ft", "dist_3rd_nearest_ft", "support_lateral_ft_5mi",
     "n_offsets_5mi",
+    "offset_median_tvd", "tvd_delta_ft", "tvd_excess_3mi_ft", "wca_delta_ft",
 }
 _META_DEC_COLS = {
     "oil_ip", "gas_ip", "ngl_ip", "water_ip", "irr_pct",

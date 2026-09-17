@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.api.production import HORIZON_DAY, STEP, _tail_values
+from app.api.production import HORIZON_DAY, STEP, _anchored_tail
 
 Rule = Literal["intersects", "midpoint"]
 _PRED = {
@@ -150,9 +150,10 @@ def assemble_export_data(
         tail_days = list(range(last_day + STEP, HORIZON_DAY + 1, STEP))
         if tail_days:
             tarr = np.asarray(tail_days, dtype=float)
-            o = _tail_values(seg_by.get((name, "oil"), []), tarr)
-            g = _tail_values(seg_by.get((name, "gas"), []), tarr)
-            w = _tail_values(seg_by.get((name, "water"), []), tarr)
+            last_o, last_g, last_w = vals[last_day]
+            o = _anchored_tail(seg_by.get((name, "oil"), []), tarr, float(last_day), last_o)
+            g = _anchored_tail(seg_by.get((name, "gas"), []), tarr, float(last_day), last_g)
+            w = _anchored_tail(seg_by.get((name, "water"), []), tarr, float(last_day), last_w)
             for k, d in enumerate(tail_days):
                 vals[d] = (float(o[k]), float(g[k]), float(w[k]))
         per_well_days[name] = vals

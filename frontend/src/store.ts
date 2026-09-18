@@ -108,6 +108,7 @@ export interface HighgradeResult {
   pad_count: number;
   pads_missing_geom: number;
   well_count: number;
+  wells_without_pad: number; // screened PUDs with no Novi pad assignment (not drawable)
   value_min: number | null;
   value_max: number | null;
   pads: GeoJSON.FeatureCollection;

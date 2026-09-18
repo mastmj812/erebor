@@ -253,28 +253,32 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
                    {value_expr} AS value,
                    count(*)     AS n_wells
             FROM curated.intel_locations il {_blueox_join('il')} {_recon_join('il')} {_support_join('il')}
-            WHERE {_PUD_BASE} AND il.pad_name IS NOT NULL {filt_sql}{recon}
+            WHERE {_PUD_BASE} {filt_sql}{recon}
             GROUP BY il.pad_name
         ),
         pad_geom AS (
-            -- one geometry per pad_name; raw_novi_intel.pads has duplicate pad rows
-            -- (Delaware 4, Midland 126) that would otherwise multiply the join.
-            -- Geodesic area (geography) -> acres, valid across TX + NM with no zone choice.
-            SELECT DISTINCT ON (pad_name) pad_name, geom,
-                   ST_Area(geom::geography) / 4046.8564224 AS acres
-            FROM raw_novi_intel.pads
-            WHERE basin = :basin AND pad_name IS NOT NULL AND geom IS NOT NULL
-            ORDER BY pad_name, pad_id
+            -- curated.intel_pad_geom (sql/45): one polygon per (basin, pad_name),
+            -- the member-stick hull + 330 ft, geodesic acres. The Snowflake share
+            -- ships no pad polygons and Novi renames pads every vintage, so the
+            -- legacy raw_novi_intel.pads shapefile no longer matches any name.
+            -- Novi stacks pads per bench set, so polygons may overlap.
+            SELECT pad_name, geom, acres
+            FROM curated.intel_pad_geom
+            WHERE basin = :basin
         ),
         joined AS (
             SELECT a.pad_name, {final_value} AS value, a.n_wells, p.acres, p.geom
             FROM agg a
             LEFT JOIN pad_geom p ON p.pad_name = a.pad_name
+            WHERE a.pad_name IS NOT NULL
         )
         SELECT json_build_object(
             'pad_count',         count(*) FILTER (WHERE geom IS NOT NULL),
             'pads_missing_geom', count(*) FILTER (WHERE geom IS NULL),
             'well_count',        COALESCE(sum(n_wells), 0),
+            -- screened PUDs Novi assigned to no pad (2026Q3: all of Delaware) —
+            -- they cannot be drawn, so the client must say so instead of a blank map.
+            'wells_without_pad', COALESCE((SELECT n_wells FROM agg WHERE pad_name IS NULL), 0),
             'value_min',         min(value) FILTER (WHERE geom IS NOT NULL),
             'value_max',         max(value) FILTER (WHERE geom IS NOT NULL),
             'pads', json_build_object(
@@ -348,10 +352,9 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
     # always muted context: in_filter false, metric_value NULL (no Novi econ).
     sql = text(f"""
         WITH pad AS (
-            -- one polygon per pad_name (raw_novi_intel.pads has duplicate rows)
-            SELECT geom FROM raw_novi_intel.pads
-            WHERE basin = :basin AND pad_name = :pad_name AND geom IS NOT NULL
-            ORDER BY pad_id LIMIT 1
+            -- member-stick hull + 330 ft (sql/45), UNIQUE on (basin, pad_name)
+            SELECT geom FROM curated.intel_pad_geom
+            WHERE basin = :basin AND pad_name = :pad_name
         )
         SELECT w.stick_id, w.unique_id, w.category, UPPER(w.formation) AS formation,
                fb.formation_blueox, w.basin AS basin_blueox, fb.formation_blueox_source,

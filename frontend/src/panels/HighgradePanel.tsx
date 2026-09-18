@@ -305,6 +305,17 @@ export function HighgradePanel() {
               {highgrade.pads_missing_geom.toLocaleString()} matching pads have no polygon (not drawn)
             </div>
           )}
+          {highgrade.wells_without_pad > 0 && (
+            <div className="count" style={{ margin: "2px 0 0", color: "#92400e" }}>
+              {highgrade.wells_without_pad.toLocaleString()} screened PUDs have no Novi pad assignment this
+              vintage (not drawn){highgrade.pad_count === 0 ? " — Novi shipped no pads for this basin" : ""}
+            </div>
+          )}
+          {highgrade.pad_count > 0 && (
+            <div className="count" style={{ margin: "2px 0 0" }}>
+              Pad outlines = member-stick hull + 330 ft (Novi ships no pad polygons); stacked-bench pads overlap.
+            </div>
+          )}
         </div>
       )}
     </div>

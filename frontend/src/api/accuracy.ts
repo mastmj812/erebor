@@ -3,6 +3,23 @@
 // backend/app/api/accuracy.py.
 
 export type AccTier = "all" | "direct" | "proxy";
+
+// Vintage mode (2026-09-18): every endpoint takes an optional report_version
+// ("2025Q3") that swaps the source to the per-retained-vintage matview
+// (sql/43, direct tier only — superseded vintages stay reviewable). null =
+// the live vintage (sql/38).
+export type AccVintage = string | null;
+
+export interface AccVintages {
+  live: { label: string; n_wells: number };
+  vintages: { report_version: string; n_direct_wells: number }[];
+}
+
+export async function fetchAccVintages(): Promise<AccVintages> {
+  const r = await fetch("/api/accuracy/vintages");
+  if (!r.ok) throw new Error(`accuracy vintages failed: ${r.status}`);
+  return r.json();
+}
 export type AccNorm = "perft" | "raw";
 export type AccHorizon = 3 | 6 | 9 | 12;
 export const ACC_HORIZONS: AccHorizon[] = [3, 6, 9, 12];
@@ -13,7 +30,8 @@ export const ACC_HORIZONS: AccHorizon[] = [3, 6, 9, 12];
 // benchmark exists (rendered grey).
 export interface AccWellProps {
   api10: string;
-  tier: "direct" | "proxy";
+  // "unmatched" only in vintage mode (no qualifying stick; errors all null)
+  tier: "direct" | "proxy" | "unmatched";
   operator: string | null;
   formation_blueox: string;
   pad_name: string | null;
@@ -39,6 +57,7 @@ export interface AccSlice {
 }
 export interface AccSummary {
   basin: string;
+  vintage?: string | null;
   tier: AccTier;
   stream: string;
   norm: AccNorm;
@@ -74,8 +93,9 @@ export interface AccGunbarrelWell {
 }
 export interface AccWellDetail {
   api10: string;
-  tier: "direct" | "proxy";
+  tier: "direct" | "proxy" | "unmatched";
   basin: string;
+  vintage?: string | null;
   formation_blueox: string | null;
   operator: string | null;
   pad_name: string | null;
@@ -96,6 +116,7 @@ export interface AccWellDetail {
     gas: AccStreamSeries;
     water: AccStreamSeries;
   };
+  // null in vintage mode (context surfaces are latest-vintage-only)
   gunbarrel: {
     frame: "dsu" | "radius";
     frame_pad_name: string | null;
@@ -104,11 +125,16 @@ export interface AccWellDetail {
     axis_left?: string;
     axis_right?: string;
     wells: AccGunbarrelWell[];
-  };
+  } | null;
 }
 
-export async function fetchAccWells(basin: string): Promise<AccWellsResponse> {
-  const r = await fetch(`/api/accuracy/wells?basin=${basin}`);
+export async function fetchAccWells(
+  basin: string,
+  vintage: AccVintage = null,
+): Promise<AccWellsResponse> {
+  const q = new URLSearchParams({ basin });
+  if (vintage) q.set("vintage", vintage);
+  const r = await fetch(`/api/accuracy/wells?${q.toString()}`);
   if (!r.ok) throw new Error(`accuracy wells failed: ${r.status}`);
   return r.json();
 }
@@ -121,11 +147,13 @@ export async function fetchAccSummary(p: {
   horizon: number;
   bench: string[];
   operator: string[];
+  vintage?: AccVintage;
 }): Promise<AccSummary> {
   const q = new URLSearchParams({
     basin: p.basin, tier: p.tier, stream: p.stream, norm: p.norm,
     horizon: String(p.horizon),
   });
+  if (p.vintage) q.set("vintage", p.vintage);
   for (const b of p.bench) q.append("bench", b);
   for (const o of p.operator) q.append("operator", o);
   const r = await fetch(`/api/accuracy/summary?${q.toString()}`);
@@ -152,11 +180,13 @@ export async function fetchAccGrid(p: {
   horizon: number;
   bench: string[];
   operator: string[];
+  vintage?: AccVintage;
 }): Promise<AccGrid> {
   const q = new URLSearchParams({
     basin: p.basin, tier: p.tier, stream: p.stream, norm: p.norm,
     horizon: String(p.horizon),
   });
+  if (p.vintage) q.set("vintage", p.vintage);
   for (const b of p.bench) q.append("bench", b);
   for (const o of p.operator) q.append("operator", o);
   const r = await fetch(`/api/accuracy/grid?${q.toString()}`);
@@ -178,7 +208,7 @@ export interface AccSelStream {
 }
 export interface AccSelWell {
   api10: string;
-  tier: "direct" | "proxy";
+  tier: "direct" | "proxy" | "unmatched";
   operator: string | null;
   formation_blueox: string;
   n_months: number;
@@ -200,6 +230,7 @@ export async function fetchAccSelection(body: {
   basin: string;
   aoi: GeoJSON.Geometry;
   rule: string;
+  vintage?: AccVintage;
 }): Promise<AccSelection> {
   const r = await fetch("/api/accuracy/selection", {
     method: "POST",
@@ -210,8 +241,13 @@ export async function fetchAccSelection(body: {
   return r.json();
 }
 
-export async function fetchAccWell(api10: string): Promise<AccWellDetail> {
-  const r = await fetch(`/api/accuracy/well?api10=${api10}`);
+export async function fetchAccWell(
+  api10: string,
+  vintage: AccVintage = null,
+): Promise<AccWellDetail> {
+  const q = new URLSearchParams({ api10 });
+  if (vintage) q.set("vintage", vintage);
+  const r = await fetch(`/api/accuracy/well?${q.toString()}`);
   if (!r.ok) throw new Error(`accuracy well failed: ${r.status}`);
   return r.json();
 }

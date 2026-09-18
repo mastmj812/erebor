@@ -98,7 +98,7 @@ export function AccuracyWellModal() {
     if (!api10) return;
     setStream(useMapStore.getState().accStream);
     let live = true;
-    fetchAccWell(api10)
+    fetchAccWell(api10, useMapStore.getState().accVintage)
       .then((d) => {
         if (!live) return;
         useMapStore.getState().setAccWell(d);
@@ -141,12 +141,14 @@ export function AccuracyWellModal() {
 
   const isDirect = data?.tier === "direct";
   const usePerft = perft || !isDirect;
-  const gbLabel = data
+  // gunbarrel is null in vintage mode (superseded vintages have no
+  // latest-vintage neighborhood context) — the modal shows series only.
+  const gbLabel = data?.gunbarrel
     ? data.gunbarrel.frame === "dsu"
       ? `DSU ${data.gunbarrel.frame_pad_name}`
       : `${data.api10} neighborhood (1 mi — no Novi DSU here)`
     : "";
-  const gb = data
+  const gb = data?.gunbarrel
     ? toPadChart(data.gunbarrel.wells, gbLabel, data.gunbarrel.axis_left, data.gunbarrel.axis_right)
     : null;
   const ss = data ? seriesFor(data.series[stream], data.series.mop, usePerft) : null;
@@ -233,7 +235,7 @@ export function AccuracyWellModal() {
                   width={700} height={260} />
                 <div className="count">
                   ● black = this well · {isDirect ? "blue = its matched Novi stick(s)" : "blue = its benchmark rep sticks"} · grey = other wells{" "}
-                  {data.gunbarrel.frame === "dsu"
+                  {data.gunbarrel?.frame === "dsu"
                     ? "in the Novi DSU (benchmark sticks shown even if outside it)"
                     : "within 1 mi"} · PDP solid / PUD-RES hollow
                 </div>

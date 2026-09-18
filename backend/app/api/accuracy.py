@@ -5,6 +5,13 @@ Novi-blind producer per aligned month (api10, mop 1-24). Two tiers —
 'direct' (the well co-extent-realized a PUD stick; raw + per-ft cum errors)
 and 'proxy' (per-ft median of the representative infill set; per-ft only).
 
+Every endpoint also takes ?vintage=YYYYQN (2026-09-18): the source swaps to
+curated.intel_forecast_accuracy_vintage (sql/43, per-retained-vintage,
+direct tier only) so superseded vintages stay reviewable — GET
+/api/accuracy/vintages lists the selector options. In vintage mode the
+well modal returns series without a gunbarrel (context surfaces are
+latest-vintage-only).
+
 Three endpoints:
   GET /api/accuracy/wells?basin=      -> FeatureCollection of the drilled
       laterals with per-horizon (3/6/9/12) errors as properties, for the map
@@ -31,7 +38,7 @@ import math
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
@@ -83,12 +90,63 @@ _ERR_COL: dict[tuple[str, str], str] = {
 _REP_TOL = {"delaware": 0.25, "midland": 0.40}
 _REP_RADIUS_M = 1609.0
 
+# ---------------------------------------------------------------------------
+# Accuracy source switch (2026-09-18): every endpoint takes an optional
+# ?vintage=YYYYQN. Absent -> the live-vintage matview (sql/38, direct+proxy).
+# Present -> the per-retained-vintage matview (sql/43), NULL-padded up to the
+# same column surface (it has no proxy tier, pad_name or rep fields by
+# design; its 'unmatched' tier rows carry NULL errors and drop out of every
+# aggregate the same way short-history rows do).
+# ---------------------------------------------------------------------------
+_VINTAGE_Q = Query(None, pattern=r"^\d{4}Q[1-4]$")
+_SRC_LIVE = "curated.intel_forecast_accuracy"
+_SRC_VINTAGE = (
+    "(SELECT v.*, NULL::text AS pad_name, NULL::int AS n_rep, false AS low_n, "
+    "NULL::double precision AS rep_median_ll_ft "
+    "FROM curated.intel_forecast_accuracy_vintage v "
+    "WHERE v.report_version = :vintage)"
+)
+
+
+def _acc_src(vintage: str | None) -> str:
+    return _SRC_VINTAGE if vintage else _SRC_LIVE
+
+
+@router.get("/vintages")
+def vintages(session: Session = Depends(get_session)) -> dict:
+    """The vintage selector's options: the live vintage (sql/38) plus every
+    retained vintage sql/43 holds, with scored-well counts so the client can
+    default to the newest one that actually has data."""
+    live = session.execute(text("""
+        SELECT to_char(curated.intel_vintage_date(), 'YYYY"Q"Q') AS label,
+               (SELECT count(DISTINCT api10)
+                FROM curated.intel_forecast_accuracy) AS n_wells
+    """)).mappings().one()
+    rows = session.execute(text("""
+        SELECT report_version,
+               count(DISTINCT api10) FILTER (WHERE tier = 'direct') AS n_direct_wells
+        FROM curated.intel_forecast_accuracy_vintage
+        GROUP BY 1 ORDER BY 1 DESC
+    """)).mappings().all()
+    return {
+        "live": {"label": str(live["label"]), "n_wells": int(live["n_wells"])},
+        "vintages": [
+            {"report_version": r["report_version"],
+             "n_direct_wells": int(r["n_direct_wells"])}
+            for r in rows
+        ],
+    }
+
 
 # ---------------------------------------------------------------------------
 # wells (map layer)
 # ---------------------------------------------------------------------------
 @router.get("/wells")
-def wells(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict:
+def wells(
+    basin: str = _BASIN,
+    vintage: str | None = _VINTAGE_Q,
+    session: Session = Depends(get_session),
+) -> dict:
     """Drilled laterals of every Novi-blind producer in the basin, with the
     error at each horizon for every stream/norm as feature properties (null
     when history is short, the horizon month is the latest reported, or the
@@ -115,7 +173,7 @@ def wells(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict:
                    bool_or(low_n)               AS low_n,
                    max(n_sticks_for_well)       AS n_sticks_for_well,
                    jsonb_build_object({err_props}) AS errs
-            FROM curated.intel_forecast_accuracy
+            FROM {_acc_src(vintage)} acc
             WHERE basin = :basin
             GROUP BY api10
         )
@@ -140,8 +198,12 @@ def wells(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict:
         FROM per_well w
         JOIN curated.producing_reference pr ON pr.api10 = w.api10
     """)
-    fc = json.loads(session.execute(sql, {"basin": basin}).scalar())
-    return {"basin": basin, "well_count": len(fc["features"]), "wells": fc}
+    params: dict = {"basin": basin}
+    if vintage:
+        params["vintage"] = vintage
+    fc = json.loads(session.execute(sql, params).scalar())
+    return {"basin": basin, "vintage": vintage,
+            "well_count": len(fc["features"]), "wells": fc}
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +218,7 @@ def summary(
     horizon: int = Query(6, ge=1, le=24),
     bench: list[str] | None = Query(None),
     operator: list[str] | None = Query(None),
+    vintage: str | None = _VINTAGE_Q,
     session: Session = Depends(get_session),
 ) -> dict:
     """Aggregate accuracy under the active filters. Bias = mean percent error
@@ -164,9 +227,12 @@ def summary(
     norm=raw the proxy rows drop out via their NULL errors and the returned
     n says so."""
     err = _ERR_COL[(stream, norm)]
+    src = _acc_src(vintage)
 
     clauses = ["basin = :basin", "NOT is_latest_reported"]
     params: dict = {"basin": basin, "horizon": horizon}
+    if vintage:
+        params["vintage"] = vintage
     expanding = []
     if tier != "all":
         clauses.append("tier = :tier")
@@ -192,20 +258,20 @@ def summary(
                avg({err})              AS bias_pct,
                avg(abs({err}))         AS mae_pct,
                percentile_cont(0.5) WITHIN GROUP (ORDER BY {err}) AS median_pct
-        FROM curated.intel_forecast_accuracy
+        FROM {src} acc
         WHERE {where} AND mop = :horizon AND {err} IS NOT NULL
     """).mappings().one()
 
     by_month = q(f"""
         SELECT mop, count(*) AS n, avg({err}) AS bias_pct, avg(abs({err})) AS mae_pct
-        FROM curated.intel_forecast_accuracy
+        FROM {src} acc
         WHERE {where} AND {err} IS NOT NULL
         GROUP BY mop ORDER BY mop
     """).mappings().all()
 
     by_tier = q(f"""
         SELECT tier, count(*) AS n, avg({err}) AS bias_pct, avg(abs({err})) AS mae_pct
-        FROM curated.intel_forecast_accuracy
+        FROM {src} acc
         WHERE {where} AND mop = :horizon AND {err} IS NOT NULL
         GROUP BY tier ORDER BY tier
     """).mappings().all()
@@ -213,14 +279,14 @@ def summary(
     by_bench = q(f"""
         SELECT COALESCE(formation_blueox, '(unmapped)') AS formation_blueox,
                count(*) AS n, avg({err}) AS bias_pct, avg(abs({err})) AS mae_pct
-        FROM curated.intel_forecast_accuracy
+        FROM {src} acc
         WHERE {where} AND mop = :horizon AND {err} IS NOT NULL
         GROUP BY 1 ORDER BY n DESC
     """).mappings().all()
 
     by_operator = q(f"""
         SELECT operator, count(*) AS n, avg({err}) AS bias_pct, avg(abs({err})) AS mae_pct
-        FROM curated.intel_forecast_accuracy
+        FROM {src} acc
         WHERE {where} AND mop = :horizon AND {err} IS NOT NULL
         GROUP BY 1 ORDER BY n DESC LIMIT 15
     """).mappings().all()
@@ -231,7 +297,7 @@ def summary(
                percentile_cont(0.9) WITHIN GROUP (ORDER BY ll_ratio) AS p90
         FROM (
             SELECT DISTINCT api10, ll_ratio
-            FROM curated.intel_forecast_accuracy
+            FROM {src} acc
             WHERE {where} AND tier = 'direct' AND ll_ratio IS NOT NULL
         ) d
     """).mappings().one()
@@ -241,7 +307,7 @@ def summary(
     hist_rows = q(f"""
         SELECT width_bucket(LEAST(GREATEST({err}, -1.0), 0.9999), -1.0, 1.0, 20) AS bin,
                count(*) AS n
-        FROM curated.intel_forecast_accuracy
+        FROM {src} acc
         WHERE {where} AND mop = :horizon AND {err} IS NOT NULL
         GROUP BY 1
     """).mappings().all()
@@ -255,7 +321,7 @@ def summary(
 
     return {
         "basin": basin, "tier": tier, "stream": stream, "norm": norm,
-        "horizon": horizon,
+        "horizon": horizon, "vintage": vintage,
         "headline": {
             "mop": horizon, "n": int(headline["n"]),
             "bias_pct": _f(headline["bias_pct"]),
@@ -301,6 +367,7 @@ def grid(
     bench: list[str] | None = Query(None),
     operator: list[str] | None = Query(None),
     cell: float = Query(0.1, ge=0.02, le=0.5),  # degrees; 0.1 ≈ 6 mi N-S
+    vintage: str | None = _VINTAGE_Q,
     session: Session = Depends(get_session),
 ) -> dict:
     """Regional forecast bias: wells snapped to `cell`-degree map cells (by
@@ -312,6 +379,8 @@ def grid(
     clauses = ["a.basin = :basin", "NOT a.is_latest_reported",
                "a.mop = :horizon", f"a.{err} IS NOT NULL"]
     params: dict = {"basin": basin, "horizon": horizon, "cell": cell}
+    if vintage:
+        params["vintage"] = vintage
     expanding = []
     if tier != "all":
         clauses.append("a.tier = :tier")
@@ -331,7 +400,7 @@ def grid(
             SELECT floor(ST_X(ST_LineInterpolatePoint(pr.geom, 0.5)) / :cell) * :cell AS x0,
                    floor(ST_Y(ST_LineInterpolatePoint(pr.geom, 0.5)) / :cell) * :cell AS y0,
                    a.{err} AS err
-            FROM curated.intel_forecast_accuracy a
+            FROM {_acc_src(vintage)} a
             JOIN curated.producing_reference pr ON pr.api10 = a.api10
             WHERE {where}
         ),
@@ -358,6 +427,7 @@ def grid(
     fc = json.loads(session.execute(sql, params).scalar())
     return {
         "basin": basin, "stream": stream, "norm": norm, "horizon": horizon,
+        "vintage": vintage,
         "cell_deg": cell, "cell_count": len(fc["features"]), "cells": fc,
     }
 
@@ -369,6 +439,7 @@ class SelectionBody(BaseModel):
     basin: Literal["delaware", "midland"]
     aoi: dict  # GeoJSON geometry (Polygon), same contract as /api/select
     rule: Literal["intersects", "midpoint"] = "intersects"
+    vintage: str | None = Field(default=None, pattern=r"^\d{4}Q[1-4]$")
 
 
 # AOI predicate against the drilled lateral (curated.producing_reference.geom)
@@ -406,6 +477,7 @@ def selection(body: SelectionBody, session: Session = Depends(get_session)) -> d
             sum(fcst_cum_{s})   FILTER (WHERE actual_cum_{s} IS NOT NULL AND fcst_cum_{s} IS NOT NULL) AS fc_{s}_raw"""
         for s in _STREAMS
     )
+    src = _acc_src(body.vintage)
     sel_cte = f"""
         WITH aoi AS (
             SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g
@@ -414,17 +486,19 @@ def selection(body: SelectionBody, session: Session = Depends(get_session)) -> d
             SELECT pr.api10
             FROM curated.producing_reference pr, aoi
             WHERE {_SEL_PRED[body.rule]}
-              AND EXISTS (SELECT 1 FROM curated.intel_forecast_accuracy a
+              AND EXISTS (SELECT 1 FROM {src} a
                           WHERE a.api10 = pr.api10 AND a.basin = :basin)
         )
     """
     params = {"aoi": json.dumps(body.aoi), "basin": body.basin}
+    if body.vintage:
+        params["vintage"] = body.vintage
 
     by_month_rows = session.execute(
         text(f"""
             {sel_cte}
             SELECT a.mop, {per_ft_aggs}
-            FROM curated.intel_forecast_accuracy a
+            FROM {src} a
             JOIN sel ON sel.api10 = a.api10
             WHERE NOT a.is_latest_reported
             GROUP BY a.mop ORDER BY a.mop
@@ -447,7 +521,7 @@ def selection(body: SelectionBody, session: Session = Depends(get_session)) -> d
                    max(a.mop)               AS n_months,
                    bool_or(a.low_n)         AS low_n,
                    {err_props}
-            FROM curated.intel_forecast_accuracy a
+            FROM {src} a
             JOIN sel ON sel.api10 = a.api10
             GROUP BY a.api10
             ORDER BY a.api10
@@ -487,6 +561,7 @@ def selection(body: SelectionBody, session: Session = Depends(get_session)) -> d
     return {
         "basin": body.basin,
         "rule": body.rule,
+        "vintage": body.vintage,
         "well_count": len(well_rows),
         "direct_count": sum(1 for r in well_rows if r["tier"] == "direct"),
         "proxy_count": sum(1 for r in well_rows if r["tier"] == "proxy"),
@@ -513,8 +588,45 @@ def _stream_series(rows, s: str) -> dict:
     }
 
 
+def _well_response(api10, tier, basin, meta, rows, gunbarrel, vintage) -> dict:
+    def _f(v):
+        return float(v) if v is not None else None
+
+    return {
+        "api10": api10,
+        "tier": tier,
+        "basin": basin,
+        "vintage": vintage,
+        "formation_blueox": meta["formation_blueox"],
+        "operator": meta["operator"],
+        "pad_name": meta["pad_name"],
+        "first_prod": meta["first_production_date"].isoformat(),
+        "drilled_ll_ft": _f(meta["drilled_ll_ft"]),
+        "novi_ll_ft": _f(meta["novi_ll_ft"]),
+        "rep_median_ll_ft": _f(meta["rep_median_ll_ft"]),
+        "ll_ratio": _f(meta["ll_ratio"]),
+        "match_overlap": _f(meta["match_overlap"]),
+        "n_sticks_for_well": meta["n_sticks_for_well"],
+        "n_rep": meta["n_rep"],
+        "low_n": bool(meta["low_n"]),
+        "series": {
+            "mop": [int(r["mop"]) for r in rows],
+            "is_latest_reported": [bool(r["is_latest_reported"]) for r in rows],
+            "producing_day_frac": [_f(r["producing_day_frac"]) for r in rows],
+            "oil": _stream_series(rows, "oil"),
+            "gas": _stream_series(rows, "gas"),
+            "water": _stream_series(rows, "water"),
+        },
+        "gunbarrel": gunbarrel,
+    }
+
+
 @router.get("/well")
-def well(api10: str = _API10, session: Session = Depends(get_session)) -> dict:
+def well(
+    api10: str = _API10,
+    vintage: str | None = _VINTAGE_Q,
+    session: Session = Depends(get_session),
+) -> dict:
     """One well's forecast-vs-actual series + a gunbarrel.
 
     Gunbarrel frame is DSU-FIRST: the Novi DSU polygon (raw_novi_intel.pads)
@@ -529,18 +641,29 @@ def well(api10: str = _API10, session: Session = Depends(get_session)) -> dict:
     forecast benchmark. Projection: lateral midpoints onto the axis
     perpendicular to the set's mean heel->toe direction — same math as
     /api/gunbarrel and /api/highgrade."""
+    params: dict = {"api10": api10}
+    if vintage:
+        params["vintage"] = vintage
     rows = session.execute(
-        text("""
-            SELECT * FROM curated.intel_forecast_accuracy
+        text(f"""
+            SELECT * FROM {_acc_src(vintage)} s
             WHERE api10 = :api10 ORDER BY mop
         """),
-        {"api10": api10},
+        params,
     ).mappings().all()
     if not rows:
         raise HTTPException(status_code=404, detail="api10 not in the accuracy population")
     meta = rows[0]
     tier = meta["tier"]
     basin = meta["basin"]
+
+    if vintage is not None:
+        # Superseded-vintage mode: the matched stick and its neighborhood
+        # belong to a vintage the curated context surfaces no longer serve
+        # (intel_locations / reconciled_inventory / rep sticks are
+        # latest-vintage-only) — the modal gets the series, no gunbarrel.
+        return _well_response(api10, tier, basin, meta, rows,
+                              gunbarrel=None, vintage=vintage)
 
     # Comparison stick set.
     if tier == "direct":
@@ -716,38 +839,14 @@ def well(api10: str = _API10, session: Session = Depends(get_session)) -> dict:
         })
     gb_wells.sort(key=lambda x: x["offset_ft"])
 
-    def _f(v):
-        return float(v) if v is not None else None
-
-    return {
-        "api10": api10,
-        "tier": tier,
-        "basin": basin,
-        "formation_blueox": meta["formation_blueox"],
-        "operator": meta["operator"],
-        "pad_name": meta["pad_name"],
-        "first_prod": meta["first_production_date"].isoformat(),
-        "drilled_ll_ft": _f(meta["drilled_ll_ft"]),
-        "novi_ll_ft": _f(meta["novi_ll_ft"]),
-        "rep_median_ll_ft": _f(meta["rep_median_ll_ft"]),
-        "ll_ratio": _f(meta["ll_ratio"]),
-        "match_overlap": _f(meta["match_overlap"]),
-        "n_sticks_for_well": meta["n_sticks_for_well"],
-        "n_rep": meta["n_rep"],
-        "low_n": bool(meta["low_n"]),
-        "series": {
-            "mop": [int(r["mop"]) for r in rows],
-            "is_latest_reported": [bool(r["is_latest_reported"]) for r in rows],
-            "producing_day_frac": [_f(r["producing_day_frac"]) for r in rows],
-            "oil": _stream_series(rows, "oil"),
-            "gas": _stream_series(rows, "gas"),
-            "water": _stream_series(rows, "water"),
-        },
-        "gunbarrel": {
+    return _well_response(
+        api10, tier, basin, meta, rows,
+        gunbarrel={
             "frame": "dsu" if dsu_pad is not None else "radius",
             "frame_pad_name": dsu_pad,
             "well_count": len(gb_wells),
             "axis_left": axis_left, "axis_right": axis_right,
             "wells": gb_wells,
         },
-    }
+        vintage=None,
+    )

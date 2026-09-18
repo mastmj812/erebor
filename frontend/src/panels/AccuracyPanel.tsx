@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { fetchAccGrid, fetchAccSummary, fetchAccWells, ACC_HORIZONS, type AccSummary } from "../api/accuracy";
+import { fetchAccGrid, fetchAccSummary, fetchAccVintages, fetchAccWells, ACC_HORIZONS, type AccSummary } from "../api/accuracy";
 import { accuracyColor } from "../map/accuracyColors";
 import { colorForBlueox } from "../map/formations";
 import { useMapStore, type Phase } from "../store";
@@ -44,32 +44,56 @@ export function AccuracyPanel() {
   const clearAccSelection = useMapStore((s) => s.clearAccSelection);
   const mapView = useMapStore((s) => s.accMapView);
   const setMapView = useMapStore((s) => s.setAccMapView);
+  const vintage = useMapStore((s) => s.accVintage);
+  const vintages = useMapStore((s) => s.accVintages);
+  const setVintage = useMapStore((s) => s.setAccVintage);
 
   const [error, setError] = useState<string | null>(null);
   const [opSearch, setOpSearch] = useState("");
 
-  // Map layer data: one fetch per basin (all error variants ship at once).
+  // Vintage options, once. If the live vintage has nothing scoreable yet
+  // (a fresh quarterly reload) default to the newest RETAINED vintage that
+  // does — the tab should never open blank while data exists.
+  useEffect(() => {
+    if (vintages) return;
+    let live = true;
+    fetchAccVintages()
+      .then((v) => {
+        if (!live) return;
+        useMapStore.getState().setAccVintages(v);
+        const st = useMapStore.getState();
+        const newest = v.vintages.find((x) => x.n_direct_wells > 0);
+        if (st.accVintage === null && v.live.n_wells === 0 && newest) {
+          st.setAccVintage(newest.report_version);
+        }
+      })
+      .catch((e) => { if (live) setError(String(e)); });
+    return () => { live = false; };
+  }, [vintages]);
+
+  // Map layer data: one fetch per (basin, vintage) — all error variants ship
+  // at once.
   useEffect(() => {
     if (accWells) return;
     let live = true;
-    fetchAccWells(basin)
+    fetchAccWells(basin, vintage)
       .then((r) => { if (live) useMapStore.getState().setAccWells(r.wells); })
       .catch((e) => { if (live) setError(String(e)); });
     return () => { live = false; };
-  }, [basin, accWells]);
+  }, [basin, accWells, vintage]);
 
   // Summary: refetch on any filter/param change.
   useEffect(() => {
     let live = true;
     useMapStore.getState().setAccSummaryLoading(true);
     setError(null);
-    fetchAccSummary({ basin, tier, stream, norm, horizon, bench, operator })
+    fetchAccSummary({ basin, tier, stream, norm, horizon, bench, operator, vintage })
       .then((s) => { if (live) useMapStore.getState().setAccSummary(s); })
       .catch((e) => {
         if (live) { setError(String(e)); useMapStore.getState().setAccSummary(null); }
       });
     return () => { live = false; };
-  }, [basin, tier, stream, norm, horizon, bench, operator]);
+  }, [basin, tier, stream, norm, horizon, bench, operator, vintage]);
 
   // Regional bias grid: (re)fetch while the grid view is active. Basin-wide
   // per-bench/operator averages hide regional structure — the grid is the
@@ -77,11 +101,11 @@ export function AccuracyPanel() {
   useEffect(() => {
     if (mapView !== "grid") return;
     let live = true;
-    fetchAccGrid({ basin, tier, stream, norm, horizon, bench, operator })
+    fetchAccGrid({ basin, tier, stream, norm, horizon, bench, operator, vintage })
       .then((g) => { if (live) useMapStore.getState().setAccGrid(g); })
       .catch((e) => { if (live) setError(String(e)); });
     return () => { live = false; };
-  }, [mapView, basin, tier, stream, norm, horizon, bench, operator]);
+  }, [mapView, basin, tier, stream, norm, horizon, bench, operator, vintage]);
 
   // Facet options come from the loaded wells layer (no extra endpoint).
   const { benchOptions, operatorOptions } = useMemo(() => {
@@ -109,8 +133,30 @@ export function AccuracyPanel() {
         <button className={basin === "delaware" ? "active" : ""} onClick={() => setBasin("delaware")}>Delaware</button>
         <button className={basin === "midland" ? "active" : ""} onClick={() => setBasin("midland")}>Midland</button>
       </div>
+      <h3>Vintage</h3>
+      <div className="seg sm">
+        <button
+          className={vintage === null ? "active" : ""}
+          onClick={() => setVintage(null)}
+          title="Current Novi vintage (fills in as blind wells accrue actuals)"
+        >
+          {vintages ? `${vintages.live.label} (live)` : "live"}
+          {vintages ? ` · ${vintages.live.n_wells}` : ""}
+        </button>
+        {(vintages?.vintages ?? []).map((v) => (
+          <button
+            key={v.report_version}
+            className={vintage === v.report_version ? "active" : ""}
+            onClick={() => setVintage(v.report_version)}
+            title="Superseded vintage, scored against actuals accrued since (direct tier only)"
+          >
+            {v.report_version} · {v.n_direct_wells}
+          </button>
+        ))}
+      </div>
       <div className="count">
-        Novi forecast vs actuals on wells the 2025Q3 vintage was blind to.
+        Novi forecast vs actuals on wells the {vintage ?? vintages?.live.label ?? "current"}
+        {" "}vintage was blind to{vintage ? " (superseded vintage — scored on actuals accrued since)" : ""}.
         Cum-based % error; forecast is P50, so <em>bias</em> (mean error) is the
         calibration number and MAE is dispersion.
       </div>
@@ -119,14 +165,18 @@ export function AccuracyPanel() {
       <div className="seg sm">
         <button className={tier === "all" ? "active" : ""} onClick={() => setTier("all")}>All</button>
         <button className={tier === "direct" ? "active" : ""} onClick={() => setTier("direct")}>Direct</button>
-        <button className={tier === "proxy" ? "active" : ""} onClick={() => setTier("proxy")}>Proxy</button>
+        {vintage === null && (
+          <button className={tier === "proxy" ? "active" : ""} onClick={() => setTier("proxy")}>Proxy</button>
+        )}
       </div>
       <div className="count" style={{ margin: "2px 0 8px" }}>
         {tier === "direct"
           ? "Wells that realized a Novi PUD stick — compared to that stick's own forecast."
           : tier === "proxy"
             ? "Wells with no co-extent stick — compared to the per-ft median of nearby same-bench sticks."
-            : "Direct (realized a PUD stick) + proxy (neighborhood-median benchmark)."}
+            : vintage
+              ? "Direct matches only — this vintage's own sticks (no proxy tier on superseded vintages)."
+              : "Direct (realized a PUD stick) + proxy (neighborhood-median benchmark)."}
       </div>
 
       <h3>Stream · basis · horizon</h3>

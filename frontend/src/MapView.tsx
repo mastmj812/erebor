@@ -209,7 +209,10 @@ export function MapView() {
       if (st.appMode === "accuracy") {
         st.setAccSelectionLoading(true);
         try {
-          const res = await fetchAccSelection({ basin: st.basin, aoi: poly, rule: st.selectionRule });
+          const res = await fetchAccSelection({
+            basin: st.basin, aoi: poly, rule: st.selectionRule,
+            vintage: st.accVintage,
+          });
           useMapStore.getState().setAccSelection(res, poly);
         } catch (e) {
           console.error("accuracy selection failed", e);
@@ -368,7 +371,10 @@ export function MapView() {
         const poly = f.geometry as GeoJsonPolygon;
         const st = useMapStore.getState();
         st.setAccSelectionLoading(true);
-        fetchAccSelection({ basin: st.basin, aoi: poly, rule: st.selectionRule })
+        fetchAccSelection({
+          basin: st.basin, aoi: poly, rule: st.selectionRule,
+          vintage: st.accVintage,
+        })
           .then((res) => useMapStore.getState().setAccSelection(res, poly))
           .catch((err) => {
             console.error("grid cell selection failed", err);

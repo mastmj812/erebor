@@ -8,6 +8,7 @@ import type {
   AccSelection,
   AccSummary,
   AccTier,
+  AccVintages,
   AccWellDetail,
 } from "./api/accuracy";
 import type { HighgradeFilters } from "./api/highgrade";
@@ -137,6 +138,10 @@ interface MapState {
   accSelectionLoading: boolean;
   accMapView: "wells" | "grid";              // per-well laterals vs regional bias cells
   accGrid: AccGrid | null;
+  // Vintage mode (2026-09-18): null = live vintage (sql/38); a report_version
+  // string ("2025Q3") reads the per-retained-vintage matview (sql/43).
+  accVintage: string | null;
+  accVintages: AccVintages | null;           // selector options (/accuracy/vintages)
   basin: "delaware" | "midland";
   categories: Category[];
   overlays: Record<OverlayKey, boolean>;
@@ -195,6 +200,8 @@ interface MapState {
   clearAccSelection: () => void;
   setAccMapView: (v: "wells" | "grid") => void;
   setAccGrid: (g: AccGrid | null) => void;
+  setAccVintage: (v: string | null) => void;
+  setAccVintages: (v: AccVintages | null) => void;
   setBasin: (b: "delaware" | "midland") => void;
   toggleCategory: (c: Category) => void;
   toggleOverlay: (k: OverlayKey) => void;
@@ -253,6 +260,8 @@ export const useMapStore = create<MapState>((set, get) => ({
   accSelectionLoading: false,
   accMapView: "wells",
   accGrid: null,
+  accVintage: null,
+  accVintages: null,
   basin: "delaware",
   categories: [...CATEGORIES],
   overlays: { pads: false, grid: false, outline: true, blocks: false, sections: false },
@@ -325,6 +334,16 @@ export const useMapStore = create<MapState>((set, get) => ({
   clearAccSelection: () => set({ accSelection: null, accSelectionLoading: false, aoi: null }),
   setAccMapView: (v) => set({ accMapView: v }),
   setAccGrid: (g) => set({ accGrid: g }),
+  // Switching vintage invalidates every fetched accuracy surface; the tier
+  // filter resets too (vintage mode has no proxy tier).
+  setAccVintage: (v) =>
+    set({
+      accVintage: v, accWells: null, accSummary: null, accGrid: null,
+      accSelection: null, accSelectionLoading: false,
+      accWellApi10: null, accWell: null, accWellLoading: false,
+      accTier: "all",
+    }),
+  setAccVintages: (v) => set({ accVintages: v }),
   setBasin: (b) =>
     set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWells: null, accSummary: null, accSummaryLoading: false, accTier: "all", accBench: [], accOperator: [], accWellApi10: null, accWell: null, accWellLoading: false, accSelection: null, accSelectionLoading: false, accMapView: "wells", accGrid: null, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], formationFilter: [], excludedSticks: [], unitFilter: [], reconCounts: null, depletionCounts: null, supportCounts: null, remainingOnly: false, excludeDepleted: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleCategory: (c) =>

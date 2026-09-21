@@ -9,7 +9,7 @@ Two endpoints:
   GET  /api/highgrade/facets?basin=  -> distinct categoricals + numeric min/max,
        over PUD inventory, to populate the filter UI (one table scan).
   POST /api/highgrade/pads           -> {basin, filters, metric, agg} aggregated
-       per pad_name, joined to the pad polygons, as a FeatureCollection + the
+       per spatial pad (pad_key, sql/46), joined to the pad polygons, as a FeatureCollection + the
        value range for the color scale.
 
 Economics are Novi's pre-computed screen on a flat deck (a screen, not the
@@ -249,36 +249,43 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
 
     sql = text(f"""
         WITH agg AS (
-            SELECT il.pad_name,
+            -- Aggregate per SPATIAL pad (pad_key), not per Novi pad_name: Novi reuses
+            -- names across unrelated stick groups (2026Q3 Delaware: 34% of names), so
+            -- sql/46 splits each name into 1-mile groups. A stick with no pad_name
+            -- (or no geometry) has no member row -> pad_key NULL -> wells_without_pad.
+            SELECT pm.pad_key,
                    {value_expr} AS value,
                    count(*)     AS n_wells
             FROM curated.intel_locations il {_blueox_join('il')} {_recon_join('il')} {_support_join('il')}
+            LEFT JOIN curated.intel_pad_member pm ON pm.stick_id = il.stick_id
             WHERE {_PUD_BASE} {filt_sql}{recon}
-            GROUP BY il.pad_name
+            GROUP BY pm.pad_key
         ),
         pad_geom AS (
-            -- curated.intel_pad_geom (sql/45): one polygon per (basin, pad_name),
+            -- curated.intel_pad_geom (sql/46): one polygon per (basin, pad_key),
             -- the member-stick hull + 330 ft, geodesic acres. The Snowflake share
-            -- ships no pad polygons and Novi renames pads every vintage, so the
-            -- legacy raw_novi_intel.pads shapefile no longer matches any name.
+            -- ships no pad polygons, so these are derived from the sticks.
             -- Novi stacks pads per bench set, so polygons may overlap.
-            SELECT pad_name, geom, acres
+            SELECT pad_key, pad_name, n_parts, geom, acres
             FROM curated.intel_pad_geom
             WHERE basin = :basin
         ),
         joined AS (
-            SELECT a.pad_name, {final_value} AS value, a.n_wells, p.acres, p.geom
+            SELECT a.pad_key, p.pad_name, p.n_parts, {final_value} AS value, a.n_wells, p.acres, p.geom
             FROM agg a
-            LEFT JOIN pad_geom p ON p.pad_name = a.pad_name
-            WHERE a.pad_name IS NOT NULL
+            LEFT JOIN pad_geom p ON p.pad_key = a.pad_key
+            WHERE a.pad_key IS NOT NULL
         )
         SELECT json_build_object(
             'pad_count',         count(*) FILTER (WHERE geom IS NOT NULL),
             'pads_missing_geom', count(*) FILTER (WHERE geom IS NULL),
+            -- Novi pad names drawn as >1 polygon because the name spans separate
+            -- stick groups (sql/46) — surfaced so a split pad is never a surprise.
+            'names_split',       count(DISTINCT pad_name) FILTER (WHERE n_parts > 1),
             'well_count',        COALESCE(sum(n_wells), 0),
             -- screened PUDs Novi assigned to no pad (2026Q3: all of Delaware) —
             -- they cannot be drawn, so the client must say so instead of a blank map.
-            'wells_without_pad', COALESCE((SELECT n_wells FROM agg WHERE pad_name IS NULL), 0),
+            'wells_without_pad', COALESCE((SELECT n_wells FROM agg WHERE pad_key IS NULL), 0),
             'value_min',         min(value) FILTER (WHERE geom IS NOT NULL),
             'value_max',         max(value) FILTER (WHERE geom IS NOT NULL),
             'pads', json_build_object(
@@ -288,7 +295,8 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
                         'type', 'Feature',
                         'geometry', ST_AsGeoJSON(geom)::json,
                         'properties', json_build_object(
-                            'pad_name', pad_name, 'value', value, 'n_wells', n_wells,
+                            'pad_key', pad_key, 'pad_name', pad_name, 'n_parts', n_parts,
+                            'value', value, 'n_wells', n_wells,
                             'acres', round(acres::numeric, 1)
                         )
                     )) FILTER (WHERE geom IS NOT NULL), '[]'::json)
@@ -308,7 +316,7 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
 # ---------------------------------------------------------------------------
 class GunbarrelBody(BaseModel):
     basin: Literal["delaware", "midland"]
-    pad_name: str
+    pad_key: str  # curated.intel_pad_geom (basin, pad_key) — see sql/46
     filters: HighgradeFilters = Field(default_factory=HighgradeFilters)
     metric: Metric = "npv25"
     include_realized: bool = False  # gates the in_filter highlight, matching the choropleth
@@ -327,8 +335,10 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
     Each well also carries `metric_value` for the currently-selected screen
     metric (null for the count metric, which has no per-well value).
 
-    PUD/RES carry a real pad_name; PDP's is a placeholder, so PDP wells are
-    pulled by spatially containing their lateral midpoint in this DSU polygon.
+    PUDs are pulled by pad membership (curated.intel_pad_member.pad_key, the
+    spatial split of Novi's pad_name); PDP's pad_name is a placeholder, so PDP
+    wells are pulled by spatially containing their lateral midpoint in this DSU
+    polygon.
     """
     where, params, expanding = _build_filters(body.filters)
     # in_filter is true only for a PUD matching every active filter clause; PDP
@@ -343,7 +353,7 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
     # metric is validated against the Metric literal; well_count has no per-well value.
     metric_expr = "NULL" if body.metric == "well_count" else f"w.{body.metric}"
     params["basin"] = body.basin
-    params["pad_name"] = body.pad_name
+    params["pad_key"] = body.pad_key
 
     # Two arms: PUDs from curated.intel_locations (the screen's filter columns —
     # spacing/complet/rq scores — only exist there); PDP context from
@@ -352,9 +362,9 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
     # always muted context: in_filter false, metric_value NULL (no Novi econ).
     sql = text(f"""
         WITH pad AS (
-            -- member-stick hull + 330 ft (sql/45), UNIQUE on (basin, pad_name)
+            -- member-stick hull + 330 ft (sql/46), UNIQUE on (basin, pad_key)
             SELECT geom FROM curated.intel_pad_geom
-            WHERE basin = :basin AND pad_name = :pad_name
+            WHERE basin = :basin AND pad_key = :pad_key
         )
         SELECT w.stick_id, w.unique_id, w.category, UPPER(w.formation) AS formation,
                fb.formation_blueox, w.basin AS basin_blueox, fb.formation_blueox_source,
@@ -368,11 +378,12 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
                ST_X(ST_EndPoint(w.wellstick_geom))   AS ex,
                ST_Y(ST_EndPoint(w.wellstick_geom))   AS ey
         FROM curated.intel_locations w
+        JOIN curated.intel_pad_member pm ON pm.stick_id = w.stick_id AND pm.pad_key = :pad_key
         LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = w.stick_id
         {_recon_join('w')}
         {_support_join('w')}
         WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL AND w.tvd IS NOT NULL
-          AND w.category = 'PUD' AND w.pad_name = :pad_name
+          AND w.category = 'PUD'
 
         UNION ALL
 
@@ -396,7 +407,7 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
         sql = sql.bindparams(*expanding)
     ws = session.execute(sql, params).mappings().all()
     if not ws:
-        return {"pad_name": body.pad_name, "well_count": 0, "wells": []}
+        return {"pad_name": body.pad_key, "well_count": 0, "wells": []}
 
     lat0 = sum(w["my"] for w in ws) / len(ws)
     lon0 = sum(w["mx"] for w in ws) / len(ws)
@@ -437,7 +448,7 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
         })
     wells.sort(key=lambda x: x["offset_ft"])
     return {
-        "pad_name": body.pad_name, "well_count": len(wells),
+        "pad_name": body.pad_key, "well_count": len(wells),
         "axis_left": axis_left, "axis_right": axis_right,
         "wells": wells,
     }

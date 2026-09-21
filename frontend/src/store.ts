@@ -107,6 +107,7 @@ export interface HighgradeResult {
   agg: string;
   pad_count: number;
   pads_missing_geom: number;
+  names_split: number;       // Novi pad names spanning >1 separate stick group, drawn as [k/n] pads (sql/46)
   well_count: number;
   wells_without_pad: number; // screened PUDs with no Novi pad assignment (not drawable)
   value_min: number | null;
@@ -119,7 +120,7 @@ interface MapState {
   highgrade: HighgradeResult | null;
   highgradeFilters: HighgradeFilters | null; // last-applied screen, drives the per-DSU gunbarrel
   hgIncludeRealized: boolean; // Highgrade: false = drillable inventory only (drop §6 realized/phantom PUDs)
-  hgGunbarrelPad: string | null;             // clicked DSU (modal open when non-null)
+  hgGunbarrelPad: string | null;             // clicked DSU's pad_key (modal open when non-null)
   hgGunbarrel: GunbarrelPad | null;          // loaded per-DSU wells
   hgGunbarrelLoading: boolean;
   // Accuracy tab: Novi forecast vs realized actuals (curated.intel_forecast_accuracy).
@@ -180,7 +181,7 @@ interface MapState {
   setHighgrade: (h: HighgradeResult | null) => void;
   setHighgradeFilters: (f: HighgradeFilters | null) => void;
   setHgIncludeRealized: (b: boolean) => void;
-  openHgGunbarrel: (padName: string) => void;
+  openHgGunbarrel: (padKey: string) => void;
   setHgGunbarrel: (g: GunbarrelPad | null) => void;
   closeHgGunbarrel: () => void;
   setAccWells: (fc: GeoJSON.FeatureCollection | null) => void;
@@ -299,7 +300,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   setHighgrade: (h) => set({ highgrade: h }),
   setHighgradeFilters: (f) => set({ highgradeFilters: f }),
   setHgIncludeRealized: (b) => set({ hgIncludeRealized: b }),
-  openHgGunbarrel: (padName) => set({ hgGunbarrelPad: padName, hgGunbarrel: null, hgGunbarrelLoading: true }),
+  openHgGunbarrel: (padKey) => set({ hgGunbarrelPad: padKey, hgGunbarrel: null, hgGunbarrelLoading: true }),
   setHgGunbarrel: (g) => set({ hgGunbarrel: g, hgGunbarrelLoading: false }),
   closeHgGunbarrel: () => set({ hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false }),
   setAccWells: (fc) => set({ accWells: fc }),

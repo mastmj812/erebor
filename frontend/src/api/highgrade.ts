@@ -61,7 +61,7 @@ export async function fetchHighgradePads(body: {
 // the (last-applied) screen so off-filter PUDs and all PDPs render muted.
 export async function fetchHighgradeGunbarrel(body: {
   basin: string;
-  pad_name: string;
+  pad_key: string; // curated.intel_pad_geom key (Novi pad_name, split by space — sql/46)
   filters: HighgradeFilters;
   metric: HighgradeMetric;
   include_realized: boolean;

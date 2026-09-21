@@ -311,6 +311,12 @@ export function HighgradePanel() {
               vintage (not drawn){highgrade.pad_count === 0 ? " — Novi shipped no pads for this basin" : ""}
             </div>
           )}
+          {highgrade.names_split > 0 && (
+            <div className="count" style={{ margin: "2px 0 0", color: "#92400e" }}>
+              {highgrade.names_split.toLocaleString()} Novi pad names span separate stick groups
+              (&gt;1 mi apart) — each group drawn as its own pad, labelled [k/n]
+            </div>
+          )}
           {highgrade.pad_count > 0 && (
             <div className="count" style={{ margin: "2px 0 0" }}>
               Pad outlines = member-stick hull + 330 ft (Novi ships no pad polygons); stacked-bench pads overlap.

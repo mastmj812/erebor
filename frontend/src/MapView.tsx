@@ -304,7 +304,7 @@ export function MapView() {
       map.on("mouseleave", HG_FILL, () => { map.getCanvas().style.cursor = ""; popupRef.current?.remove(); });
       // Click a DSU -> open its per-unit gunbarrel (PUD + PDP, offset vs TVD).
       map.on("click", HG_FILL, (e: MapMouseEvent & { features?: MapGeoJSONFeature[] }) => {
-        const pad = e.features?.[0]?.properties?.pad_name as string | undefined;
+        const pad = e.features?.[0]?.properties?.pad_key as string | undefined;
         if (pad) { popupRef.current?.remove(); useMapStore.getState().openHgGunbarrel(pad); }
       });
 
@@ -692,13 +692,17 @@ function padPopupHtml(p: Record<string, unknown>, metric: string, agg: string): 
   const valStr = v == null ? "—" : money ? `${fmtMoney(v)}${perAcre ? "/ac" : ""}` : fmtInt(v);
   const metricLabel = metric === "well_count" ? "Wells" : metric.toUpperCase();
   const acresRow = p.acres == null ? "" : `<tr><td>Acres</td><td>${fmtInt(p.acres)}</td></tr>`;
+  const nParts = Number(p.n_parts ?? 1);
+  const splitRow = nParts > 1
+    ? `<tr><td colspan="2">Novi name spans ${nParts} separate groups — split</td></tr>` : "";
   return `
     <div>
-      <div class="mtt-name">${esc(p.pad_name)}</div>
+      <div class="mtt-name">${esc(p.pad_key)}</div>
       <table class="mtt-table">
         <tr><td>${esc(metricLabel)}</td><td>${valStr}</td></tr>
         <tr><td>Wells</td><td>${fmtInt(p.n_wells)}</td></tr>
         ${acresRow}
+        ${splitRow}
       </table>
     </div>`;
 }

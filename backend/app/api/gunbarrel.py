@@ -45,14 +45,16 @@ def _canonical_axis(perp: tuple[float, float]) -> tuple[tuple[float, float], str
     """Canonicalize the cross-section axis to the suite-wide gunbarrel reading
     (same rule as anduin's dossier/inspect charts and narvi's panel): a ~N-S
     lateral set (axis runs E-W) reads W -> E, a ~E-W set (axis runs N-S) reads
-    N -> S. The mean heel->toe direction is data-order arbitrary, so the
+    S -> N (sign rule v2, Michael 2026-10-08: + points into the NE half; a
+    perfect 45° tie goes to the E-W branch). The mean heel->toe direction is
+    data-order arbitrary, so the
     DOMINANT compass component of the perpendicular decides and the sign flips
     to match. Copy-shared with highgrade.py / accuracy.py (like the projection
     constants). Returns (axis, left_label, right_label)."""
     px, py = perp  # (east, north) components
     if abs(px) >= abs(py):  # axis runs E-W: +offset = East
         return ((-px, -py) if px < 0 else (px, py)), "W", "E"
-    return ((-px, -py) if py > 0 else (px, py)), "N", "S"  # +offset = South
+    return ((-px, -py) if py < 0 else (px, py)), "S", "N"  # +offset = North
 
 
 class GbBody(BaseModel):

@@ -14,6 +14,20 @@ Two endpoints:
 
 Economics are Novi's pre-computed screen on a flat deck (a screen, not the
 authoritative value) — consistent with the rest of erebor.
+
+Forecast SOURCE (BOX plan step 8): every endpoint takes `source` = novi | box.
+  novi -> Novi Intelligence EUR / NPV columns on curated.intel_locations (unchanged).
+  box  -> the BOX record run (box.forecast_run.is_record; analog-workup EUR, D57/D62,
+          uptime-free, raw 50-yr technical integral, oil + gas only — D72) joined by
+          stick_id. The screened population is the SAME Novi PUD set either way; only
+          the forecast numbers change. Every screened PUD gets a BOX coverage class
+          (box.pud_forecast.coverage, or derived when the PUD has no BOX row) and
+          aggregates use COVERED rows only, with the not-covered count reported per
+          class — a not-covered PUD is never a zero (D2/D67).
+  BOX econ CAVEAT (sibling of the Novi caveat above): box_pv* metrics are Steven's
+  box_econ.box_pud_econ values for ONE named deck + assumption set — a display-only
+  screen with provenance (D13: nothing here computes economics, and econ never flows
+  back into a forecast). Empty until Steven prices a BOX run.
 """
 
 from __future__ import annotations
@@ -22,11 +36,12 @@ import json
 import math
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
+from app.api.box import COVERAGE_CLASSES, box_joins, coverage_sql, econ_join, record_run
 from app.db import get_session
 
 router = APIRouter(prefix="/highgrade", tags=["highgrade"])
@@ -78,14 +93,66 @@ NUMERIC: tuple[str, ...] = (
     "pv5", "pv10", "pv15", "pv20", "pv25",
     "oil_eur", "gas_eur", "ll_ft", "tvd", "fp_year",
     *SUPPORT_NUMERIC,
+    "box_oil_eur", "box_gas_eur", "box_oil_eur_per_kft",
 )
+# BOX range filters (need the BOX joins). They bound COVERED PUDs only: a PUD without a
+# BOX forecast stays in the screen and is counted under its not-covered class, never
+# dropped by a BOX bound (dropping it would hide the not-covered count, D67).
+BOX_NUMERIC: dict[str, str] = {
+    "box_oil_eur": "bso.eur",
+    "box_gas_eur": "bsg.eur",
+    "box_oil_eur_per_kft": "bso.eur_per_kft",
+}
 # Selectable per-pad metrics. NPV/PV/EUR aggregate via sum|avg; well_count is a count.
 Metric = Literal[
     "npv5", "npv10", "npv15", "npv20", "npv25",
     "pv5", "pv10", "pv15", "pv20", "pv25",
-    "oil_eur", "gas_eur", "well_count",
+    "oil_eur", "gas_eur", "oil_eur_per_kft", "gas_eur_per_kft", "well_count",
+    "box_pv0", "box_pv10", "box_pv15", "box_pv20", "box_pv25", "box_pv30",
 ]
 Agg = Literal["sum", "avg", "per_acre"]
+Source = Literal["novi", "box"]
+
+_EUR_METRICS = ("oil_eur", "gas_eur", "oil_eur_per_kft", "gas_eur_per_kft")
+_NOVI_ECON = ("npv5", "npv10", "npv15", "npv20", "npv25", "pv5", "pv10", "pv15", "pv20", "pv25")
+BOX_ECON = ("box_pv0", "box_pv10", "box_pv15", "box_pv20", "box_pv25", "box_pv30")
+METRICS_BY_SOURCE: dict[str, tuple[str, ...]] = {
+    "novi": (*_NOVI_ECON, *_EUR_METRICS, "well_count"),
+    "box": (*_EUR_METRICS, *BOX_ECON, "well_count"),
+}
+
+
+def is_money(metric: str) -> bool:
+    return metric.startswith(("npv", "pv", "box_pv"))
+
+
+def _eur_kft(metric: str, source: str, a: str) -> tuple[str, str]:
+    """(row EUR, row lateral in kft) SQL for an EUR metric. BOX's lateral basis is the
+    one its stored eur_per_kft used (box.pud_forecast.lateral_ft), recovered as
+    eur / eur_per_kft so a one-well pad reproduces the stored per-row value exactly."""
+    stream = "gas" if metric.startswith("gas") else "oil"
+    if source == "box":
+        t = "bsg" if stream == "gas" else "bso"
+        return f"{t}.eur", f"({t}.eur / NULLIF({t}.eur_per_kft, 0))"
+    return f"{a}.{stream}_eur", f"({a}.ll_ft / 1000.0)"
+
+
+def row_value_sql(metric: str, source: str, a: str) -> str:
+    """Per-well SQL value of a (source, metric). NULL where the source has no value —
+    for BOX that is every not-covered PUD. Raises ValueError on a metric the source
+    does not carry (the endpoints validate first, so this is a programming guard)."""
+    if metric not in METRICS_BY_SOURCE[source]:
+        raise ValueError(f"metric {metric!r} is not available for source {source!r}")
+    if metric == "well_count":
+        return "NULL::double precision"
+    if metric in BOX_ECON:
+        return f"(be.{metric.removeprefix('box_')}_mm * 1e6)"  # Steven's $MM -> $
+    if metric.endswith("_per_kft"):
+        eur, kft = _eur_kft(metric, source, a)
+        return f"({eur} / NULLIF({kft}, 0))"
+    if source == "box":
+        return _eur_kft(metric, source, a)[0]
+    return f"{a}.{metric}"
 
 # Base predicate: PUD inventory only, in the requested basin. `il` aliases
 # curated.intel_locations in every query below.
@@ -132,11 +199,13 @@ def _cat_sql(col: str) -> str:
 
 def _num_sql(col: str) -> str:
     """SQL ref for a numeric column. Support scores live on the `sup` join
-    (curated.intel_pdp_support); the rest are bare columns on the base table —
-    unambiguous, so they resolve whether the base is aliased `il` (facets/pads) or
-    `w` (gunbarrel), matching _cat_sql."""
+    (curated.intel_pdp_support), BOX values on the BOX joins (box.box_joins); the
+    rest are bare columns on the base table — unambiguous, so they resolve whether
+    the base is aliased `il` (facets/pads) or `w` (gunbarrel), matching _cat_sql."""
     if col in SUPPORT_NUMERIC:
         return f"sup.{col}"
+    if col in BOX_NUMERIC:
+        return BOX_NUMERIC[col]
     return col
 
 
@@ -147,30 +216,38 @@ def _num_sql(col: str) -> str:
 def facets(
     basin: str = _BASIN,
     include_realized: bool = Query(False),
+    source: Source = Query("novi"),
     session: Session = Depends(get_session),
 ) -> dict:
-    """Distinct categorical values + numeric min/max over the screened PUD set."""
+    """Distinct categorical values + numeric min/max over the screened PUD set.
+    BOX range bounds come back only for source=box (they need the BOX joins)."""
+    cols = [c for c in NUMERIC if source == "box" or c not in BOX_NUMERIC]
     cat_aggs = ",\n".join(
         f"array_agg(DISTINCT {_cat_sql(c)}) FILTER (WHERE {_cat_sql(c)} IS NOT NULL) AS {c}"
         for c in CATEGORICAL
     )
     num_aggs = ",\n".join(
-        f"min({_num_sql(c)}) AS {c}_min, max({_num_sql(c)}) AS {c}_max" for c in NUMERIC
+        f"min({_num_sql(c)}) AS {c}_min, max({_num_sql(c)}) AS {c}_max" for c in cols
     )
     recon = "" if include_realized else f" AND {_DRILLABLE}"
+    params: dict = {"basin": basin}
+    box = ""
+    if source == "box":
+        params["box_run"] = record_run(session)["run_id"]
+        box = box_joins("il")
     row = session.execute(
         text(
             f"SELECT {cat_aggs}, {num_aggs} "
             f"FROM curated.intel_locations il {_blueox_join('il')} {_recon_join('il')} "
-            f"{_support_join('il')} "
+            f"{_support_join('il')} {box} "
             f"WHERE {_PUD_BASE}{recon}"
         ),
-        {"basin": basin},
+        params,
     ).mappings().one()
 
     categorical = {c: sorted(row[c] or []) for c in CATEGORICAL}
-    numeric = {c: {"min": row[f"{c}_min"], "max": row[f"{c}_max"]} for c in NUMERIC}
-    return {"basin": basin, "categorical": categorical, "numeric": numeric}
+    numeric = {c: {"min": row[f"{c}_min"], "max": row[f"{c}_max"]} for c in cols}
+    return {"basin": basin, "source": source, "categorical": categorical, "numeric": numeric}
 
 
 # ---------------------------------------------------------------------------
@@ -188,24 +265,57 @@ class HighgradeFilters(BaseModel):
     ranges: dict[str, tuple[float | None, float | None]] = Field(default_factory=dict)
 
 
+class EconDeck(BaseModel):
+    # box_econ.box_pud_econ key parts naming ONE priced case (provenance, D13)
+    deck_id: str
+    assumption_set_id: str
+
+
 class PadsBody(BaseModel):
     basin: Literal["delaware", "midland"]
     filters: HighgradeFilters = Field(default_factory=HighgradeFilters)
     metric: Metric = "npv25"
     agg: Agg = "sum"
     include_realized: bool = False  # False -> drillable inventory only (see _DRILLABLE)
+    source: Source = "novi"
+    econ: EconDeck | None = None  # required for box_pv* metrics
 
 
-def _value_expr(metric: str, agg: str) -> str:
+def check_metric(source: str, metric: str, econ: EconDeck | None) -> None:
+    if metric not in METRICS_BY_SOURCE[source]:
+        raise HTTPException(422, f"metric {metric!r} is not available for source {source!r}")
+    if metric in BOX_ECON and econ is None:
+        raise HTTPException(422, "BOX econ metrics need econ = {deck_id, assumption_set_id}")
+
+
+def value_expr(metric: str, agg: str, source: str, a: str = "il") -> str:
+    """Per-pad aggregate. Rows whose value is NULL (for BOX: every not-covered PUD;
+    for BOX econ: every unpriced one) drop out of sum/avg by SQL semantics and are
+    counted separately (n_valued), never read as zero. Per-1,000-ft metrics are the
+    pad's lateral-weighted ratio sum(EUR) / sum(kft) over wells carrying both."""
     if metric == "well_count":
         return "count(*)"
+    if metric.endswith("_per_kft"):
+        eur, kft = _eur_kft(metric, source, a)
+        both = f"{eur} IS NOT NULL AND {kft} > 0"
+        return f"(sum({eur}) FILTER (WHERE {both}) / NULLIF(sum({kft}) FILTER (WHERE {both}), 0))"
     # per_acre's numerator is the per-pad sum; the /acre division happens in `joined`,
     # where the pad geometry (hence acreage) is available.
     fn = "avg" if agg == "avg" else "sum"
-    return f"{fn}(il.{metric})"  # metric validated against the Metric literal
+    return f"{fn}({row_value_sql(metric, source, a)})"
 
 
-def _build_filters(filters: HighgradeFilters) -> tuple[list[str], dict, list]:
+def n_valued_expr(metric: str, source: str, a: str = "il") -> str:
+    """Wells contributing to the pad value (well_count: every screened well)."""
+    if metric == "well_count":
+        return "count(*)"
+    if metric.endswith("_per_kft"):
+        eur, kft = _eur_kft(metric, source, a)
+        return f"count(*) FILTER (WHERE {eur} IS NOT NULL AND {kft} > 0)"
+    return f"count({row_value_sql(metric, source, a)})"
+
+
+def _build_filters(filters: HighgradeFilters, box: bool = False) -> tuple[list[str], dict, list]:
     """Return (where_fragments, params, expanding_bindparams) from validated filters."""
     clauses: list[str] = []
     params: dict = {}
@@ -219,15 +329,17 @@ def _build_filters(filters: HighgradeFilters) -> tuple[list[str], dict, list]:
             expanding.append(bindparam(col, expanding=True))
 
     for col, bounds in (filters.ranges or {}).items():
-        if col not in NUMERIC:
+        if col not in NUMERIC or (col in BOX_NUMERIC and not box):
             continue  # silently ignore unknown columns rather than trust input
         lo, hi = bounds
         ref = _num_sql(col)  # support scores -> sup.<col>; others stay bare (il/w safe)
+        # a BOX bound never drops a not-covered PUD (see BOX_NUMERIC)
+        keep = "bp.coverage IS DISTINCT FROM 'covered' OR " if col in BOX_NUMERIC else ""
         if lo is not None:
-            clauses.append(f"{ref} >= :{col}_lo")
+            clauses.append(f"({keep}{ref} >= :{col}_lo)")
             params[f"{col}_lo"] = lo
         if hi is not None:
-            clauses.append(f"{ref} <= :{col}_hi")
+            clauses.append(f"({keep}{ref} <= :{col}_hi)")
             params[f"{col}_hi"] = hi
 
     return clauses, params, expanding
@@ -237,17 +349,44 @@ def _build_filters(filters: HighgradeFilters) -> tuple[list[str], dict, list]:
 def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
     # per_acre divides the per-pad sum by the DSU acreage; only meaningful for the
     # $-denominated metrics. Coerce anything else back to a plain sum defensively.
+    check_metric(body.source, body.metric, body.econ)
     agg = body.agg
-    if agg == "per_acre" and not body.metric.startswith(("npv", "pv")):
+    if body.metric.endswith("_per_kft"):
+        agg = "avg"  # lateral-weighted pad ratio; sum / per_acre are meaningless per ft
+    elif agg == "per_acre" and not is_money(body.metric):
         agg = "sum"
 
-    where, params, expanding = _build_filters(body.filters)
+    box = body.source == "box"
+    where, params, expanding = _build_filters(body.filters, box=box)
     params["basin"] = body.basin
     filt_sql = ("AND " + " AND ".join(where)) if where else ""
     recon = "" if body.include_realized else f" AND {_DRILLABLE}"
-    value_expr = _value_expr(body.metric, agg)
+    v_expr = value_expr(body.metric, agg, body.source)
+    n_valued = n_valued_expr(body.metric, body.source)
     # In per_acre mode the final value is sum/acre; otherwise it passes through.
     final_value = "a.value / NULLIF(p.acres, 0)" if agg == "per_acre" else "a.value"
+
+    run = None
+    box_sql = cov_cols = cov_props = cov_summary = nc_select = ""
+    if box:
+        run = record_run(session)
+        params["box_run"] = run["run_id"]
+        box_sql = box_joins("il")
+        if body.metric in BOX_ECON:
+            assert body.econ is not None  # check_metric
+            box_sql += " " + econ_join()
+            params["econ_deck"] = body.econ.deck_id
+            params["econ_aset"] = body.econ.assumption_set_id
+        # one count per coverage class per pad (+ the screen-wide totals below)
+        cov = coverage_sql("il")
+        cov_cols = "".join(f", count(*) FILTER (WHERE {cov} = '{c}') AS nc_{c}" for c in COVERAGE_CLASSES)
+        nc_select = "".join(f", a.nc_{c}" for c in COVERAGE_CLASSES)
+        cov_props = "".join(f", 'nc_{c}', nc_{c}" for c in COVERAGE_CLASSES)
+        cov_summary = (
+            ", 'coverage_counts', (SELECT json_build_object("
+            + ", ".join(f"'{c}', COALESCE(sum(nc_{c}), 0)" for c in COVERAGE_CLASSES)
+            + ") FROM agg)"
+        )
 
     sql = text(f"""
         WITH agg AS (
@@ -256,9 +395,12 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
             -- sql/46 splits each name into 1-mile groups. A stick with no pad_name
             -- (or no geometry) has no member row -> pad_key NULL -> wells_without_pad.
             SELECT pm.pad_key,
-                   {value_expr} AS value,
-                   count(*)     AS n_wells
+                   {v_expr}   AS value,
+                   {n_valued} AS n_valued,
+                   count(*)   AS n_wells
+                   {cov_cols}
             FROM curated.intel_locations il {_blueox_join('il')} {_recon_join('il')} {_support_join('il')}
+            {box_sql}
             LEFT JOIN curated.intel_pad_member pm ON pm.stick_id = il.stick_id
             WHERE {_PUD_BASE} {filt_sql}{recon}
             GROUP BY pm.pad_key
@@ -273,7 +415,8 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
             WHERE basin = :basin
         ),
         joined AS (
-            SELECT a.pad_key, p.pad_name, p.n_parts, {final_value} AS value, a.n_wells, p.acres, p.geom
+            SELECT a.pad_key, p.pad_name, p.n_parts, {final_value} AS value, a.n_valued, a.n_wells,
+                   p.acres, p.geom {nc_select}
             FROM agg a
             LEFT JOIN pad_geom p ON p.pad_key = a.pad_key
             WHERE a.pad_key IS NOT NULL
@@ -285,6 +428,11 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
             -- stick groups (sql/46) — surfaced so a split pad is never a surprise.
             'names_split',       count(DISTINCT pad_name) FILTER (WHERE n_parts > 1),
             'well_count',        COALESCE(sum(n_wells), 0),
+            -- wells carrying a value for the metric (BOX: covered; BOX econ: priced);
+            -- the rest are reported, never summed as zero
+            'valued_count',      COALESCE(sum(n_valued), 0),
+            'pads_unvalued',     count(*) FILTER (WHERE geom IS NOT NULL AND n_valued = 0)
+            {cov_summary},
             -- screened PUDs Novi assigned to no pad (2026Q3: all of Delaware) —
             -- they cannot be drawn, so the client must say so instead of a blank map.
             'wells_without_pad', COALESCE((SELECT n_wells FROM agg WHERE pad_key IS NULL), 0),
@@ -298,8 +446,8 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
                         'geometry', ST_AsGeoJSON(geom)::json,
                         'properties', json_build_object(
                             'pad_key', pad_key, 'pad_name', pad_name, 'n_parts', n_parts,
-                            'value', value, 'n_wells', n_wells,
-                            'acres', round(acres::numeric, 1)
+                            'value', value, 'n_valued', n_valued, 'n_wells', n_wells,
+                            'acres', round(acres::numeric, 1) {cov_props}
                         )
                     )) FILTER (WHERE geom IS NOT NULL), '[]'::json)
             )
@@ -310,7 +458,12 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
         sql = sql.bindparams(*expanding)
 
     result = json.loads(session.execute(sql, params).scalar())
-    return {"basin": body.basin, "metric": body.metric, "agg": agg, **result}
+    out = {"basin": body.basin, "metric": body.metric, "agg": agg, "source": body.source, **result}
+    if run is not None:
+        out["box_run"] = {k: run[k] for k in ("run_id", "report_version", "data_through", "code_sha")}
+        if body.metric in BOX_ECON and body.econ is not None:
+            out["econ"] = body.econ.model_dump()
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +475,8 @@ class GunbarrelBody(BaseModel):
     filters: HighgradeFilters = Field(default_factory=HighgradeFilters)
     metric: Metric = "npv25"
     include_realized: bool = False  # gates the in_filter highlight, matching the choropleth
+    source: Source = "novi"
+    econ: EconDeck | None = None
 
 
 @router.post("/gunbarrel")
@@ -342,7 +497,9 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
     wells are pulled by spatially containing their lateral midpoint in this DSU
     polygon.
     """
-    where, params, expanding = _build_filters(body.filters)
+    check_metric(body.source, body.metric, body.econ)
+    box = body.source == "box"
+    where, params, expanding = _build_filters(body.filters, box=box)
     # in_filter is true only for a PUD matching every active filter clause; PDP
     # (and any off-filter PUD) -> false. `category` is always the PUD gate, so a
     # PDP can never be in_filter even when the filter set is empty. The drillable
@@ -352,10 +509,22 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
     if not body.include_realized:
         gate.append(_DRILLABLE)
     in_filter_expr = "CASE WHEN " + " AND ".join(gate) + " THEN true ELSE false END"
-    # metric is validated against the Metric literal; well_count has no per-well value.
-    metric_expr = "NULL" if body.metric == "well_count" else f"w.{body.metric}"
+    # metric is validated against the source's metric set; well_count has no per-well
+    # value, and under BOX a not-covered PUD's value is NULL (shown blank, never zero).
+    metric_expr = row_value_sql(body.metric, body.source, "w")
     params["basin"] = body.basin
     params["pad_key"] = body.pad_key
+    box_sql = ""
+    box_cols = "NULL::text AS box_coverage"
+    if box:
+        params["box_run"] = record_run(session)["run_id"]
+        box_sql = box_joins("w")
+        if body.metric in BOX_ECON:
+            assert body.econ is not None  # check_metric
+            box_sql += " " + econ_join()
+            params["econ_deck"] = body.econ.deck_id
+            params["econ_aset"] = body.econ.assumption_set_id
+        box_cols = f"{coverage_sql('w')} AS box_coverage"
 
     # Two arms: PUDs from curated.intel_locations (the screen's filter columns —
     # spacing/complet/rq scores — only exist there); PDP context from
@@ -372,7 +541,7 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
                fb.formation_blueox, w.basin AS basin_blueox, fb.formation_blueox_source,
                w.deplet_t,
                w.tvd, w.ll_ft, {in_filter_expr} AS in_filter,
-               {metric_expr} AS metric_value,
+               {metric_expr} AS metric_value, {box_cols},
                ST_X(ST_LineInterpolatePoint(w.wellstick_geom, 0.5)) AS mx,
                ST_Y(ST_LineInterpolatePoint(w.wellstick_geom, 0.5)) AS my,
                ST_X(ST_StartPoint(w.wellstick_geom)) AS sx,
@@ -384,6 +553,7 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
         LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = w.stick_id
         {_recon_join('w')}
         {_support_join('w')}
+        {box_sql}
         WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL AND w.tvd IS NOT NULL
           AND w.category = 'PUD'
 
@@ -393,7 +563,7 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
                w.formation_blueox, w.basin AS basin_blueox, w.formation_blueox_source,
                w.deplet_t,
                w.tvd, w.ll_ft, false AS in_filter,
-               NULL::double precision AS metric_value,
+               NULL::double precision AS metric_value, NULL::text AS box_coverage,
                ST_X(ST_LineInterpolatePoint(w.wellstick_geom, 0.5)) AS mx,
                ST_Y(ST_LineInterpolatePoint(w.wellstick_geom, 0.5)) AS my,
                ST_X(ST_StartPoint(w.wellstick_geom)) AS sx,
@@ -447,6 +617,7 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
             "ll_ft": float(w["ll_ft"]) if w["ll_ft"] is not None else None,
             "offset_ft": round(offset_ft, 1), "in_filter": bool(w["in_filter"]),
             "metric_value": float(w["metric_value"]) if w["metric_value"] is not None else None,
+            "box_coverage": w["box_coverage"],
         })
     wells.sort(key=lambda x: x["offset_ft"])
     return {

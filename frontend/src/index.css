@@ -205,3 +205,15 @@ button.link { background: none; border: none; color: #2563eb; cursor: pointer; f
 .acc-charts { display: flex; gap: 8px; flex-wrap: wrap; }
 .acc-selrow { cursor: pointer; }
 .acc-selrow:hover td { background: #f4f4f5; }
+
+/* ---- BOX (Highgrade forecast source, plan step 8) ---- */
+.hg-box-tbl { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.hg-box-tbl th, .hg-box-tbl td { padding: 1px 4px; text-align: left; }
+.hg-box-tbl th { color: #71717a; font-weight: 600; }
+.hg-box-tbl tr.nc td { color: #71717a; }
+.box-wu h4 { margin: 10px 0 4px; font-size: 12px; color: #27272a; }
+.box-tbl { border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; width: 100%; }
+.box-tbl th, .box-tbl td { padding: 2px 6px; border-bottom: 1px solid #f4f4f5; text-align: left; white-space: nowrap; }
+.box-tbl th { color: #52525b; font-weight: 600; background: #fafafa; position: sticky; top: 0; }
+.box-tbl tr.nc td { color: #a1a1aa; }
+.box-tbl td.box-flags { white-space: normal; min-width: 180px; color: #92400e; }

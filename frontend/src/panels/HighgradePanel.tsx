@@ -1,9 +1,16 @@
 import { useEffect, useState } from "react";
 
 import {
+  COVERAGE_LABELS,
+  fetchBoxMeta,
   fetchFacets,
   fetchHighgradePads,
+  isMoneyMetric,
+  isPerKftMetric,
+  type BoxMeta,
   type CategoricalField,
+  type EconDeck,
+  type ForecastSource,
   type HighgradeAgg,
   type HighgradeFacets,
   type HighgradeFilters,
@@ -13,28 +20,39 @@ import { colorForBlueox } from "../map/formations";
 import { useMapStore, type OverlayKey } from "../store";
 import { ChipGroup } from "./ChipGroup";
 
-const METRICS: { value: HighgradeMetric; label: string }[] = [
-  { value: "npv5", label: "NPV @ 5%" },
-  { value: "npv10", label: "NPV @ 10%" },
-  { value: "npv15", label: "NPV @ 15%" },
-  { value: "npv20", label: "NPV @ 20%" },
-  { value: "npv25", label: "NPV @ 25%" },
-  { value: "pv5", label: "PV @ 5%" },
-  { value: "pv10", label: "PV @ 10%" },
-  { value: "pv15", label: "PV @ 15%" },
-  { value: "pv20", label: "PV @ 20%" },
-  { value: "pv25", label: "PV @ 25%" },
-  { value: "oil_eur", label: "Oil EUR" },
-  { value: "gas_eur", label: "Gas EUR" },
-  { value: "well_count", label: "Well count" },
+// Exported: the legend and the gunbarrel label from the same table.
+export const METRICS: { value: HighgradeMetric; label: string; sources: ForecastSource[] }[] = [
+  { value: "npv5", label: "NPV @ 5%", sources: ["novi"] },
+  { value: "npv10", label: "NPV @ 10%", sources: ["novi"] },
+  { value: "npv15", label: "NPV @ 15%", sources: ["novi"] },
+  { value: "npv20", label: "NPV @ 20%", sources: ["novi"] },
+  { value: "npv25", label: "NPV @ 25%", sources: ["novi"] },
+  { value: "pv5", label: "PV @ 5%", sources: ["novi"] },
+  { value: "pv10", label: "PV @ 10%", sources: ["novi"] },
+  { value: "pv15", label: "PV @ 15%", sources: ["novi"] },
+  { value: "pv20", label: "PV @ 20%", sources: ["novi"] },
+  { value: "pv25", label: "PV @ 25%", sources: ["novi"] },
+  { value: "oil_eur", label: "Oil EUR", sources: ["novi", "box"] },
+  { value: "gas_eur", label: "Gas EUR", sources: ["novi", "box"] },
+  { value: "oil_eur_per_kft", label: "Oil EUR / 1,000 ft", sources: ["novi", "box"] },
+  { value: "gas_eur_per_kft", label: "Gas EUR / 1,000 ft", sources: ["novi", "box"] },
+  // Steven's box_econ values on BOX volumes, one named deck (display-only, D13)
+  { value: "box_pv0", label: "Steven PV0", sources: ["box"] },
+  { value: "box_pv10", label: "Steven PV10", sources: ["box"] },
+  { value: "box_pv15", label: "Steven PV15", sources: ["box"] },
+  { value: "box_pv20", label: "Steven PV20", sources: ["box"] },
+  { value: "box_pv25", label: "Steven PV25", sources: ["box"] },
+  { value: "box_pv30", label: "Steven PV30", sources: ["box"] },
+  { value: "well_count", label: "Well count", sources: ["novi", "box"] },
 ];
+const DEFAULT_METRIC: Record<ForecastSource, HighgradeMetric> = { novi: "npv25", box: "oil_eur_per_kft" };
+const DECK_SEP = "\u001f"; // deck_id / assumption_set_id separator in the deck <select> value
 
 // tier multi-selects (4 chips each, Tier-1..4)
 const TIER_FIELDS: { field: CategoricalField; label: string; hint?: string }[] = [
   { field: "rqt", label: "Rock quality tier" },
   { field: "spacing_t", label: "Spacing tier" },
-  { field: "deplet_t", label: "Depletion tier",
-    hint: "Tier-4 (offset-depleted) off by default — drained rock; click to include." },
+  { field: "deplet_t", label: "Depletion tier" },
   { field: "complet_t", label: "Completion tier" },
 ];
 
@@ -46,13 +64,17 @@ const HG_OVERLAYS: { key: OverlayKey; label: string }[] = [
 ];
 
 // numeric range sliders (min/max entry, seeded with the facet bounds)
-const RANGE_FIELDS: { col: string; label: string; money?: boolean; hint?: string }[] = [
+// `sources` limits a row to one forecast source (default: both — Novi screen attributes).
+const BOX_RANGE_HINT = "BOX bounds apply to covered PUDs only; a PUD without a BOX forecast stays in the screen, counted under its not-covered class.";
+const RANGE_FIELDS: { col: string; label: string; money?: boolean; hint?: string; sources?: ForecastSource[] }[] = [
   { col: "rqs", label: "Rock-quality score" },
   { col: "spacing_s", label: "Spacing score" },
   { col: "deplet_s", label: "Depletion score" },
   { col: "complet_s", label: "Completion score" },
-  { col: "npv25", label: "NPV @ 25% ($)", money: true },
-  { col: "oil_eur", label: "Oil EUR (bbl)" },
+  { col: "npv25", label: "NPV @ 25% ($)", money: true, sources: ["novi"] },
+  { col: "oil_eur", label: "Oil EUR (bbl)", sources: ["novi"] },
+  { col: "box_oil_eur", label: "BOX oil EUR (bbl)", sources: ["box"], hint: BOX_RANGE_HINT },
+  { col: "box_oil_eur_per_kft", label: "BOX oil EUR / 1,000 ft (bbl)", sources: ["box"], hint: BOX_RANGE_HINT },
   { col: "ll_ft", label: "Lateral length (ft)" },
   // offset-PDP support (curated.intel_pdp_support, sql/30) — verifiability screen
   { col: "pdp_count_3mi", label: "PDP offsets (3 mi)" },
@@ -73,10 +95,18 @@ const EMPTY_CATS: Record<CategoricalField, string[]> = {
 // Highgrade default screens TRUE drillable inventory: not-already-drilled (the
 // reconciliation gate, server-side) AND not offset-depleted. Novi's deplet_t
 // Tier-4 = drained rock (frac grows into the depleted offset; produces water) —
-// technically drillable, worthless — so the depletion-tier filter defaults to
+// technically drillable, worthless — so on Novi the depletion-tier filter defaults to
 // Tier-1/2/3 (Tier-4 off). The user can click Tier-4 back in to see it.
-const DEFAULT_CATS: Record<CategoricalField, string[]> = {
-  ...EMPTY_CATS, deplet_t: ["Tier-1", "Tier-2", "Tier-3"],
+// BOX (gate 8, Michael 2026-10-15): no depletion-tier default. A BOX workup already
+// carries offset depletion through its named analogs, so Novi's Tier-4 cut would
+// double-count it — and it removed 1,307 of the 1,907 covered PUDs.
+const DEFAULT_CATS: Record<ForecastSource, Record<CategoricalField, string[]>> = {
+  novi: { ...EMPTY_CATS, deplet_t: ["Tier-1", "Tier-2", "Tier-3"] },
+  box: { ...EMPTY_CATS },
+};
+const DEPLET_HINT: Record<ForecastSource, string> = {
+  novi: "Tier-4 (offset-depleted) off by default — drained rock; click to include.",
+  box: "No default on BOX: all tiers, Tier-4 included (see the BOX note above). Click tiers to screen anyway.",
 };
 
 type RangeMap = Record<string, [number | null, number | null]>;
@@ -100,6 +130,12 @@ export function HighgradePanel() {
   const closeHgGunbarrel = useMapStore((s) => s.closeHgGunbarrel);
   const overlays = useMapStore((s) => s.overlays);
   const toggleOverlay = useMapStore((s) => s.toggleOverlay);
+  const source = useMapStore((s) => s.hgSource);
+  const setSource = useMapStore((s) => s.setHgSource);
+  const econDeck = useMapStore((s) => s.hgEconDeck);
+  const setEconDeck = useMapStore((s) => s.setHgEconDeck);
+  const boxMeta = useMapStore((s) => s.boxMeta);
+  const setBoxMeta = useMapStore((s) => s.setBoxMeta);
 
   const [facets, setFacets] = useState<HighgradeFacets | null>(null);
   const [cats, setCats] = useState<Record<CategoricalField, string[]>>({ ...EMPTY_CATS });
@@ -113,26 +149,54 @@ export function HighgradePanel() {
   // Reset the form on basin change (filters are basin-specific). Not on the
   // realized toggle — those selections stay valid across the wider/narrower set.
   useEffect(() => {
-    setCats({ ...DEFAULT_CATS });
+    setCats({ ...DEFAULT_CATS[useMapStore.getState().hgSource] });
     setRanges({ ...DEFAULT_RANGES });
     setOpSearch("");
   }, [basin]);
 
-  // (Re)load facets on basin or realized-toggle change so the filter bounds /
+  // (Re)load facets on basin / realized-toggle / source change so the filter bounds /
   // distinct values reflect exactly the PUD population being screened.
   useEffect(() => {
     let live = true;
     setFacets(null);
-    fetchFacets(basin, includeRealized)
+    fetchFacets(basin, includeRealized, source)
       .then((f) => { if (live) setFacets(f); })
       .catch((e) => { if (live) setError(String(e)); });
     return () => { live = false; };
-  }, [basin, includeRealized]);
+  }, [basin, includeRealized, source]);
+
+  // BOX record run + provenance + Steven's priced decks, once per basin.
+  useEffect(() => {
+    if (source !== "box" || boxMeta?.basin === basin) return;
+    let live = true;
+    fetchBoxMeta(basin)
+      .then((m) => {
+        if (!live) return;
+        setBoxMeta(m);
+        setEconDeck(m.decks.length ? { deck_id: m.decks[0].deck_id, assumption_set_id: m.decks[0].assumption_set_id } : null);
+      })
+      .catch((e) => { if (live) setError(String(e)); });
+    return () => { live = false; };
+  }, [source, basin, boxMeta, setBoxMeta, setEconDeck]);
+
+  // A metric the new source does not carry falls back to that source's default;
+  // source-only range bounds are dropped so they never leak into the other source.
+  const switchSource = (src: ForecastSource) => {
+    if (src === source) return;
+    setSource(src);
+    // the depletion-tier default differs by source (see DEFAULT_CATS)
+    setCats((c) => ({ ...c, deplet_t: [...DEFAULT_CATS[src].deplet_t] }));
+    setMetric((m) => (METRICS.find((x) => x.value === m)?.sources.includes(src) ? m : DEFAULT_METRIC[src]));
+    setRanges((r) => {
+      const out = { ...r };
+      RANGE_FIELDS.forEach((f) => { if (f.sources && !f.sources.includes(src)) delete out[f.col]; });
+      return out;
+    });
+  };
 
   // per_acre is only offered for the $-metrics; drop it if the metric changes away.
   useEffect(() => {
-    const isMoney = metric.startsWith("npv") || metric.startsWith("pv");
-    if (!isMoney) setAgg((a) => (a === "per_acre" ? "sum" : a));
+    if (!isMoneyMetric(metric)) setAgg((a) => (a === "per_acre" ? "sum" : a));
   }, [metric]);
 
   const toggleCat = (field: CategoricalField, value: string) =>
@@ -163,7 +227,10 @@ export function HighgradePanel() {
       });
       const rangeEntries = Object.entries(ranges).filter(([, [lo, hi]]) => lo != null || hi != null);
       if (rangeEntries.length) filters.ranges = Object.fromEntries(rangeEntries);
-      const res = await fetchHighgradePads({ basin, filters, metric, agg, include_realized: includeRealized });
+      const res = await fetchHighgradePads({
+        basin, filters, metric, agg, include_realized: includeRealized, source,
+        econ: metric.startsWith("box_pv") ? econDeck : null,
+      });
       setHighgrade(res);
       // Record the applied screen so a per-DSU gunbarrel can grey off-filter wells.
       setHighgradeFilters(filters);
@@ -175,7 +242,7 @@ export function HighgradePanel() {
   };
 
   const reset = () => {
-    setCats({ ...DEFAULT_CATS });
+    setCats({ ...DEFAULT_CATS[source] });
     setRanges({ ...DEFAULT_RANGES });
     setHighgrade(null);
     setHighgradeFilters(null);
@@ -183,7 +250,11 @@ export function HighgradePanel() {
   };
 
   const isWellCount = metric === "well_count";
-  const money = metric.startsWith("npv") || metric.startsWith("pv");
+  const money = isMoneyMetric(metric);
+  const perKft = isPerKftMetric(metric);
+  const noEcon = source === "box" && (boxMeta?.decks.length ?? 0) === 0;
+  const metricOptions = METRICS.filter((m) => m.sources.includes(source) && !(noEcon && m.value.startsWith("box_pv")));
+  const rangeFields = RANGE_FIELDS.filter((f) => !f.sources || f.sources.includes(source));
 
   return (
     <div className="panel highgrade">
@@ -192,6 +263,24 @@ export function HighgradePanel() {
         <button className={basin === "midland" ? "active" : ""} onClick={() => setBasin("midland")}>Midland</button>
       </div>
       <div className="count">Screen undeveloped (BASE_CASE) inventory → highlight target pads.</div>
+
+      <h3>Forecast source</h3>
+      <div className="seg sm">
+        <button className={source === "novi" ? "active" : ""} onClick={() => switchSource("novi")}>Novi</button>
+        <button className={source === "box" ? "active" : ""} onClick={() => switchSource("box")}>BOX</button>
+      </div>
+      {source === "novi" && (
+        <div className="count" style={{ margin: "2px 0 10px" }}>
+          Novi Intelligence forecasts; NPV/PV = Novi's pre-computed screen on one flat deck, not an authoritative value.
+        </div>
+      )}
+      {source === "box" && <BoxRunNote meta={boxMeta} />}
+      {source === "box" && (
+        <div className="count" style={{ margin: "0 0 10px" }}>
+          Depletion tier: no default on BOX — Tier-4 (offset-depleted) PUDs are included, because each BOX workup
+          already reflects offset depletion through its analogs. Click tiers to screen anyway.
+        </div>
+      )}
 
       <h3>Inventory</h3>
       <div className="seg sm">
@@ -207,10 +296,31 @@ export function HighgradePanel() {
       <h3>Metric (per pad)</h3>
       <div className="row" style={{ marginBottom: 6 }}>
         <select value={metric} onChange={(e) => setMetric(e.target.value as HighgradeMetric)} style={{ flex: 1, fontSize: 12 }}>
-          {METRICS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+          {metricOptions.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
         </select>
       </div>
-      {!isWellCount && (
+      {source === "box" && boxMeta && boxMeta.decks.length > 0 && metric.startsWith("box_pv") && (
+        <div className="row" style={{ marginBottom: 6 }}>
+          <select
+            value={econDeck ? `${econDeck.deck_id}${DECK_SEP}${econDeck.assumption_set_id}` : ""}
+            onChange={(e) => {
+              const [deck_id, assumption_set_id] = e.target.value.split(DECK_SEP);
+              setEconDeck({ deck_id, assumption_set_id });
+            }}
+            style={{ flex: 1, fontSize: 12 }}>
+            {boxMeta.decks.map((d) => (
+              <option key={`${d.deck_id}${DECK_SEP}${d.assumption_set_id}`} value={`${d.deck_id}${DECK_SEP}${d.assumption_set_id}`}>
+                {d.deck_id} · {d.assumption_set_id} · {d.n_priced.toLocaleString()} priced
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      {source === "box" && <BoxEconNote meta={boxMeta} deck={econDeck} metric={metric} />}
+      {perKft && (
+        <div className="count" style={{ margin: "0 0 10px" }}>Pad value = lateral-weighted: Σ EUR ÷ Σ lateral (kft).</div>
+      )}
+      {!isWellCount && !perKft && (
         <div className="seg sm" style={{ marginBottom: 10 }}>
           <button className={agg === "sum" ? "active" : ""} onClick={() => setAgg("sum")}>Sum</button>
           <button className={agg === "avg" ? "active" : ""} onClick={() => setAgg("avg")}>Avg / well</button>
@@ -236,7 +346,7 @@ export function HighgradePanel() {
             <ChipGroup
               key={field}
               label={label}
-              hint={hint}
+              hint={field === "deplet_t" ? DEPLET_HINT[source] : hint}
               options={facets.categorical[field]}
               selected={cats[field]}
               onToggle={(v) => toggleCat(field, v)}
@@ -270,7 +380,7 @@ export function HighgradePanel() {
           </div>
 
           <h3 style={{ marginTop: 10 }}>Ranges</h3>
-          {RANGE_FIELDS.map(({ col, label, money: m, hint }) => (
+          {rangeFields.map(({ col, label, money: m, hint }) => (
             <RangeRow
               key={col}
               label={label}
@@ -297,9 +407,16 @@ export function HighgradePanel() {
         <div className="hg-summary">
           <div><strong>{highgrade.pad_count.toLocaleString()}</strong> pads · <strong>{highgrade.well_count.toLocaleString()}</strong> wells</div>
           <div className="count" style={{ margin: "2px 0 0" }}>
-            {METRICS.find((m) => m.value === highgrade.metric)?.label}
-            {highgrade.metric !== "well_count" ? ` · ${aggLabel(highgrade.agg)}` : ""}: {fmt(highgrade.value_min, money)} … {fmt(highgrade.value_max, money)}
+            {highgrade.source === "box" ? "BOX " : ""}{METRICS.find((m) => m.value === highgrade.metric)?.label}
+            {highgrade.metric === "well_count" ? ""
+              : isPerKftMetric(highgrade.metric) ? " · lateral-weighted / pad"
+              : ` · ${aggLabel(highgrade.agg)}`}: {fmt(highgrade.value_min, isMoneyMetric(highgrade.metric))} … {fmt(highgrade.value_max, isMoneyMetric(highgrade.metric))}
           </div>
+          {highgrade.source === "box" && highgrade.coverage_counts && (
+            <CoverageSummary counts={highgrade.coverage_counts} valued={highgrade.valued_count ?? 0}
+              total={highgrade.well_count + highgrade.wells_without_pad} metric={highgrade.metric}
+              padsUnvalued={highgrade.pads_unvalued ?? 0} />
+          )}
           {highgrade.pads_missing_geom > 0 && (
             <div className="count" style={{ margin: "2px 0 0", color: "#92400e" }}>
               {highgrade.pads_missing_geom.toLocaleString()} matching pads have no polygon (not drawn)
@@ -358,7 +475,107 @@ function RangeRow({
 }
 
 function aggLabel(agg: string): string {
-  return agg === "per_acre" ? "$/acre" : agg;
+  return agg === "per_acre" ? "$/acre" : agg === "avg" ? "avg / well" : agg;
+}
+
+function pct(v: number | null | undefined, digits = 1): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  return `${v >= 0 ? "+" : ""}${(v * 100).toFixed(digits)}%`;
+}
+
+// BOX provenance + the method statement every BOX number carries (D59 condition 3,
+// D62/D63/D72). Sibling of the Novi caveat line.
+function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
+  if (!meta) return <div className="count">Loading BOX record run…</div>;
+  const r = meta.run;
+  const oil = meta.disclosure.filter((d) => d.stream === "oil");
+  return (
+    <div className="caveat" style={{ margin: "4px 0 10px" }}>
+      <div>
+        <strong>BOX run {r.run_id}</strong> (record) · Novi {r.report_version} sticks · production through {r.data_through} ·
+        code {r.code_sha.slice(0, 7)}
+      </div>
+      <div style={{ marginTop: 4 }}>
+        Analog-workup forecasts (D57): deal-intake analog cohort <strong>P50</strong> per 1,000 ft × lateral, then a
+        stated walk-forward haircut. Uptime-free (apply F(k) or a downtime factor, never both); oil + gas only, no
+        water (D72); EUR = raw 50-yr technical integral. v1 covers Delaware WCA_1 / WCA_2 inside the WCA extent;
+        every other PUD is shown as not covered, never zero.
+      </div>
+      <table className="hg-box-tbl">
+        <thead><tr><th>oil</th><th>measured bias</th><th>haircut</th><th>held-out after</th></tr></thead>
+        <tbody>
+          {oil.map((d) => (
+            <tr key={d.horizon}>
+              <td>{d.horizon}</td><td>{pct(d.measured_bias)}</td><td>×{d.haircut.toFixed(3)}</td>
+              <td>{pct(d.holdout_bias_after)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="count" style={{ margin: "2px 0 0" }}>
+        Bias = actual ÷ forecast − 1 (negative = method forecast high). The cum-48 factor holds for the 50-yr EUR (D62).
+      </div>
+      {meta.stale && (
+        <div style={{ color: "#991b1b", marginTop: 4 }}>
+          The warehouse holds Novi {meta.intel_report_versions.join(", ")}; this run keys on {r.report_version} sticks —
+          BOX coverage reads as "no BOX row" until the quarterly BOX refresh.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// BOX econ sibling of the Novi NPV caveat: Steven's box_econ screen with provenance.
+function BoxEconNote({ meta, deck, metric }: { meta: BoxMeta | null; deck: EconDeck | null; metric: string }) {
+  if (!meta) return null;
+  if (meta.decks.length === 0) {
+    return (
+      <div className="count" style={{ margin: "0 0 8px" }}>
+        BOX econ: none yet — Steven has not priced run {meta.run.run_id} (box_econ.box_pud_econ is empty for it).
+        $ metrics appear here once he loads a deck.
+      </div>
+    );
+  }
+  if (!metric.startsWith("box_pv") || !deck) return null;
+  const d = meta.decks.find((x) => x.deck_id === deck.deck_id && x.assumption_set_id === deck.assumption_set_id);
+  return (
+    <div className="count" style={{ margin: "0 0 8px" }}>
+      Steven's economics on BOX run {meta.run.run_id} volumes — a display-only screen, not computed here (D13).
+      Deck {deck.deck_id} / {deck.assumption_set_id}
+      {d ? ` · WTI ${d.wti ?? "—"} · HH ${d.hh ?? "—"} · downtime: ${d.downtime_basis} · built ${d.built_at?.slice(0, 10) ?? "—"}` : ""}.
+      Unpriced covered PUDs are counted, not zeroed.
+    </div>
+  );
+}
+
+function CoverageSummary({ counts, valued, total, metric, padsUnvalued }: {
+  counts: Record<string, number>; valued: number; total: number; metric: string; padsUnvalued: number;
+}) {
+  const rows = Object.entries(COVERAGE_LABELS).filter(([k]) => (counts[k] ?? 0) > 0);
+  const valueNote =
+    metric === "well_count" ? "Well count includes every screened PUD."
+    : metric.startsWith("box_pv") ? `${valued.toLocaleString()} priced PUDs carry the value; the rest are excluded, not zeroed.`
+    : `${valued.toLocaleString()} covered PUDs carry the value; the rest are excluded, not zeroed.`;
+  return (
+    <div style={{ margin: "6px 0 0" }}>
+      <div className="count" style={{ margin: 0 }}>BOX coverage of the {total.toLocaleString()} screened PUDs:</div>
+      <table className="hg-box-tbl">
+        <tbody>
+          {rows.map(([k, label]) => (
+            <tr key={k} className={k === "covered" ? "" : "nc"}>
+              <td>{label}</td><td style={{ textAlign: "right" }}>{(counts[k] ?? 0).toLocaleString()}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="count" style={{ margin: "2px 0 0" }}>{valueNote}</div>
+      {padsUnvalued > 0 && (
+        <div className="count" style={{ margin: "2px 0 0" }}>
+          {padsUnvalued.toLocaleString()} pads have no {metric.startsWith("box_pv") ? "priced" : "covered"} PUD — drawn grey.
+        </div>
+      )}
+    </div>
+  );
 }
 function fmt(v: number | null, money: boolean): string {
   if (v == null || !Number.isFinite(v)) return "—";

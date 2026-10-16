@@ -25,6 +25,8 @@ import { DrawingController, bboxToPolygon, type GeoJsonPolygon } from "./map/dra
 import { choroplethFillColor } from "./map/highgradeColors";
 import { accuracyGridFill, accuracyLineColor } from "./map/accuracyColors";
 import { accErrProp, fetchAccSelection } from "./api/accuracy";
+import { COVERAGE_LABELS, isMoneyMetric } from "./api/highgrade";
+import { METRICS } from "./panels/HighgradePanel";
 import { selectByPolygon } from "./api/select";
 import { fetchWellProduction } from "./api/production";
 import { basinBbox, useMapStore, type DealFeature, type OverlayKey } from "./store";
@@ -298,7 +300,7 @@ export function MapView() {
         if (!f) return;
         map.getCanvas().style.cursor = "pointer";
         const hg = useMapStore.getState().highgrade;
-        popupRef.current!.setLngLat(e.lngLat).setHTML(padPopupHtml(f.properties, hg?.metric ?? "", hg?.agg ?? "")).addTo(map);
+        popupRef.current!.setLngLat(e.lngLat).setHTML(padPopupHtml(f.properties, hg?.metric ?? "", hg?.agg ?? "", hg?.source ?? "novi")).addTo(map);
       };
       map.on("mousemove", HG_FILL, onPadMove);
       map.on("mouseleave", HG_FILL, () => { map.getCanvas().style.cursor = ""; popupRef.current?.remove(); });
@@ -597,10 +599,15 @@ export function MapView() {
     const src = map.getSource(HG_SOURCE) as maplibregl.GeoJSONSource | undefined;
     if (!src) return;
     if (highgrade) {
-      // Drop pads with a null metric value (can't be placed on the color scale).
-      const features = (highgrade.pads.features ?? []).filter((f) => f.properties?.value != null);
+      // Novi: drop pads with a null metric value (can't be placed on the color scale).
+      // BOX: keep them — a pad with no covered PUD is drawn grey, never omitted or zeroed.
+      const box = highgrade.source === "box";
+      const features = (highgrade.pads.features ?? []).filter((f) => box || f.properties?.value != null);
+      // Stacked-bench pads overlap: draw grey (no covered PUD) pads first so a
+      // covered pad is never hidden under a not-covered one.
+      if (box) features.sort((a, b) => Number((a.properties?.n_valued ?? 0) > 0) - Number((b.properties?.n_valued ?? 0) > 0));
       src.setData({ type: "FeatureCollection", features });
-      map.setPaintProperty(HG_FILL, "fill-color", choroplethFillColor(highgrade.value_min, highgrade.value_max));
+      map.setPaintProperty(HG_FILL, "fill-color", choroplethFillColor(highgrade.value_min, highgrade.value_max, box));
     } else {
       src.setData(EMPTY_FC);
     }
@@ -685,12 +692,24 @@ function esc(s: unknown): string {
   );
 }
 
-function padPopupHtml(p: Record<string, unknown>, metric: string, agg: string): string {
-  const money = metric.startsWith("npv") || metric.startsWith("pv");
+function padPopupHtml(p: Record<string, unknown>, metric: string, agg: string, source: string): string {
+  const money = isMoneyMetric(metric);
   const perAcre = agg === "per_acre";
+  const box = source === "box";
   const v = p.value;
-  const valStr = v == null ? "—" : money ? `${fmtMoney(v)}${perAcre ? "/ac" : ""}` : fmtInt(v);
-  const metricLabel = metric === "well_count" ? "Wells" : metric.toUpperCase();
+  const nValued = Number(p.n_valued ?? 0);
+  const valStr = box && nValued === 0 && metric !== "well_count"
+    ? (metric.startsWith("box_pv") ? "no priced PUD" : "not covered by BOX")
+    : v == null ? "—" : money ? `${fmtMoney(v)}${perAcre ? "/ac" : ""}` : fmtInt(v);
+  const metricLabel = metric === "well_count" ? "Wells"
+    : `${box ? "BOX " : ""}${METRICS.find((m) => m.value === metric)?.label ?? metric}`;
+  // BOX: why each PUD in the pad is (not) forecast — one row per non-empty class
+  const covRows = box
+    ? Object.entries(COVERAGE_LABELS)
+      .filter(([k]) => Number(p[`nc_${k}`] ?? 0) > 0)
+      .map(([k, label]) => `<tr><td>${esc(label)}</td><td>${fmtInt(p[`nc_${k}`])}</td></tr>`)
+      .join("")
+    : "";
   const acresRow = p.acres == null ? "" : `<tr><td>Acres</td><td>${fmtInt(p.acres)}</td></tr>`;
   const nParts = Number(p.n_parts ?? 1);
   const splitRow = nParts > 1
@@ -703,7 +722,9 @@ function padPopupHtml(p: Record<string, unknown>, metric: string, agg: string): 
         <tr><td>Wells</td><td>${fmtInt(p.n_wells)}</td></tr>
         ${acresRow}
         ${splitRow}
+        ${covRows}
       </table>
+      ${box ? `<div class="count" style="margin:2px 0 0">click for the BOX workup</div>` : ""}
     </div>`;
 }
 

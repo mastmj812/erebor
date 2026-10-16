@@ -11,7 +11,7 @@ import type {
   AccVintages,
   AccWellDetail,
 } from "./api/accuracy";
-import type { HighgradeFilters } from "./api/highgrade";
+import type { BoxMeta, EconDeck, ForecastSource, HighgradeFilters } from "./api/highgrade";
 import { CATEGORIES, type Category, type ColorMode } from "./map/sticksLayers";
 
 export interface BasinMeta {
@@ -58,6 +58,7 @@ export interface GunbarrelWell {
   tvd: number; ll_ft: number | null; offset_ft: number;
   in_filter?: boolean;          // set only by the Highgrade per-DSU gunbarrel
   metric_value?: number | null; // value of the selected screen metric (Highgrade)
+  box_coverage?: string | null; // Highgrade BOX source: the PUD's BOX coverage class
 }
 export interface GunbarrelPad {
   pad_name: string; well_count: number;
@@ -113,6 +114,12 @@ export interface HighgradeResult {
   value_min: number | null;
   value_max: number | null;
   pads: GeoJSON.FeatureCollection;
+  source?: ForecastSource;
+  valued_count?: number;    // wells carrying a value (BOX: covered; BOX econ: priced)
+  pads_unvalued?: number;   // drawn pads with no valued well (BOX: grey "not covered")
+  coverage_counts?: Record<string, number> | null; // BOX: screened PUDs per coverage class
+  box_run?: { run_id: number; report_version: string; data_through: string; code_sha: string };
+  econ?: EconDeck;
 }
 
 interface MapState {
@@ -120,6 +127,9 @@ interface MapState {
   highgrade: HighgradeResult | null;
   highgradeFilters: HighgradeFilters | null; // last-applied screen, drives the per-DSU gunbarrel
   hgIncludeRealized: boolean; // Highgrade: false = drillable inventory only (drop §6 realized/phantom PUDs)
+  hgSource: ForecastSource;   // Highgrade forecast source: Novi Intelligence | BOX record run
+  hgEconDeck: EconDeck | null; // BOX econ case (Steven's deck + assumption set) for box_pv* metrics
+  boxMeta: BoxMeta | null;    // BOX record run + provenance + priced decks (per basin)
   hgGunbarrelPad: string | null;             // clicked DSU's pad_key (modal open when non-null)
   hgGunbarrel: GunbarrelPad | null;          // loaded per-DSU wells
   hgGunbarrelLoading: boolean;
@@ -181,6 +191,9 @@ interface MapState {
   setHighgrade: (h: HighgradeResult | null) => void;
   setHighgradeFilters: (f: HighgradeFilters | null) => void;
   setHgIncludeRealized: (b: boolean) => void;
+  setHgSource: (s: ForecastSource) => void;
+  setHgEconDeck: (d: EconDeck | null) => void;
+  setBoxMeta: (m: BoxMeta | null) => void;
   openHgGunbarrel: (padKey: string) => void;
   setHgGunbarrel: (g: GunbarrelPad | null) => void;
   closeHgGunbarrel: () => void;
@@ -243,6 +256,9 @@ export const useMapStore = create<MapState>((set, get) => ({
   highgrade: null,
   highgradeFilters: null,
   hgIncludeRealized: false,
+  hgSource: "novi",
+  hgEconDeck: null,
+  boxMeta: null,
   hgGunbarrelPad: null,
   hgGunbarrel: null,
   hgGunbarrelLoading: false,
@@ -300,6 +316,10 @@ export const useMapStore = create<MapState>((set, get) => ({
   setHighgrade: (h) => set({ highgrade: h }),
   setHighgradeFilters: (f) => set({ highgradeFilters: f }),
   setHgIncludeRealized: (b) => set({ hgIncludeRealized: b }),
+  // a source switch invalidates the drawn result (its numbers belong to the old source)
+  setHgSource: (src) => set({ hgSource: src, highgrade: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false }),
+  setHgEconDeck: (d) => set({ hgEconDeck: d }),
+  setBoxMeta: (m) => set({ boxMeta: m }),
   openHgGunbarrel: (padKey) => set({ hgGunbarrelPad: padKey, hgGunbarrel: null, hgGunbarrelLoading: true }),
   setHgGunbarrel: (g) => set({ hgGunbarrel: g, hgGunbarrelLoading: false }),
   closeHgGunbarrel: () => set({ hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false }),
@@ -347,7 +367,7 @@ export const useMapStore = create<MapState>((set, get) => ({
     }),
   setAccVintages: (v) => set({ accVintages: v }),
   setBasin: (b) =>
-    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWells: null, accSummary: null, accSummaryLoading: false, accTier: "all", accBench: [], accOperator: [], accWellApi10: null, accWell: null, accWellLoading: false, accSelection: null, accSelectionLoading: false, accMapView: "wells", accGrid: null, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], formationFilter: [], excludedSticks: [], unitFilter: [], reconCounts: null, depletionCounts: null, supportCounts: null, remainingOnly: false, excludeDepleted: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgEconDeck: null, boxMeta: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWells: null, accSummary: null, accSummaryLoading: false, accTier: "all", accBench: [], accOperator: [], accWellApi10: null, accWell: null, accWellLoading: false, accSelection: null, accSelectionLoading: false, accMapView: "wells", accGrid: null, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], formationFilter: [], excludedSticks: [], unitFilter: [], reconCounts: null, depletionCounts: null, supportCounts: null, remainingOnly: false, excludeDepleted: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleCategory: (c) =>
     set((s) => ({
       categories: s.categories.includes(c)

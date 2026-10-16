@@ -7,6 +7,7 @@ from app import __version__
 from app.api import (
     accuracy,
     basemap,
+    box,
     export,
     gunbarrel,
     health,
@@ -40,5 +41,6 @@ app.include_router(select.router, prefix="/api")
 app.include_router(production.router, prefix="/api")
 app.include_router(gunbarrel.router, prefix="/api")
 app.include_router(highgrade.router, prefix="/api")
+app.include_router(box.router, prefix="/api")
 app.include_router(accuracy.router, prefix="/api")
 app.include_router(export.router, prefix="/api")

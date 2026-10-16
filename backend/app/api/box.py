@@ -190,6 +190,74 @@ def meta(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# one well (Map-tab production overlay)
+# ---------------------------------------------------------------------------
+DAYS_PER_MONTH = 365.25 / 12
+
+
+def monthly_series(months: list[int], volumes: list[float]) -> dict[str, list[float]]:
+    """Exact monthly volumes (D39) -> a rate series at mid-month (volume / days, uptime-free
+    so NOT a calendar rate) and a cumulative series at month end. Months absent from the
+    rows count as zero."""
+    n = max(months, default=0)
+    vol = np.zeros(n)
+    for m, v in zip(months, volumes, strict=True):
+        vol[m - 1] = v
+    k = np.arange(1, n + 1)
+    return {
+        "rate_day": [float(d) for d in (k - 0.5) * DAYS_PER_MONTH],
+        "rate": [float(v) for v in vol / DAYS_PER_MONTH],
+        "cum_day": [float(d) for d in k * DAYS_PER_MONTH],
+        "cum": [float(v) for v in np.cumsum(vol)],
+    }
+
+
+def well_forecast(session: Session, basin: str, unique_id: str) -> dict[str, Any] | None:
+    """The record run's BOX forecast for one Novi PUD (by its Novi name). None when the name
+    is not a Novi PUD (PDP / RES); otherwise its coverage class, and for a covered PUD the
+    oil + gas monthly series (no water in v1, D72)."""
+    run = record_run(session)
+    row = session.execute(
+        text(f"""
+            SELECT il.stick_id, {coverage_sql('il')} AS coverage, bp.location_id, bp.lateral_ft,
+                   bso.eur AS oil_eur, bso.eur_per_kft AS oil_eur_per_kft,
+                   bsg.eur AS gas_eur, bsg.eur_per_kft AS gas_eur_per_kft
+            FROM curated.intel_locations il
+            LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = il.stick_id
+            LEFT JOIN curated.reconciled_inventory rec ON rec.stick_id = il.stick_id
+            {box_joins('il')}
+            WHERE il.basin = :basin AND il.unique_id = :name AND il.category = 'PUD'
+            ORDER BY il.stick_id LIMIT 1
+        """),
+        {"basin": basin, "name": unique_id, "box_run": run["run_id"]},
+    ).mappings().first()
+    if row is None:
+        return None
+    out: dict[str, Any] = {
+        "run_id": run["run_id"], "data_through": run["data_through"],
+        "coverage": row["coverage"], "stick_id": row["stick_id"],
+        "lateral_ft": row["lateral_ft"],
+        "eur": {"oil": row["oil_eur"], "gas": row["gas_eur"]},
+        "eur_per_kft": {"oil": row["oil_eur_per_kft"], "gas": row["gas_eur_per_kft"]},
+        "streams": {},
+    }
+    if row["coverage"] != "covered":
+        return out
+    mrows = session.execute(
+        text("""
+            SELECT stream, month_no, volume FROM box.pud_forecast_month
+            WHERE run_id = :r AND location_id = :loc ORDER BY stream, month_no
+        """),
+        {"r": run["run_id"], "loc": row["location_id"]},
+    ).mappings().all()
+    for s in STREAMS:
+        rs = [m for m in mrows if m["stream"] == s]
+        if rs:
+            out["streams"][s] = monthly_series([m["month_no"] for m in rs], [m["volume"] for m in rs])
+    return out
+
+
+# ---------------------------------------------------------------------------
 # per-pad workup
 # ---------------------------------------------------------------------------
 def months_between(first: dt.date, d: dt.date) -> int:

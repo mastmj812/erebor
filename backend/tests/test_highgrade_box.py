@@ -103,3 +103,10 @@ def test_band_is_p10_high():
     assert b["p10"][0] > b["p50"][0] > b["p90"][0]  # SPE: P10 = HIGH
     assert b["p10"][1] is None and b["n"] == [3, 2]  # fewer than 3 analogs reporting -> blank
     assert box.band(curves[:2]) is None
+
+
+def test_monthly_series_cum_ties_to_volumes_and_fills_gaps():
+    s = box.monthly_series([1, 3], [304.375, 608.75])  # month 2 absent -> zero
+    assert s["cum"] == [304.375, 304.375, 913.125]  # Σ months = the stored EUR basis (D39)
+    assert s["rate"][0] == pytest.approx(10.0) and s["rate"][1] == 0.0  # volume / days in month
+    assert s["rate_day"][0] == pytest.approx(365.25 / 24) and s["cum_day"][2] == pytest.approx(365.25 / 4)

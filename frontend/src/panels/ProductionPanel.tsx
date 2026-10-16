@@ -1,6 +1,7 @@
 import { fetchProductionAggregate } from "../api/production";
 import { colorForBlueox } from "../map/formations";
-import { useMapStore, type Phase } from "../store";
+import { COVERAGE_LABELS } from "../api/highgrade";
+import { useMapStore, type Phase, type WellSource } from "../store";
 import { LineChart, type Series } from "./LineChart";
 
 const PHASES: Phase[] = ["oil", "gas", "water"];
@@ -26,6 +27,7 @@ export function ProductionView({ width, height }: { width?: number; height?: num
   const sel = useMapStore((s) => s.selection);
   const excludedSticks = useMapStore((s) => s.excludedSticks);
   const stale = useMapStore((s) => s.productionStale);
+  const wellSource = useMapStore((s) => s.wellSource);
   const st = useMapStore;
 
   const load = async () => {
@@ -62,7 +64,19 @@ export function ProductionView({ width, height }: { width?: number; height?: num
       });
     }
   }
-  if (overlay) {
+  // BOX for the clicked well: offered only when the record run covers it. Volumes are
+  // uptime-free (D63), so the BOX "rate" is volume / days in month, not a calendar rate.
+  const box = overlay?.box ?? null;
+  const boxCovered = box?.coverage === "covered";
+  const src: WellSource = boxCovered ? wellSource : "novi";
+  const boxStream = phase === "water" ? undefined : box?.streams[phase];
+  if (overlay && src !== "novi" && boxStream) {
+    const label = `${overlay.name} (BOX run ${box?.run_id})`;
+    series.push(mode === "rate"
+      ? { label, color: "#2563eb", xs: yrs(boxStream.rate_day), ys: boxStream.rate, width: 2 }
+      : { label, color: "#2563eb", xs: yrs(boxStream.cum_day), ys: boxStream.cum, width: 2 });
+  }
+  if (overlay && src !== "box") {
     const fcDays = overlay.forecast.ip_day, fcVals = overlay.forecast[phase];
     const tDays = overlay.arps_tail.ip_day, tVals = overlay.arps_tail[phase];
     if (mode === "rate") {
@@ -85,7 +99,10 @@ export function ProductionView({ width, height }: { width?: number; height?: num
   return (
     <>
       <div className="prod-head">
-        <strong>Production — Novi forecast</strong>
+        <strong>
+          Production — {src === "novi" ? "Novi" : src === "box" ? "BOX" : "Novi + BOX"} forecast
+          {prod && src !== "novi" ? " (AOI profiles: Novi)" : ""}
+        </strong>
         <div className="seg sm">
           {PHASES.map((p) => (
             <button key={p} className={phase === p ? "active" : ""}
@@ -103,20 +120,38 @@ export function ProductionView({ width, height }: { width?: number; height?: num
         {prod && stale && (
           <button className="link" onClick={() => void load()}>↻ culls changed — reload</button>
         )}
+        {overlay && boxCovered && (
+          <div className="seg sm">
+            {(["novi", "box", "both"] as WellSource[]).map((s) => (
+              <button key={s} className={src === s ? "active" : ""}
+                onClick={() => st.getState().setWellSource(s)}>{s === "novi" ? "Novi" : s === "box" ? "BOX" : "both"}</button>
+            ))}
+          </div>
+        )}
         {overlay && (
           <span className="well-tag">
             ● {overlay.name}
             {overlay.has_forecast === false ? " (PDP — no Novi forecast)" : ""}
+            {box && !boxCovered ? ` · BOX: not covered (${COVERAGE_LABELS[box.coverage] ?? box.coverage})` : ""}
+            {boxCovered && src !== "novi" && box.eur_per_kft.oil != null
+              ? ` · BOX oil ${Math.round(box.eur_per_kft.oil).toLocaleString()} bbl/kft` : ""}
             <button className="link" onClick={() => st.getState().setWellOverlay(null)}>clear</button>
           </span>
         )}
       </div>
 
+      {overlay && boxCovered && src !== "novi" && (
+        <div className="count" style={{ margin: "0 0 4px" }}>
+          {phase === "water"
+            ? "BOX v1 forecasts oil + gas only — no water (D72)."
+            : `BOX = analog cohort P50 × walk-forward haircut, uptime-free (apply F(k) or a downtime factor, never both); production through ${box.data_through}. Novi = Novi's own forecast.`}
+        </div>
+      )}
       {prod || overlay ? (
         <LineChart
           series={series}
           width={Math.max(360, (width ?? 820) - 8)}
-          height={Math.max(200, (height ?? 380) - 48)}
+          height={Math.max(200, (height ?? 380) - (overlay && boxCovered && src !== "novi" ? 72 : 48))}
           xlabel="years on production"
           ylabel={`${mode === "rate" ? "rate" : "cum"} (${unit})`}
         />

@@ -45,7 +45,18 @@ export interface WellProduction {
   forecast_end_day: number;
   arps_tail: { ip_day: number[]; oil: number[]; gas: number[]; water: number[] };
   has_forecast?: boolean;
+  box?: WellBoxForecast | null; // BOX record run for this PUD (null = not a Novi PUD)
 }
+// BOX forecast for one PUD (backend app/api/box.well_forecast). Series only when covered.
+export interface BoxWellSeries { rate_day: number[]; rate: number[]; cum_day: number[]; cum: number[] }
+export interface WellBoxForecast {
+  run_id: number; data_through: string; coverage: string; stick_id: number;
+  lateral_ft: number | null;
+  eur: { oil: number | null; gas: number | null };
+  eur_per_kft: { oil: number | null; gas: number | null };
+  streams: Partial<Record<"oil" | "gas", BoxWellSeries>>;
+}
+export type WellSource = "novi" | "box" | "both";
 export type BottomTab = "production" | "gunbarrel";
 export interface GunbarrelWell {
   stick_id: number; unique_id: string; category: string; formation: string;
@@ -182,6 +193,7 @@ interface MapState {
   productionStale: boolean;     // culls changed since production was loaded
   productionPhase: Phase;
   chartMode: ChartMode;
+  wellSource: WellSource; // single-well overlay: Novi, BOX, or both (BOX only when covered)
   aggMode: AggMode;
   wellOverlay: WellProduction | null;
   bottomTab: BottomTab;
@@ -243,6 +255,7 @@ interface MapState {
   setProduction: (p: ProductionAggregate | null) => void;
   setProductionLoading: (b: boolean) => void;
   setProductionPhase: (p: Phase) => void;
+  setWellSource: (s: WellSource) => void;
   setChartMode: (m: ChartMode) => void;
   setAggMode: (m: AggMode) => void;
   setWellOverlay: (w: WellProduction | null) => void;
@@ -307,6 +320,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   productionStale: false,
   productionPhase: "oil",
   chartMode: "rate",
+  wellSource: "novi",
   aggMode: "avg",
   wellOverlay: null,
   bottomTab: "production",
@@ -451,6 +465,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   setProduction: (p) => set({ production: p, productionStale: false }),
   setProductionLoading: (b) => set({ productionLoading: b }),
   setProductionPhase: (p) => set({ productionPhase: p }),
+  setWellSource: (s) => set({ wellSource: s }),
   setChartMode: (m) => set({ chartMode: m }),
   setAggMode: (m) => set({ aggMode: m }),
   setWellOverlay: (w) => set({ wellOverlay: w }),

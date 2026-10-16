@@ -95,6 +95,10 @@ body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 .prod-head strong { font-size: 12px; }
 .seg.sm { margin: 0; }
 .seg.sm button { padding: 3px 8px; font-size: 11px; text-transform: capitalize; flex: none; }
+/* production window: header rows take what they need, the chart fills the rest
+   (it measures its own box, so the body never overflows and re-sizes it) */
+.prod-view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.prod-chart { flex: 1; min-height: 180px; overflow: hidden; }
 .prod-load { display: flex; align-items: center; gap: 12px; padding: 16px 4px; }
 .prod-load button { padding: 8px 14px; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; }
 .prod-load button:disabled { opacity: 0.6; cursor: default; }

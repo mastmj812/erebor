@@ -1,3 +1,5 @@
+import { useCallback, useRef, useState } from "react";
+
 import { fetchProductionAggregate } from "../api/production";
 import { colorForBlueox } from "../map/formations";
 import { COVERAGE_LABELS } from "../api/highgrade";
@@ -13,7 +15,32 @@ function cumsum(vals: number[]): number[] {
 }
 const yrs = (days: number[]) => days.map((d) => d / 365);
 
-export function ProductionView({ width, height }: { width?: number; height?: number }) {
+// Measure the CHART'S OWN box, not the window body. Sizing the chart as "body minus a
+// guessed header height" let a wrapping header (well tag, BOX note) push the content
+// past the body: a scrollbar appeared, the body narrowed, the chart re-sized, the
+// scrollbar vanished, and the window flickered until it was made larger. Here the
+// header takes what it needs and the chart fills exactly what is left (whole pixels).
+function useBoxSize() {
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  const roRef = useRef<ResizeObserver | null>(null);
+  const ref = useCallback((node: HTMLDivElement | null) => {
+    roRef.current?.disconnect();
+    if (!node) return;
+    const ro = new ResizeObserver((entries) => {
+      const cr = entries[0].contentRect;
+      const next = { width: Math.floor(cr.width), height: Math.floor(cr.height) };
+      setSize((prev) => (prev.width === next.width && prev.height === next.height ? prev : next));
+    });
+    ro.observe(node);
+    roRef.current = ro;
+  }, []);
+  return [ref, size] as const;
+}
+
+// width / height props are accepted for the caller's compatibility but no longer used:
+// the chart sizes itself from its own box (useBoxSize).
+export function ProductionView(_props: { width?: number; height?: number }) {
+  const [chartRef, chartSize] = useBoxSize();
   const aoi = useMapStore((s) => s.aoi);
   const basin = useMapStore((s) => s.basin);
   const rule = useMapStore((s) => s.selectionRule);
@@ -97,7 +124,7 @@ export function ProductionView({ width, height }: { width?: number; height?: num
   const unit = agg === "avg" ? `${baseUnit}/well` : baseUnit;
 
   return (
-    <>
+    <div className="prod-view">
       <div className="prod-head">
         <strong>
           Production — {src === "novi" ? "Novi" : src === "box" ? "BOX" : "Novi + BOX"} forecast
@@ -148,13 +175,17 @@ export function ProductionView({ width, height }: { width?: number; height?: num
         </div>
       )}
       {prod || overlay ? (
-        <LineChart
-          series={series}
-          width={Math.max(360, (width ?? 820) - 8)}
-          height={Math.max(200, (height ?? 380) - (overlay && boxCovered && src !== "novi" ? 72 : 48))}
-          xlabel="years on production"
-          ylabel={`${mode === "rate" ? "rate" : "cum"} (${unit})`}
-        />
+        <div className="prod-chart" ref={chartRef}>
+          {chartSize.width > 0 && (
+            <LineChart
+              series={series}
+              width={Math.max(240, chartSize.width)}
+              height={Math.max(160, chartSize.height - 16)} // the x-zoom slider row sits under the svg
+              xlabel="years on production"
+              ylabel={`${mode === "rate" ? "rate" : "cum"} (${unit})`}
+            />
+          )}
+        </div>
       ) : (
         <div className="prod-load">
           <button disabled={loading} onClick={() => void load()}>
@@ -163,6 +194,6 @@ export function ProductionView({ width, height }: { width?: number; height?: num
           <span className="count">or click a stick on the map to overlay a single well</span>
         </div>
       )}
-    </>
+    </div>
   );
 }

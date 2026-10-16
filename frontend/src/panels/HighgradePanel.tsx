@@ -52,8 +52,7 @@ const DECK_SEP = "\u001f"; // deck_id / assumption_set_id separator in the deck 
 const TIER_FIELDS: { field: CategoricalField; label: string; hint?: string }[] = [
   { field: "rqt", label: "Rock quality tier" },
   { field: "spacing_t", label: "Spacing tier" },
-  { field: "deplet_t", label: "Depletion tier",
-    hint: "Tier-4 (offset-depleted) off by default — drained rock; click to include." },
+  { field: "deplet_t", label: "Depletion tier" },
   { field: "complet_t", label: "Completion tier" },
 ];
 
@@ -96,10 +95,18 @@ const EMPTY_CATS: Record<CategoricalField, string[]> = {
 // Highgrade default screens TRUE drillable inventory: not-already-drilled (the
 // reconciliation gate, server-side) AND not offset-depleted. Novi's deplet_t
 // Tier-4 = drained rock (frac grows into the depleted offset; produces water) —
-// technically drillable, worthless — so the depletion-tier filter defaults to
+// technically drillable, worthless — so on Novi the depletion-tier filter defaults to
 // Tier-1/2/3 (Tier-4 off). The user can click Tier-4 back in to see it.
-const DEFAULT_CATS: Record<CategoricalField, string[]> = {
-  ...EMPTY_CATS, deplet_t: ["Tier-1", "Tier-2", "Tier-3"],
+// BOX (gate 8, Michael 2026-10-15): no depletion-tier default. A BOX workup already
+// carries offset depletion through its named analogs, so Novi's Tier-4 cut would
+// double-count it — and it removed 1,307 of the 1,907 covered PUDs.
+const DEFAULT_CATS: Record<ForecastSource, Record<CategoricalField, string[]>> = {
+  novi: { ...EMPTY_CATS, deplet_t: ["Tier-1", "Tier-2", "Tier-3"] },
+  box: { ...EMPTY_CATS },
+};
+const DEPLET_HINT: Record<ForecastSource, string> = {
+  novi: "Tier-4 (offset-depleted) off by default — drained rock; click to include.",
+  box: "No default on BOX: all tiers, Tier-4 included (see the BOX note above). Click tiers to screen anyway.",
 };
 
 type RangeMap = Record<string, [number | null, number | null]>;
@@ -142,7 +149,7 @@ export function HighgradePanel() {
   // Reset the form on basin change (filters are basin-specific). Not on the
   // realized toggle — those selections stay valid across the wider/narrower set.
   useEffect(() => {
-    setCats({ ...DEFAULT_CATS });
+    setCats({ ...DEFAULT_CATS[useMapStore.getState().hgSource] });
     setRanges({ ...DEFAULT_RANGES });
     setOpSearch("");
   }, [basin]);
@@ -177,6 +184,8 @@ export function HighgradePanel() {
   const switchSource = (src: ForecastSource) => {
     if (src === source) return;
     setSource(src);
+    // the depletion-tier default differs by source (see DEFAULT_CATS)
+    setCats((c) => ({ ...c, deplet_t: [...DEFAULT_CATS[src].deplet_t] }));
     setMetric((m) => (METRICS.find((x) => x.value === m)?.sources.includes(src) ? m : DEFAULT_METRIC[src]));
     setRanges((r) => {
       const out = { ...r };
@@ -233,7 +242,7 @@ export function HighgradePanel() {
   };
 
   const reset = () => {
-    setCats({ ...DEFAULT_CATS });
+    setCats({ ...DEFAULT_CATS[source] });
     setRanges({ ...DEFAULT_RANGES });
     setHighgrade(null);
     setHighgradeFilters(null);
@@ -266,6 +275,12 @@ export function HighgradePanel() {
         </div>
       )}
       {source === "box" && <BoxRunNote meta={boxMeta} />}
+      {source === "box" && (
+        <div className="count" style={{ margin: "0 0 10px" }}>
+          Depletion tier: no default on BOX — Tier-4 (offset-depleted) PUDs are included, because each BOX workup
+          already reflects offset depletion through its analogs. Click tiers to screen anyway.
+        </div>
+      )}
 
       <h3>Inventory</h3>
       <div className="seg sm">
@@ -331,7 +346,7 @@ export function HighgradePanel() {
             <ChipGroup
               key={field}
               label={label}
-              hint={hint}
+              hint={field === "deplet_t" ? DEPLET_HINT[source] : hint}
               options={facets.categorical[field]}
               selected={cats[field]}
               onToggle={(v) => toggleCat(field, v)}

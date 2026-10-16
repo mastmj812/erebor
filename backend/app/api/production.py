@@ -5,7 +5,8 @@
     (~29.5 -> 50 yr). well_count lets the frontend show per-well averages.
   * GET  /production/well      : one well's forecast stream + Arps tail to 50 yr.
 
-Forecast/Arps are keyed by novi_wellname (= PUD/RES Unique ID). PDP sticks are
+Forecast/Arps are keyed by novi_wellname (= PUD/RES Unique ID). /well also carries the
+BOX record run's forecast for that PUD when one exists (app/api/box.well_forecast). PDP sticks are
 API-keyed and absent from the Novi forecast, so they don't contribute here (their
 actuals live in curated.production — a later addition if wanted).
 """
@@ -23,6 +24,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.api.box import well_forecast
 from app.db import get_session
 from decline.models import arps_exponential, arps_hyperbolic
 
@@ -225,7 +227,9 @@ def well(
     basin: Literal["delaware", "midland"] = Query(...),
     session: Session = Depends(get_session),
 ) -> dict:
-    """One well's forecast stream + the Arps tail evaluated to 50 yr."""
+    """One well's forecast stream + the Arps tail evaluated to 50 yr, plus the BOX
+    record run's forecast for the same PUD under `box` (None for a non-PUD; for a PUD
+    BOX does not cover, just its coverage class — shown, never zero)."""
     fc = session.execute(
         text("""
             SELECT ip_day, oil, gas, water FROM curated.intel_forecast
@@ -276,4 +280,5 @@ def well(
         "name": name, "forecast": forecast,
         "forecast_end_day": last_day, "arps_tail": tail,
         "has_forecast": len(fc) > 0,
+        "box": well_forecast(session, basin, name),
     }

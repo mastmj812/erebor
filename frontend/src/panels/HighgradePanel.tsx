@@ -489,6 +489,8 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
   if (!meta) return <div className="count">Loading BOX record run…</div>;
   const r = meta.run;
   const oil = meta.disclosure.filter((d) => d.stream === "oil");
+  const d92 = meta.haircut_method.method != null;
+  const tail = meta.haircut_method.tail?.oil;
   return (
     <div className="caveat" style={{ margin: "4px 0 10px" }}>
       <div>
@@ -502,18 +504,22 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
         every other PUD is shown as not covered, never zero.
       </div>
       <table className="hg-box-tbl">
-        <thead><tr><th>oil</th><th>measured bias</th><th>haircut</th><th>held-out after</th></tr></thead>
+        <thead><tr><th>oil</th><th>measured bias</th><th>{d92 ? "D62 target" : "haircut"}</th>{d92 && <th>realised (D92)</th>}<th>held-out after</th></tr></thead>
         <tbody>
           {oil.map((d) => (
             <tr key={d.horizon}>
               <td>{d.horizon}</td><td>{pct(d.measured_bias)}</td><td>×{d.haircut.toFixed(3)}</td>
+              {d92 && <td>×{d.realised_median?.toFixed(3) ?? "—"}</td>}
               <td>{pct(d.holdout_bias_after)}</td>
             </tr>
           ))}
         </tbody>
       </table>
       <div className="count" style={{ margin: "2px 0 0" }}>
-        Bias = actual ÷ forecast − 1 (negative = method forecast high). The cum-48 factor holds for the 50-yr EUR (D62).
+        Bias = actual ÷ forecast − 1 (negative = method forecast high).{" "}
+        {d92
+          ? `D92: the D62 targets are applied to the rate as a smooth factor (a + b·ln k, fitted per PUD), so a rate never rises after its peak; realised = median cumulative factor across covered PUDs. The rate factor holds at ×${tail?.toFixed(3) ?? "—"} after month 48 (50-yr EUR).`
+          : "The cum-48 factor holds for the 50-yr EUR (D62)."}
       </div>
       {meta.stale && (
         <div style={{ color: "#991b1b", marginTop: 4 }}>

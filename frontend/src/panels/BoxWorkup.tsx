@@ -30,6 +30,7 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
   if (!data) return <div className="count">Loading BOX workup…</div>;
 
   const r = data.run;
+  const d92 = data.haircut_method.method != null;
   const covered = data.locations.filter((l) => l.coverage === "covered");
   const others = data.locations.filter((l) => l.coverage !== "covered");
   const byClass = others.reduce<Record<string, number>>((a, l) => ({ ...a, [l.coverage]: (a[l.coverage] ?? 0) + 1 }), {});
@@ -53,25 +54,36 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
           <div className="caveat">
             <strong>How to read this workup.</strong> Forecast = the analog cohort's <strong>P50</strong> per 1,000 ft
             (deal-intake selection: same bench, nearest-first, lateral band, representative spacing; D57), scaled to the
-            location's lateral (Cui &amp; Cross below 7,500 ft, D50), then the stated walk-forward haircut (D62). Volumes
+            location's lateral (Cui &amp; Cross below 7,500 ft, D50), then the stated walk-forward haircut (D62 factors
+            {d92 ? ", applied to the rate as a smooth curve fitted to them per location — D92" : ""}). Volumes
             are <strong>uptime-free</strong> (D63); oil + gas only, no water (D72); EUR = raw 50-yr technical integral, no
             economic limit. Error = actual ÷ forecast − 1 (negative = the method forecast HIGH).
           </div>
           <h4>Measured bias and haircut (D59 condition 3)</h4>
           <table className="box-tbl">
             <thead>
-              <tr><th>stream</th><th>horizon</th><th>measured bias</th><th>packages</th><th>haircut applied</th><th>held-out bias after</th><th>F(k) (published, not applied)</th></tr>
+              <tr><th>stream</th><th>horizon</th><th>measured bias</th><th>packages</th><th>{d92 ? "D62 target" : "haircut applied"}</th>
+                {d92 && <th>realised (D92, median · P10–P90)</th>}<th>held-out bias after</th><th>F(k) (published, not applied)</th></tr>
             </thead>
             <tbody>
               {data.disclosure.map((d) => (
                 <tr key={`${d.stream}${d.horizon}`}>
                   <td>{d.stream}</td><td>{d.horizon}</td><td>{pct(d.measured_bias)}</td><td>{n0(d.packages)}</td>
-                  <td>×{d.haircut.toFixed(3)}</td><td>{pct(d.holdout_bias_after)}</td>
+                  <td>×{d.haircut.toFixed(3)}</td>
+                  {d92 && <td>×{d.realised_median?.toFixed(3) ?? "—"} · {d.realised_p10?.toFixed(3) ?? "—"}–{d.realised_p90?.toFixed(3) ?? "—"}</td>}
+                  <td>{pct(d.holdout_bias_after)}</td>
                   <td>{data.calendar_factor[d.stream]?.[d.horizon.replace("cum-", "")]?.toFixed(3) ?? "—"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+          {d92 && (
+            <div className="count" style={{ margin: "2px 0 0" }}>
+              Realised = cumulative factor the volumes actually carry, across all covered PUDs (P10 = high). After month 48 the
+              rate factor holds at ×{data.haircut_method.tail?.oil?.toFixed(3) ?? "—"} oil / ×{data.haircut_method.tail?.gas?.toFixed(3) ?? "—"} gas;
+              this pad's per-location EUR factor is the "EUR haircut" column below.
+            </div>
+          )}
           {data.radius_ranges.length > 0 && (
             <>
               <h4>Measured package range for this pad's analog radius (D69)</h4>
@@ -131,7 +143,7 @@ function LocationsTable({ rows }: { rows: BoxPadLocation[] }) {
       <thead>
         <tr>
           <th>stick</th><th>bench</th><th>BOX coverage</th><th>lateral ft</th><th>spacing ft</th><th>analogs · radius</th>
-          <th>BOX oil EUR bbl</th><th>BOX oil /kft</th><th>Novi oil /kft</th><th>BOX ÷ Novi</th><th>oil cum-12</th>
+          <th>BOX oil EUR bbl</th><th>EUR haircut</th><th>BOX oil /kft</th><th>Novi oil /kft</th><th>BOX ÷ Novi</th><th>oil cum-12</th>
           <th>oil Di nom (1-yr eff) · b</th><th>BOX gas EUR mcf</th><th>flags</th>
         </tr>
       </thead>
@@ -148,6 +160,7 @@ function LocationsTable({ rows }: { rows: BoxPadLocation[] }) {
               <td>{cov ? `${n0(l.planned_spacing_ft)}${l.spacing_source === "default_880" ? " (default)" : ""}` : ""}</td>
               <td>{cov || l.n_analogs != null ? `${l.n_analogs ?? "—"} · ${l.radius_mi?.toFixed(1) ?? "—"} mi${l.search_mode === "strike" ? " strike" : ""}` : ""}</td>
               <td>{cov ? n0(l.oil_eur) : "not covered"}</td>
+              <td>{cov && l.oil_haircut != null ? `×${l.oil_haircut.toFixed(3)}` : ""}</td>
               <td>{cov ? n0(l.oil_eur_per_kft) : ""}</td>
               <td>{n0(l.novi_oil_eur_per_kft)}</td>
               <td>{ratio == null ? "" : `${ratio.toFixed(2)}×`}</td>

@@ -116,8 +116,11 @@ def record_run(session: Session) -> dict[str, Any]:
 
 
 def disclosure_rows(run: dict[str, Any]) -> list[dict[str, Any]]:
-    """D59 condition 3: measured hindcast bias, the haircut applied and the held-out
-    bias after correction, per stream x horizon (error = actual / forecast - 1)."""
+    """D59 condition 3: measured hindcast bias, the haircut and the held-out bias after
+    correction, per stream x horizon (error = actual / forecast - 1). `haircut` is the D62
+    factor (the target); runs built with the D92 shape also carry the REALISED cumulative
+    factor across covered PUDs (median, P10 high / P90 low) — what the volumes actually
+    carry. None on runs before D92 (4, 6), where realised = target exactly."""
     hb = run["disclosure"]["hindcast_bias"]
     out = []
     for s in STREAMS:
@@ -128,8 +131,23 @@ def disclosure_rows(run: dict[str, Any]) -> list[dict[str, Any]]:
                 "measured_bias": b["box_v2_pooled_bias"], "packages": b["box_v2_pooled_packages"],
                 "haircut": h["factor"], "holdout_bias_after": b["box_v2_wf_holdout_bias"],
                 "holdout_packages": b["box_v2_wf_holdout_packages"],
+                "realised_median": h.get("realised_median"),
+                "realised_p10": (h.get("realised_p10_p90") or [None, None])[0],
+                "realised_p90": (h.get("realised_p10_p90") or [None, None])[1],
             })
     return out
+
+
+def haircut_method(run: dict[str, Any]) -> dict[str, Any]:
+    """How the run applied its haircut: D92 (smooth rate factor fitted to the D62 targets,
+    rate factor held after month 48 — `tail` = its median per stream) or D62 as built
+    (method None: linear cumulative factor, cum-48 factor held)."""
+    h = run["haircut"]
+    if "method" not in h:
+        return {"method": None, "tail": None, "eur_factor": None}
+    return {"method": h["method"],
+            "tail": {s: h[s].get("tail_factor_median") for s in STREAMS},
+            "eur_factor": {s: h[s].get("eur_factor_median") for s in STREAMS}}
 
 
 def radius_ranges(run: dict[str, Any], classes: set[str] | None = None) -> list[dict[str, Any]]:
@@ -178,6 +196,7 @@ def meta(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict:
         "run": {k: run[k] for k in ("run_id", "report_version", "data_through", "code_sha", "engine_sha",
                                     "dealintake_config", "created_at", "counts", "notes")},
         "disclosure": disclosure_rows(run),
+        "haircut_method": haircut_method(run),
         "radius_ranges": radius_ranges(run),
         "calendar_factor": calendar_factor_points(run),
         "decks": [{**d, "built_at": d["built_at"].isoformat() if d["built_at"] else None} for d in decks],
@@ -187,6 +206,74 @@ def meta(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict:
         "stale": run["report_version"] not in vintages,
         "scope": [dict(s) for s in scope],
     }
+
+
+# ---------------------------------------------------------------------------
+# one well (Map-tab production overlay)
+# ---------------------------------------------------------------------------
+DAYS_PER_MONTH = 365.25 / 12
+
+
+def monthly_series(months: list[int], volumes: list[float]) -> dict[str, list[float]]:
+    """Exact monthly volumes (D39) -> a rate series at mid-month (volume / days, uptime-free
+    so NOT a calendar rate) and a cumulative series at month end. Months absent from the
+    rows count as zero."""
+    n = max(months, default=0)
+    vol = np.zeros(n)
+    for m, v in zip(months, volumes, strict=True):
+        vol[m - 1] = v
+    k = np.arange(1, n + 1)
+    return {
+        "rate_day": [float(d) for d in (k - 0.5) * DAYS_PER_MONTH],
+        "rate": [float(v) for v in vol / DAYS_PER_MONTH],
+        "cum_day": [float(d) for d in k * DAYS_PER_MONTH],
+        "cum": [float(v) for v in np.cumsum(vol)],
+    }
+
+
+def well_forecast(session: Session, basin: str, unique_id: str) -> dict[str, Any] | None:
+    """The record run's BOX forecast for one Novi PUD (by its Novi name). None when the name
+    is not a Novi PUD (PDP / RES); otherwise its coverage class, and for a covered PUD the
+    oil + gas monthly series (no water in v1, D72)."""
+    run = record_run(session)
+    row = session.execute(
+        text(f"""
+            SELECT il.stick_id, {coverage_sql('il')} AS coverage, bp.location_id, bp.lateral_ft,
+                   bso.eur AS oil_eur, bso.eur_per_kft AS oil_eur_per_kft,
+                   bsg.eur AS gas_eur, bsg.eur_per_kft AS gas_eur_per_kft
+            FROM curated.intel_locations il
+            LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = il.stick_id
+            LEFT JOIN curated.reconciled_inventory rec ON rec.stick_id = il.stick_id
+            {box_joins('il')}
+            WHERE il.basin = :basin AND il.unique_id = :name AND il.category = 'PUD'
+            ORDER BY il.stick_id LIMIT 1
+        """),
+        {"basin": basin, "name": unique_id, "box_run": run["run_id"]},
+    ).mappings().first()
+    if row is None:
+        return None
+    out: dict[str, Any] = {
+        "run_id": run["run_id"], "data_through": run["data_through"],
+        "coverage": row["coverage"], "stick_id": row["stick_id"],
+        "lateral_ft": row["lateral_ft"],
+        "eur": {"oil": row["oil_eur"], "gas": row["gas_eur"]},
+        "eur_per_kft": {"oil": row["oil_eur_per_kft"], "gas": row["gas_eur_per_kft"]},
+        "streams": {},
+    }
+    if row["coverage"] != "covered":
+        return out
+    mrows = session.execute(
+        text("""
+            SELECT stream, month_no, volume FROM box.pud_forecast_month
+            WHERE run_id = :r AND location_id = :loc ORDER BY stream, month_no
+        """),
+        {"r": run["run_id"], "loc": row["location_id"]},
+    ).mappings().all()
+    for s in STREAMS:
+        rs = [m for m in mrows if m["stream"] == s]
+        if rs:
+            out["streams"][s] = monthly_series([m["month_no"] for m in rs], [m["volume"] for m in rs])
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +361,7 @@ def pad(basin: str = _BASIN, pad_key: str = Query(...), session: Session = Depen
                                     "dealintake_config", "created_at")},
         "locations": locations, "analogs": [], "chart": None,
         "disclosure": disclosure_rows(run),
+        "haircut_method": haircut_method(run),
         "radius_ranges": radius_ranges(run, {d["radius_class"] for d in covered if d["radius_class"]}),
         "calendar_factor": calendar_factor_points(run),
     }

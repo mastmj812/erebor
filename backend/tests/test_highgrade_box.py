@@ -103,3 +103,32 @@ def test_band_is_p10_high():
     assert b["p10"][0] > b["p50"][0] > b["p90"][0]  # SPE: P10 = HIGH
     assert b["p10"][1] is None and b["n"] == [3, 2]  # fewer than 3 analogs reporting -> blank
     assert box.band(curves[:2]) is None
+
+
+def test_monthly_series_cum_ties_to_volumes_and_fills_gaps():
+    s = box.monthly_series([1, 3], [304.375, 608.75])  # month 2 absent -> zero
+    assert s["cum"] == [304.375, 304.375, 913.125]  # Σ months = the stored EUR basis (D39)
+    assert s["rate"][0] == pytest.approx(10.0) and s["rate"][1] == 0.0  # volume / days in month
+    assert s["rate_day"][0] == pytest.approx(365.25 / 24) and s["cum_day"][2] == pytest.approx(365.25 / 4)
+
+
+def _run(haircut):
+    hb = {s: {k: {"box_v2_pooled_bias": -0.05, "box_v2_pooled_packages": 100, "box_v2_wf_holdout_bias": 0.01,
+                  "box_v2_wf_holdout_packages": 50} for k in box.HORIZONS} for s in box.STREAMS}
+    return {"disclosure": {"hindcast_bias": hb}, "haircut": haircut}
+
+
+def test_disclosure_carries_d92_realised_next_to_the_d62_target():
+    h = {"method": "D92 C1", **{s: {k: {"factor": 0.9, "realised_median": 0.91, "realised_p10_p90": [0.93, 0.89]}
+                                     for k in box.HORIZONS} | {"tail_factor_median": 0.77, "eur_factor_median": 0.84}
+                                  for s in box.STREAMS}}
+    rows = box.disclosure_rows(_run(h))
+    assert rows[0]["haircut"] == 0.9 and rows[0]["realised_median"] == 0.91
+    assert (rows[0]["realised_p10"], rows[0]["realised_p90"]) == (0.93, 0.89)  # P10 = HIGH
+    assert box.haircut_method(_run(h))["tail"] == {"oil": 0.77, "gas": 0.77}
+
+
+def test_disclosure_pre_d92_run_has_no_realised():
+    h = {s: {k: {"factor": 0.9} for k in box.HORIZONS} for s in box.STREAMS}
+    assert box.disclosure_rows(_run(h))[0]["realised_median"] is None
+    assert box.haircut_method(_run(h))["method"] is None

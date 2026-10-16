@@ -116,8 +116,11 @@ def record_run(session: Session) -> dict[str, Any]:
 
 
 def disclosure_rows(run: dict[str, Any]) -> list[dict[str, Any]]:
-    """D59 condition 3: measured hindcast bias, the haircut applied and the held-out
-    bias after correction, per stream x horizon (error = actual / forecast - 1)."""
+    """D59 condition 3: measured hindcast bias, the haircut and the held-out bias after
+    correction, per stream x horizon (error = actual / forecast - 1). `haircut` is the D62
+    factor (the target); runs built with the D92 shape also carry the REALISED cumulative
+    factor across covered PUDs (median, P10 high / P90 low) — what the volumes actually
+    carry. None on runs before D92 (4, 6), where realised = target exactly."""
     hb = run["disclosure"]["hindcast_bias"]
     out = []
     for s in STREAMS:
@@ -128,8 +131,23 @@ def disclosure_rows(run: dict[str, Any]) -> list[dict[str, Any]]:
                 "measured_bias": b["box_v2_pooled_bias"], "packages": b["box_v2_pooled_packages"],
                 "haircut": h["factor"], "holdout_bias_after": b["box_v2_wf_holdout_bias"],
                 "holdout_packages": b["box_v2_wf_holdout_packages"],
+                "realised_median": h.get("realised_median"),
+                "realised_p10": (h.get("realised_p10_p90") or [None, None])[0],
+                "realised_p90": (h.get("realised_p10_p90") or [None, None])[1],
             })
     return out
+
+
+def haircut_method(run: dict[str, Any]) -> dict[str, Any]:
+    """How the run applied its haircut: D92 (smooth rate factor fitted to the D62 targets,
+    rate factor held after month 48 — `tail` = its median per stream) or D62 as built
+    (method None: linear cumulative factor, cum-48 factor held)."""
+    h = run["haircut"]
+    if "method" not in h:
+        return {"method": None, "tail": None, "eur_factor": None}
+    return {"method": h["method"],
+            "tail": {s: h[s].get("tail_factor_median") for s in STREAMS},
+            "eur_factor": {s: h[s].get("eur_factor_median") for s in STREAMS}}
 
 
 def radius_ranges(run: dict[str, Any], classes: set[str] | None = None) -> list[dict[str, Any]]:
@@ -178,6 +196,7 @@ def meta(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict:
         "run": {k: run[k] for k in ("run_id", "report_version", "data_through", "code_sha", "engine_sha",
                                     "dealintake_config", "created_at", "counts", "notes")},
         "disclosure": disclosure_rows(run),
+        "haircut_method": haircut_method(run),
         "radius_ranges": radius_ranges(run),
         "calendar_factor": calendar_factor_points(run),
         "decks": [{**d, "built_at": d["built_at"].isoformat() if d["built_at"] else None} for d in decks],
@@ -342,6 +361,7 @@ def pad(basin: str = _BASIN, pad_key: str = Query(...), session: Session = Depen
                                     "dealintake_config", "created_at")},
         "locations": locations, "analogs": [], "chart": None,
         "disclosure": disclosure_rows(run),
+        "haircut_method": haircut_method(run),
         "radius_ranges": radius_ranges(run, {d["radius_class"] for d in covered if d["radius_class"]}),
         "calendar_factor": calendar_factor_points(run),
     }

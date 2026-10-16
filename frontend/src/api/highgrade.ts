@@ -69,6 +69,15 @@ export interface BoxDisclosureRow {
   stream: string; horizon: string;
   measured_bias: number | null; packages: number | null;
   haircut: number; holdout_bias_after: number | null; holdout_packages: number | null;
+  // D92 runs: the realised cumulative factor across covered PUDs (null on pre-D92 runs, where it = haircut)
+  realised_median: number | null; realised_p10: number | null; realised_p90: number | null;
+}
+// How the run applied its haircut (backend box.haircut_method): D92 = smooth rate factor fitted to the
+// D62 targets, held at `tail` after month 48; method null = D62 as built (linear cumulative factor).
+export interface BoxHaircutMethod {
+  method: string | null;
+  tail: Record<string, number | null> | null;
+  eur_factor: Record<string, number | null> | null;
 }
 export interface BoxRadiusRange {
   radius_class: string; horizon: string; low: number; high: number; bias: number; packages: number;
@@ -82,6 +91,7 @@ export interface BoxMeta {
   basin: string;
   run: BoxRun;
   disclosure: BoxDisclosureRow[];
+  haircut_method: BoxHaircutMethod;
   radius_ranges: BoxRadiusRange[];
   calendar_factor: Record<string, Record<string, number>>;
   decks: BoxDeck[];
@@ -118,6 +128,7 @@ export interface BoxPad {
     analog_band: { p10: (number | null)[]; p50: (number | null)[]; p90: (number | null)[]; n: number[] } | null;
   } | null;
   disclosure: BoxDisclosureRow[];
+  haircut_method: BoxHaircutMethod;
   radius_ranges: BoxRadiusRange[];
   calendar_factor: Record<string, Record<string, number>>;
 }

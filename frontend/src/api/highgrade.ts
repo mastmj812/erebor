@@ -49,8 +49,8 @@ export const COVERAGE_LABELS: Record<string, string> = {
   covered: "covered (BOX forecast)",
   not_covered_no_analogs: "no analogs at the 20-mi cap (D74)",
   not_covered_outside_extent: "outside the BOX extent",
-  not_covered_wcxy: "WCXY target, not in v1 (D61)",
-  not_covered_unvalidated: "bench not yet validated (BS2_S, D60)",
+  not_covered_wcxy: "WCXY target, not covered by this run (D61)",
+  not_covered_unvalidated: "bench not yet validated (D60)",
   not_covered_emerging: "emerging bench (D2)",
   bench_not_in_box: "bench not in BOX v1",
   realized: "realized per reconciliation",
@@ -71,6 +71,16 @@ export interface BoxDisclosureRow {
   haircut: number; holdout_bias_after: number | null; holdout_packages: number | null;
   // D92 runs: the realised cumulative factor across covered PUDs (null on pre-D92 runs, where it = haircut)
   realised_median: number | null; realised_p10: number | null; realised_p90: number | null;
+  // step-9c groups (BS2_S, WCXY): D100 disclosed bias (= tuning bias), frozen D99 interval, record variant
+  record_variant?: string | null; disclosed_bias?: number | null; d99_interval?: [number, number] | null;
+}
+// One coverage group of the record run (D103 by_bench): WCA, BS2_S or WCXY_WCA1.
+export interface BoxGroup {
+  group: string; label: string; formations: string[]; spec: string; radius_basis: string;
+  disclosure: BoxDisclosureRow[];
+  haircut_method: BoxHaircutMethod;
+  radius_ranges: BoxRadiusRange[];
+  calendar_factor: Record<string, Record<string, number>>;
 }
 // How the run applied its haircut (backend box.haircut_method): D92 = smooth rate factor fitted to the
 // D62 targets, held at `tail` after month 48; method null = D62 as built (linear cumulative factor).
@@ -94,6 +104,7 @@ export interface BoxMeta {
   haircut_method: BoxHaircutMethod;
   radius_ranges: BoxRadiusRange[];
   calendar_factor: Record<string, Record<string, number>>;
+  groups?: BoxGroup[];
   decks: BoxDeck[];
   intel_report_versions: string[];
   stale: boolean;
@@ -103,7 +114,7 @@ export interface BoxMeta {
 export interface BoxPadLocation {
   stick_id: number; unique_id: string; formation_blueox: string; ll_ft: number | null;
   novi_oil_eur: number | null; novi_gas_eur: number | null; novi_oil_eur_per_kft: number | null;
-  recon_status: string | null; coverage: string;
+  recon_status: string | null; coverage: string; group?: string | null;
   location_id: number | null; lateral_ft: number | null; completed_lateral_ft: number | null;
   planned_spacing_ft: number | null; spacing_source: string | null;
   search_mode: string | null; radius_mi: number | null; radius_class: string | null;
@@ -131,6 +142,7 @@ export interface BoxPad {
   haircut_method: BoxHaircutMethod;
   radius_ranges: BoxRadiusRange[];
   calendar_factor: Record<string, Record<string, number>>;
+  groups?: BoxGroup[];
 }
 
 export async function fetchFacets(

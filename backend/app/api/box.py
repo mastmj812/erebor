@@ -6,8 +6,16 @@ Read-only like the rest of erebor. BOX = defensible analog type-curve workups (D
 deal-intake analog cohort P50 per 1,000 ft x lateral (Cui & Cross below 7,500 ft, D50)
 x the stated walk-forward haircut (D62); uptime-free volumes (D63; F(k) is published,
 not applied); oil + gas only (D72); EUR = raw 50-yr technical integral (no economic
-limit). v1 covers Delaware WCA_1 / WCA_2 inside the WCA extent (D60/D61); everything
-else is a stated not-covered class, never a zero.
+limit). Run 7 covered Delaware WCA_1 / WCA_2 inside the WCA extent (D60/D61); record
+run 8 (step 9c) adds BS2_S (extent 7, its own haircut, D94/D102) and WCXY (WCA extent,
+raw box_v2 with no haircut, D93/D95/D97). Everything else is a stated not-covered
+class, never a zero.
+
+Per-group disclosure (D103): a multi-group run keeps the first group's (WCA) haircut /
+disclosure / calendar factor at the top level of box.forecast_run's jsonb and every
+group under "by_bench". Each response carries `groups` (one block per group: the pad's
+covered groups, or all of them in /meta). The top-level fields stay WCA's for
+back-compat; runs without by_bench (4, 6, 7) have the one WCA group.
 
   GET /api/box/meta?basin=            record run + provenance + haircut / disclosure
                                        + Steven's priced decks for that run + scope
@@ -115,12 +123,52 @@ def record_run(session: Session) -> dict[str, Any]:
     return r
 
 
+# Coverage groups of a multi-group run (engineering_db box/production.PRODUCTION_BENCHES):
+# group -> formations it covers. Change both together.
+GROUP_FORMATIONS: dict[str, tuple[str, ...]] = {
+    "WCA": ("WCA_1", "WCA_2"),
+    "BS2_S": ("BS2_S",),
+    "WCXY_WCA1": ("WCXY",),
+}
+GROUP_LABELS: dict[str, str] = {
+    "WCA": "WCA_1 / WCA_2 — box_v2_wf, D62 walk-forward haircut",
+    "BS2_S": "BS2_S — box_v2_wf on its own walk-forward haircut (D94, pooled per D102)",
+    "WCXY_WCA1": "WCXY — raw box_v2 on WCXY + WCA_1 analogs, no haircut (D93 / D97)",
+}
+
+
+def group_of(formation: str | None) -> str | None:
+    for g, forms in GROUP_FORMATIONS.items():
+        if formation in forms:
+            return g
+    return None
+
+
+def run_groups(run: dict[str, Any]) -> list[str]:
+    """The run's coverage groups, in its own order (runs 4/6/7: WCA only)."""
+    bb = (run.get("haircut") or {}).get("by_bench")
+    return list(bb) if bb else ["WCA"]
+
+
+def group_view(run: dict[str, Any], group: str) -> dict[str, Any]:
+    """The run with `group`'s haircut / disclosure / calendar factor in place of the top level."""
+    out = dict(run)
+    for col in ("haircut", "disclosure", "calendar_factor"):
+        bb = (run.get(col) or {}).get("by_bench")
+        if bb and group in bb:
+            out[col] = bb[group]
+    return out
+
+
 def disclosure_rows(run: dict[str, Any]) -> list[dict[str, Any]]:
     """D59 condition 3: measured hindcast bias, the haircut and the held-out bias after
     correction, per stream x horizon (error = actual / forecast - 1). `haircut` is the D62
     factor (the target); runs built with the D92 shape also carry the REALISED cumulative
     factor across covered PUDs (median, P10 high / P90 low) — what the volumes actually
-    carry. None on runs before D92 (4, 6), where realised = target exactly."""
+    carry. None on runs before D92 (4, 6), where realised = target exactly.
+    Step-9c groups (BS2_S, WCXY) also carry D100's `disclosed_bias` (= the record
+    variant's tuning bias, D99-pooled where 9b judged the cell), its frozen D99 interval
+    and the record variant; their held-out bias is the one-time 9b score."""
     hb = run["disclosure"]["hindcast_bias"]
     out = []
     for s in STREAMS:
@@ -129,19 +177,23 @@ def disclosure_rows(run: dict[str, Any]) -> list[dict[str, Any]]:
             out.append({
                 "stream": s, "horizon": f"cum-{k}",
                 "measured_bias": b["box_v2_pooled_bias"], "packages": b["box_v2_pooled_packages"],
-                "haircut": h["factor"], "holdout_bias_after": b["box_v2_wf_holdout_bias"],
-                "holdout_packages": b["box_v2_wf_holdout_packages"],
+                "haircut": h["factor"],
+                "holdout_bias_after": b["box_v2_wf_holdout_bias"] if "box_v2_wf_holdout_bias" in b else b.get("holdout_bias"),
+                "holdout_packages": b["box_v2_wf_holdout_packages"] if "box_v2_wf_holdout_packages" in b else b.get("holdout_packages"),
                 "realised_median": h.get("realised_median"),
                 "realised_p10": (h.get("realised_p10_p90") or [None, None])[0],
                 "realised_p90": (h.get("realised_p10_p90") or [None, None])[1],
+                "record_variant": b.get("record_variant"),
+                "disclosed_bias": b.get("disclosed_bias"),
+                "d99_interval": b.get("d99_interval"),
             })
     return out
 
 
 def haircut_method(run: dict[str, Any]) -> dict[str, Any]:
     """How the run applied its haircut: D92 (smooth rate factor fitted to the D62 targets,
-    rate factor held after month 48 — `tail` = its median per stream) or D62 as built
-    (method None: linear cumulative factor, cum-48 factor held)."""
+    rate factor held after month 48 — `tail` = its median per stream), D62 as built
+    (method None: linear cumulative factor, cum-48 factor held), or none (D97, WCXY)."""
     h = run["haircut"]
     if "method" not in h:
         return {"method": None, "tail": None, "eur_factor": None}
@@ -151,7 +203,8 @@ def haircut_method(run: dict[str, Any]) -> dict[str, Any]:
 
 
 def radius_ranges(run: dict[str, Any], classes: set[str] | None = None) -> list[dict[str, Any]]:
-    """D69: measured package range (80 % of held-out packages) per analog-radius class."""
+    """D69: measured package range (80 % of packages) per analog-radius class — held-out
+    packages for WCA, tuning packages for the step-9c groups (the group's `radius_basis`)."""
     out = []
     for key, v in run["disclosure"]["radius_ranges"].items():
         rc, hz = key.split("|")
@@ -167,6 +220,21 @@ def calendar_factor_points(run: dict[str, Any]) -> dict[str, dict[str, float]]:
     for s in STREAMS:
         f = run["calendar_factor"][s]["F"]
         out[s] = {str(k): float(f[k - 1]) for k in (12, 24, 36, 48) if k <= len(f)}
+    return out
+
+
+def group_blocks(run: dict[str, Any], groups: list[str] | set[str], classes: set[str] | None = None) -> list[dict[str, Any]]:
+    """One disclosure block per coverage group (D103 by_bench), in the run's order."""
+    out = []
+    for g in [x for x in run_groups(run) if x in groups]:
+        v = group_view(run, g)
+        hm = haircut_method(v)
+        out.append({"group": g, "label": GROUP_LABELS.get(g, g), "formations": list(GROUP_FORMATIONS.get(g, ())),
+                    "spec": "box_v2" if str(hm["method"] or "").startswith("none") else "box_v2_wf",
+                    "radius_basis": v["disclosure"].get("radius_ranges_basis",
+                                                        "box_v2_wf oil package errors, held-out packages (D69)"),
+                    "disclosure": disclosure_rows(v), "haircut_method": hm,
+                    "radius_ranges": radius_ranges(v, classes), "calendar_factor": calendar_factor_points(v)})
     return out
 
 
@@ -199,6 +267,7 @@ def meta(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict:
         "haircut_method": haircut_method(run),
         "radius_ranges": radius_ranges(run),
         "calendar_factor": calendar_factor_points(run),
+        "groups": group_blocks(run, run_groups(run)),
         "decks": [{**d, "built_at": d["built_at"].isoformat() if d["built_at"] else None} for d in decks],
         "intel_report_versions": list(vintages),
         # the record run keys on its own vintage's stick ids; a newer Novi vintage in the
@@ -350,6 +419,7 @@ def pad(basin: str = _BASIN, pad_key: str = Query(...), session: Session = Depen
             d[f"{s}_di_nominal"] = prm.get("Di_nominal") if prm else None
             d[f"{s}_di_eff_1yr"] = prm.get("Di_eff_1yr") if prm else None
             d[f"{s}_b"] = prm.get("b") if prm else None
+        d["group"] = group_of(d["formation_blueox"]) if d["coverage"] in ("covered", "not_covered_no_analogs") else None
         d["novi_oil_eur_per_kft"] = (d["novi_oil_eur"] * 1000.0 / d["ll_ft"]
                                      if d["novi_oil_eur"] is not None and d["ll_ft"] else None)
         locations.append(d)
@@ -364,6 +434,8 @@ def pad(basin: str = _BASIN, pad_key: str = Query(...), session: Session = Depen
         "haircut_method": haircut_method(run),
         "radius_ranges": radius_ranges(run, {d["radius_class"] for d in covered if d["radius_class"]}),
         "calendar_factor": calendar_factor_points(run),
+        "groups": group_blocks(run, {d["group"] for d in covered if d["group"]},
+                               {d["radius_class"] for d in covered if d["radius_class"]}),
     }
     if not covered:
         return out

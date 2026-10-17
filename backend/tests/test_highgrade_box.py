@@ -132,3 +132,53 @@ def test_disclosure_pre_d92_run_has_no_realised():
     h = {s: {k: {"factor": 0.9} for k in box.HORIZONS} for s in box.STREAMS}
     assert box.disclosure_rows(_run(h))[0]["realised_median"] is None
     assert box.haircut_method(_run(h))["method"] is None
+
+
+def _run9c():
+    """A step-9c run (D103): top level = WCA, every group under by_bench."""
+    wca_h = {"method": "D92 C1", **{s: {k: {"factor": 0.94, "realised_median": 0.95, "realised_p10_p90": [0.96, 0.94]}
+                                         for k in box.HORIZONS} | {"tail_factor_median": 0.77, "eur_factor_median": 0.84}
+                                      for s in box.STREAMS}}
+    bs_h = {"method": "D92 C1", **{s: {k: {"factor": 0.891, "realised_median": 0.895, "realised_p10_p90": [0.9, 0.89]}
+                                        for k in box.HORIZONS} | {"tail_factor_median": 0.68, "eur_factor_median": 0.77}
+                                     for s in box.STREAMS}}
+    wx_h = {"method": "none (D97: WCXY record = raw box_v2)", **{s: {k: {"factor": 1.0, "realised_median": 1.0, "realised_p10_p90": [1.0, 1.0]}
+                                                                       for k in box.HORIZONS} | {"tail_factor_median": 1.0, "eur_factor_median": 1.0}
+                                                                    for s in box.STREAMS}}
+    wca_d = _run(wca_h)["disclosure"] | {"radius_ranges": {"5 mi ring|cum-12": {"p90_low": -0.34, "p10_high": 0.35, "packages": 190, "bias": 0.0}}}
+
+    def d9c(disc_b):
+        hb = {s: {k: {"record_variant": "box_v2_wf", "box_v2_pooled_bias": -0.109, "box_v2_pooled_packages": 653, "haircut_factor": 0.891,
+                      "disclosed_bias": disc_b, "disclosed_packages": 397, "d99_judged": k in ("12", "24"),
+                      "holdout_bias": 0.010 if k in ("12", "24") else None, "holdout_packages": 119 if k in ("12", "24") else None,
+                      "d99_interval": [-0.108, 0.091] if k in ("12", "24") else None} for k in box.HORIZONS} for s in box.STREAMS}
+        return {"hindcast_bias": hb, "radius_ranges": {"past 5 mi|cum-12": {"p90_low": -0.47, "p10_high": 0.53, "packages": 241, "bias": -0.02}},
+                "radius_ranges_basis": "tuning packages"}
+
+    cf = {s: {"F": [0.9] * 48} for s in box.STREAMS}
+    return {"haircut": {**wca_h, "by_bench": {"WCA": wca_h, "BS2_S": bs_h, "WCXY_WCA1": wx_h}},
+            "disclosure": {**wca_d, "by_bench": {"WCA": wca_d, "BS2_S": d9c(-0.016), "WCXY_WCA1": d9c(-0.092)}},
+            "calendar_factor": {**cf, "by_bench": {"WCA": cf, "BS2_S": cf, "WCXY_WCA1": cf}}}
+
+
+def test_by_bench_groups_show_their_own_haircut_and_disclosed_bias():
+    run = _run9c()
+    assert box.run_groups(run) == ["WCA", "BS2_S", "WCXY_WCA1"]
+    assert box.disclosure_rows(run)[0]["haircut"] == 0.94  # top level stays WCA's (back-compat)
+    g = {b["group"]: b for b in box.group_blocks(run, {"BS2_S", "WCXY_WCA1"})}
+    assert list(g) == ["BS2_S", "WCXY_WCA1"]  # only the pad's groups, in the run's order
+    assert g["BS2_S"]["disclosure"][0]["haircut"] == 0.891 and g["BS2_S"]["spec"] == "box_v2_wf"
+    assert g["BS2_S"]["disclosure"][0]["disclosed_bias"] == -0.016
+    assert g["BS2_S"]["disclosure"][0]["holdout_bias_after"] == 0.010  # the 9b score
+    assert g["BS2_S"]["disclosure"][2]["d99_interval"] is None  # cum-36 not judged in 9b
+    assert g["WCXY_WCA1"]["spec"] == "box_v2" and g["WCXY_WCA1"]["disclosure"][0]["haircut"] == 1.0
+    assert g["WCXY_WCA1"]["radius_basis"] == "tuning packages"
+
+
+def test_group_of_and_pre_9c_runs_have_one_wca_group():
+    assert (box.group_of("WCA_2"), box.group_of("BS2_S"), box.group_of("WCXY"), box.group_of("BS3_S")) == ("WCA", "BS2_S", "WCXY_WCA1", None)
+    h = {s: {k: {"factor": 0.9} for k in box.HORIZONS} for s in box.STREAMS}
+    run = _run(h) | {"calendar_factor": {s: {"F": [0.9] * 48} for s in box.STREAMS}}
+    run["disclosure"]["radius_ranges"] = {}
+    blocks = box.group_blocks(run, {"WCA"})
+    assert [b["group"] for b in blocks] == ["WCA"] and blocks[0]["disclosure"][0]["haircut"] == 0.9

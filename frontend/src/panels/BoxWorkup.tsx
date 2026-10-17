@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { COVERAGE_LABELS, fetchBoxPad, type BoxPad, type BoxPadLocation } from "../api/highgrade";
+import { COVERAGE_LABELS, fetchBoxPad, type BoxGroup, type BoxPad, type BoxPadLocation } from "../api/highgrade";
 
 // BOX workup for one Highgrade pad, rendered on demand from box.* (D80: the database
 // is the record, pages are renders). Same content as engineering_db's committed pad
@@ -31,6 +31,12 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
 
   const r = data.run;
   const d92 = data.haircut_method.method != null;
+  // one disclosure block per coverage group on the pad (D103); a pre-9c backend sends none -> the WCA top level
+  const groups: BoxGroup[] = data.groups ?? [{
+    group: "WCA", label: "WCA_1 / WCA_2", formations: ["WCA_1", "WCA_2"], spec: "box_v2_wf",
+    radius_basis: "held-out packages (D69)", disclosure: data.disclosure, haircut_method: data.haircut_method,
+    radius_ranges: data.radius_ranges, calendar_factor: data.calendar_factor,
+  }];
   const covered = data.locations.filter((l) => l.coverage === "covered");
   const others = data.locations.filter((l) => l.coverage !== "covered");
   const byClass = others.reduce<Record<string, number>>((a, l) => ({ ...a, [l.coverage]: (a[l.coverage] ?? 0) + 1 }), {});
@@ -38,7 +44,7 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
   return (
     <div className="box-wu">
       <div className="count" style={{ margin: 0 }}>
-        BOX run {r.run_id} · spec box_v2_wf · code {r.code_sha.slice(0, 7)} · boxfit {r.engine_sha?.slice(0, 7)} ·
+        BOX run {r.run_id} · spec {groups.map((g) => g.spec).filter((v, i, a) => a.indexOf(v) === i).join(" + ")} · code {r.code_sha.slice(0, 7)} · boxfit {r.engine_sha?.slice(0, 7)} ·
         deal-intake config v{r.dealintake_config} · Novi {r.report_version} · production through {r.data_through} ·
         {" "}{covered.length} covered of {data.locations.length} PUDs · {data.analogs.length} named analogs
       </div>
@@ -55,50 +61,12 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
             <strong>How to read this workup.</strong> Forecast = the analog cohort's <strong>P50</strong> per 1,000 ft
             (deal-intake selection: same bench, nearest-first, lateral band, representative spacing; D57), scaled to the
             location's lateral (Cui &amp; Cross below 7,500 ft, D50), then the stated walk-forward haircut (D62 factors
-            {d92 ? ", applied to the rate as a smooth curve fitted to them per location — D92" : ""}). Volumes
+            {d92 ? ", applied to the rate as a smooth curve fitted to them per location — D92" : ""}; BS2_S its own, D94 / D102;
+            WCXY none, D97). Volumes
             are <strong>uptime-free</strong> (D63); oil + gas only, no water (D72); EUR = raw 50-yr technical integral, no
             economic limit. Error = actual ÷ forecast − 1 (negative = the method forecast HIGH).
           </div>
-          <h4>Measured bias and haircut (D59 condition 3)</h4>
-          <table className="box-tbl">
-            <thead>
-              <tr><th>stream</th><th>horizon</th><th>measured bias</th><th>packages</th><th>{d92 ? "D62 target" : "haircut applied"}</th>
-                {d92 && <th>realised (D92, median · P10–P90)</th>}<th>held-out bias after</th><th>F(k) (published, not applied)</th></tr>
-            </thead>
-            <tbody>
-              {data.disclosure.map((d) => (
-                <tr key={`${d.stream}${d.horizon}`}>
-                  <td>{d.stream}</td><td>{d.horizon}</td><td>{pct(d.measured_bias)}</td><td>{n0(d.packages)}</td>
-                  <td>×{d.haircut.toFixed(3)}</td>
-                  {d92 && <td>×{d.realised_median?.toFixed(3) ?? "—"} · {d.realised_p10?.toFixed(3) ?? "—"}–{d.realised_p90?.toFixed(3) ?? "—"}</td>}
-                  <td>{pct(d.holdout_bias_after)}</td>
-                  <td>{data.calendar_factor[d.stream]?.[d.horizon.replace("cum-", "")]?.toFixed(3) ?? "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {d92 && (
-            <div className="count" style={{ margin: "2px 0 0" }}>
-              Realised = cumulative factor the volumes actually carry, across all covered PUDs (P10 = high). After month 48 the
-              rate factor holds at ×{data.haircut_method.tail?.oil?.toFixed(3) ?? "—"} oil / ×{data.haircut_method.tail?.gas?.toFixed(3) ?? "—"} gas;
-              this pad's per-location EUR factor is the "EUR haircut" column below.
-            </div>
-          )}
-          {data.radius_ranges.length > 0 && (
-            <>
-              <h4>Measured package range for this pad's analog radius (D69)</h4>
-              <table className="box-tbl">
-                <thead><tr><th>analog radius</th><th>horizon</th><th>80 % of held-out packages within</th><th>packages</th></tr></thead>
-                <tbody>
-                  {data.radius_ranges.map((x) => (
-                    <tr key={`${x.radius_class}${x.horizon}`}>
-                      <td>{x.radius_class}</td><td>{x.horizon}</td><td>{pct(x.low, 0)} … {pct(x.high, 0)}</td><td>{x.packages}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </>
-          )}
+          {groups.map((g) => <GroupDisclosure key={g.group} g={g} multi={groups.length > 1 || g.group !== "WCA"} />)}
         </>
       )}
 
@@ -224,5 +192,63 @@ function Chart({ chart }: { chart: NonNullable<BoxPad["chart"]> }) {
         <path key={f.location_id} d={path(f.cum_per_kft)} fill="none" stroke="#2563eb" strokeWidth={1} opacity={0.8} />
       ))}
     </svg>
+  );
+}
+
+// D59 condition 3 for one coverage group: measured bias, the haircut (D62 target + D92 realised), the held-out bias,
+// and for the step-9c groups D100's disclosed bias (= tuning bias) with its frozen D99 interval; then the D69 range.
+function GroupDisclosure({ g, multi }: { g: BoxGroup; multi: boolean }) {
+  const d92 = g.haircut_method.method != null && !g.haircut_method.method.startsWith("none");
+  const has9c = g.disclosure.some((d) => d.disclosed_bias != null);
+  return (
+    <>
+      <h4>Measured bias and haircut (D59 condition 3){multi ? ` — ${g.label}` : ""}</h4>
+      <table className="box-tbl">
+        <thead>
+          <tr><th>stream</th><th>horizon</th><th>measured bias{has9c ? " (raw box_v2)" : ""}</th><th>packages</th><th>{d92 ? "D62 target" : "haircut applied"}</th>
+            {d92 && <th>realised (D92, median · P10–P90)</th>}
+            {has9c && <th>disclosed bias ({g.disclosure[0]?.record_variant ?? g.spec}, D100)</th>}
+            <th>held-out bias{has9c ? " (9b)" : " after"}</th>{has9c && <th>D99 interval</th>}<th>F(k) (published, not applied)</th></tr>
+        </thead>
+        <tbody>
+          {g.disclosure.map((d) => (
+            <tr key={`${d.stream}${d.horizon}`}>
+              <td>{d.stream}</td><td>{d.horizon}</td><td>{pct(d.measured_bias)}</td><td>{n0(d.packages)}</td>
+              <td>×{d.haircut.toFixed(3)}</td>
+              {d92 && <td>×{d.realised_median?.toFixed(3) ?? "—"} · {d.realised_p10?.toFixed(3) ?? "—"}–{d.realised_p90?.toFixed(3) ?? "—"}</td>}
+              {has9c && <td><strong>{pct(d.disclosed_bias)}</strong></td>}
+              <td>{pct(d.holdout_bias_after)}</td>
+              {has9c && <td>{d.d99_interval ? `${pct(d.d99_interval[0])} … ${pct(d.d99_interval[1])}` : "not judged in 9b"}</td>}
+              <td>{g.calendar_factor[d.stream]?.[d.horizon.replace("cum-", "")]?.toFixed(3) ?? "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {d92 && (
+        <div className="count" style={{ margin: "2px 0 0" }}>
+          Realised = cumulative factor the volumes actually carry, across the group's covered PUDs (P10 = high). After month 48 the
+          rate factor holds at ×{g.haircut_method.tail?.oil?.toFixed(3) ?? "—"} oil / ×{g.haircut_method.tail?.gas?.toFixed(3) ?? "—"} gas;
+          this pad's per-location EUR factor is the "EUR haircut" column below.
+        </div>
+      )}
+      {!d92 && g.haircut_method.method?.startsWith("none") && (
+        <div className="count" style={{ margin: "2px 0 0" }}>No haircut: {g.haircut_method.method}.</div>
+      )}
+      {g.radius_ranges.length > 0 && (
+        <>
+          <h5 style={{ margin: "6px 0 2px" }}>Measured package range for this pad's analog radius (D69; {g.radius_basis})</h5>
+          <table className="box-tbl">
+            <thead><tr><th>analog radius</th><th>horizon</th><th>80 % of packages within</th><th>packages</th></tr></thead>
+            <tbody>
+              {g.radius_ranges.map((x) => (
+                <tr key={`${x.radius_class}${x.horizon}`}>
+                  <td>{x.radius_class}</td><td>{x.horizon}</td><td>{pct(x.low, 0)} … {pct(x.high, 0)}</td><td>{x.packages}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </>
   );
 }

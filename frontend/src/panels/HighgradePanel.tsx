@@ -491,6 +491,7 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
   const oil = meta.disclosure.filter((d) => d.stream === "oil");
   const d92 = meta.haircut_method.method != null;
   const tail = meta.haircut_method.tail?.oil;
+  const others = (meta.groups ?? []).filter((g) => g.group !== "WCA");
   return (
     <div className="caveat" style={{ margin: "4px 0 10px" }}>
       <div>
@@ -500,8 +501,9 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
       <div style={{ marginTop: 4 }}>
         Analog-workup forecasts (D57): deal-intake analog cohort <strong>P50</strong> per 1,000 ft × lateral, then a
         stated walk-forward haircut. Uptime-free (apply F(k) or a downtime factor, never both); oil + gas only, no
-        water (D72); EUR = raw 50-yr technical integral. v1 covers Delaware WCA_1 / WCA_2 inside the WCA extent;
-        every other PUD is shown as not covered, never zero.
+        water (D72); EUR = raw 50-yr technical integral. Covers Delaware {(meta.groups ?? []).map((g) => g.formations.join(" / ")).join(", ") || "WCA_1 / WCA_2"}{" "}
+        inside their extents; every other PUD is shown as not covered, never zero. The table is WCA's; each pad workup
+        shows its own group's.
       </div>
       <table className="hg-box-tbl">
         <thead><tr><th>oil</th><th>measured bias</th><th>{d92 ? "D62 target" : "haircut"}</th>{d92 && <th>realised (D92)</th>}<th>held-out after</th></tr></thead>
@@ -521,6 +523,21 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
           ? `D92: the D62 targets are applied to the rate as a smooth factor (a + b·ln k, fitted per PUD), so a rate never rises after its peak; realised = median cumulative factor across covered PUDs. The rate factor holds at ×${tail?.toFixed(3) ?? "—"} after month 48 (50-yr EUR).`
           : "The cum-48 factor holds for the 50-yr EUR (D62)."}
       </div>
+      {others.length > 0 && (
+        <table className="hg-box-tbl">
+          <thead><tr><th>oil, other groups</th>{oil.map((d) => <th key={d.horizon}>{d.horizon}</th>)}</tr></thead>
+          <tbody>
+            {others.map((g) => (
+              <tr key={g.group}>
+                <td>{g.group === "WCXY_WCA1" ? "WCXY" : g.group} ({g.spec}): haircut · disclosed bias</td>
+                {g.disclosure.filter((d) => d.stream === "oil").map((d) => (
+                  <td key={d.horizon}>×{d.haircut.toFixed(3)} · {pct(d.disclosed_bias ?? null)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
       {meta.stale && (
         <div style={{ color: "#991b1b", marginTop: 4 }}>
           The warehouse holds Novi {meta.intel_report_versions.join(", ")}; this run keys on {r.report_version} sticks —

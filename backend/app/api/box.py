@@ -44,9 +44,14 @@ router = APIRouter(prefix="/box", tags=["box"])
 
 _BASIN = Query(..., pattern="^(delaware|midland)$")
 
-# Every screened PUD lands in exactly one class. The first six are box.pud_forecast's
-# own coverage values (sql/60, D67); the last three are derived for a PUD with no row
-# in the record run:
+# Every screened PUD lands in exactly one class. The first seven are box.pud_forecast's
+# own coverage values (sql/60 + sql/63, D67 / D105); the last three are derived for a PUD
+# with no row in the record run:
+#   covered              VALIDATED tier: the bench passed its out-of-time test
+#   covered_provisional  PROVISIONAL tier (D105): forecast-carrying exactly like covered,
+#                        but the bench was never out-of-time tested (AVA_0/1/2, BS2_C) or
+#                        failed its one-time holdout (BS3_S, BS3_C, WCB_2, BS1_S). Counted
+#                        apart from covered everywhere, never silently summed into it
 #   bench_not_in_box  its bench is in no box.bench_scope pool (not part of BOX v1)
 #   realized          reconciliation matched it to production (shown only when the
 #                     Highgrade "All Novi BASE_CASE" toggle readmits realized PUDs)
@@ -54,6 +59,7 @@ _BASIN = Query(..., pattern="^(delaware|midland)$")
 #                     expected 0; non-zero means the Novi vintage moved under the run
 COVERAGE_CLASSES: tuple[str, ...] = (
     "covered",
+    "covered_provisional",
     "not_covered_no_analogs",
     "not_covered_outside_extent",
     "not_covered_wcxy",
@@ -63,6 +69,11 @@ COVERAGE_CLASSES: tuple[str, ...] = (
     "realized",
     "no_box_row",
 )
+
+# The coverage classes that carry a BOX forecast (volumes, EUR, analogs, charts).
+FORECAST_CLASSES: tuple[str, ...] = ("covered", "covered_provisional")
+TIER_OF: dict[str, str] = {"covered": "validated", "covered_provisional": "provisional"}
+FORECAST_IN_SQL = "('covered', 'covered_provisional')"
 
 STREAMS = ("oil", "gas")
 HORIZONS = ("12", "24", "36", "48")
@@ -124,7 +135,9 @@ def record_run(session: Session) -> dict[str, Any]:
 
 
 # Coverage groups of a multi-group run (engineering_db box/production.PRODUCTION_BENCHES):
-# group -> formations it covers. Change both together.
+# group -> formations it covers, where the group key is not the bench itself. Change both
+# together. Every other group of the run (step 15: WCB_1, WCC, AVA_0/1/2, BS1_S, BS2_C,
+# BS3_C, BS3_S, WCB_2) is keyed by its own bench name (group_of with the run's groups).
 GROUP_FORMATIONS: dict[str, tuple[str, ...]] = {
     "WCA": ("WCA_1", "WCA_2"),
     "BS2_S": ("BS2_S",),
@@ -137,11 +150,13 @@ GROUP_LABELS: dict[str, str] = {
 }
 
 
-def group_of(formation: str | None) -> str | None:
+def group_of(formation: str | None, groups: list[str] | None = None) -> str | None:
+    """Disclosure group of a formation: WCA_1 / WCA_2 -> WCA, WCXY -> WCXY_WCA1 (WCXY rides
+    the WCA extent), otherwise the bench itself when it is one of the run's `groups`."""
     for g, forms in GROUP_FORMATIONS.items():
         if formation in forms:
             return g
-    return None
+    return formation if groups and formation in groups else None
 
 
 def run_groups(run: dict[str, Any]) -> list[str]:
@@ -223,18 +238,42 @@ def calendar_factor_points(run: dict[str, Any]) -> dict[str, dict[str, float]]:
     return out
 
 
+def tier_block(disc: dict[str, Any]) -> dict[str, Any]:
+    """A group's evidence tier (D105). Validated groups (WCA, BS2_S, WCXY: no `tier` key;
+    step-15 WCB_1 / WCC: tier "validated") keep the 9c shape. Provisional groups also
+    carry the step-15 statement: `tier_label` (why provisional), `holdout` (the one-time
+    D99 result or "none"), `lead` (the headline line's label + scope), `lines` (bias with
+    its 95 % range per label x scope x stream x horizon; error = actual / forecast - 1,
+    negative = forecast HIGH) and the latest-vintage sentence. A `holdout_failed` group
+    shows its holdout line beside the pooled one, never the pooled figure alone."""
+    holdout = disc.get("holdout")
+    return {"tier": disc.get("tier") or "validated",
+            "tier_label": disc.get("label"),
+            "holdout": holdout,
+            "holdout_failed": str(holdout or "").upper().startswith("FAIL"),
+            "lead": disc.get("lead"),
+            "lines": [{k: ln.get(k) for k in ("label", "scope", "stream", "horizon", "packages", "bias", "range_95")}
+                      for ln in disc.get("lines") or []],
+            "latest_vintage_text": disc.get("latest_vintage_text"),
+            "error_convention": disc.get("error_convention", "actual / forecast - 1 (negative = forecast HIGH)")}
+
+
 def group_blocks(run: dict[str, Any], groups: list[str] | set[str], classes: set[str] | None = None) -> list[dict[str, Any]]:
     """One disclosure block per coverage group (D103 by_bench), in the run's order."""
     out = []
     for g in [x for x in run_groups(run) if x in groups]:
         v = group_view(run, g)
         hm = haircut_method(v)
-        out.append({"group": g, "label": GROUP_LABELS.get(g, g), "formations": list(GROUP_FORMATIONS.get(g, ())),
-                    "spec": "box_v2" if str(hm["method"] or "").startswith("none") else "box_v2_wf",
+        raw = str(hm["method"] or "").startswith("none")
+        out.append({"group": g,
+                    "label": GROUP_LABELS.get(g, f"{g} — raw box_v2, no haircut" if raw else g),
+                    "formations": list(GROUP_FORMATIONS.get(g, (g,))),
+                    "spec": "box_v2" if raw else "box_v2_wf",
                     "radius_basis": v["disclosure"].get("radius_ranges_basis",
                                                         "box_v2_wf oil package errors, held-out packages (D69)"),
                     "disclosure": disclosure_rows(v), "haircut_method": hm,
-                    "radius_ranges": radius_ranges(v, classes), "calendar_factor": calendar_factor_points(v)})
+                    "radius_ranges": radius_ranges(v, classes), "calendar_factor": calendar_factor_points(v),
+                    **tier_block(v["disclosure"])})
     return out
 
 
@@ -307,7 +346,8 @@ def well_forecast(session: Session, basin: str, unique_id: str) -> dict[str, Any
     run = record_run(session)
     row = session.execute(
         text(f"""
-            SELECT il.stick_id, {coverage_sql('il')} AS coverage, bp.location_id, bp.lateral_ft,
+            SELECT il.stick_id, {coverage_sql('il')} AS coverage, bp.location_id, bp.lateral_ft, bp.flags,
+                   COALESCE(fb.formation_blueox, '(unmapped)') AS formation_blueox,
                    bso.eur AS oil_eur, bso.eur_per_kft AS oil_eur_per_kft,
                    bsg.eur AS gas_eur, bsg.eur_per_kft AS gas_eur_per_kft
             FROM curated.intel_locations il
@@ -323,13 +363,15 @@ def well_forecast(session: Session, basin: str, unique_id: str) -> dict[str, Any
         return None
     out: dict[str, Any] = {
         "run_id": run["run_id"], "data_through": run["data_through"],
-        "coverage": row["coverage"], "stick_id": row["stick_id"],
-        "lateral_ft": row["lateral_ft"],
+        "coverage": row["coverage"], "tier": TIER_OF.get(row["coverage"]), "stick_id": row["stick_id"],
+        "lateral_ft": row["lateral_ft"], "formation_blueox": row["formation_blueox"],
+        # the run's own sentences: the tier (D105 PROVISIONAL ...), edge caveats, at-bound fits
+        "flags": row["flags"] or [],
         "eur": {"oil": row["oil_eur"], "gas": row["gas_eur"]},
         "eur_per_kft": {"oil": row["oil_eur_per_kft"], "gas": row["gas_eur_per_kft"]},
         "streams": {},
     }
-    if row["coverage"] != "covered":
+    if row["coverage"] not in FORECAST_CLASSES:
         return out
     mrows = session.execute(
         text("""
@@ -411,6 +453,7 @@ def pad(basin: str = _BASIN, pad_key: str = Query(...), session: Session = Depen
         """),
         p,
     ).mappings().all()
+    groups = run_groups(run)
     locations = []
     for r in locs:
         d = dict(r)
@@ -419,17 +462,21 @@ def pad(basin: str = _BASIN, pad_key: str = Query(...), session: Session = Depen
             d[f"{s}_di_nominal"] = prm.get("Di_nominal") if prm else None
             d[f"{s}_di_eff_1yr"] = prm.get("Di_eff_1yr") if prm else None
             d[f"{s}_b"] = prm.get("b") if prm else None
-        d["group"] = group_of(d["formation_blueox"]) if d["coverage"] in ("covered", "not_covered_no_analogs") else None
+        d["tier"] = TIER_OF.get(d["coverage"])
+        d["group"] = (group_of(d["formation_blueox"], groups)
+                      if d["coverage"] in (*FORECAST_CLASSES, "not_covered_no_analogs") else None)
         d["novi_oil_eur_per_kft"] = (d["novi_oil_eur"] * 1000.0 / d["ll_ft"]
                                      if d["novi_oil_eur"] is not None and d["ll_ft"] else None)
         locations.append(d)
 
-    covered = [d for d in locations if d["coverage"] == "covered" and d["oil_eur"] is not None]
+    # both tiers carry a forecast; tier_counts keeps them apart (D105)
+    covered = [d for d in locations if d["coverage"] in FORECAST_CLASSES and d["oil_eur"] is not None]
     out: dict[str, Any] = {
         "basin": basin, "pad_key": pad_key,
         "run": {k: run[k] for k in ("run_id", "report_version", "data_through", "code_sha", "engine_sha",
                                     "dealintake_config", "created_at")},
         "locations": locations, "analogs": [], "chart": None,
+        "tier_counts": {t: sum(1 for d in covered if d["tier"] == t) for t in ("validated", "provisional")},
         "disclosure": disclosure_rows(run),
         "haircut_method": haircut_method(run),
         "radius_ranges": radius_ranges(run, {d["radius_class"] for d in covered if d["radius_class"]}),
@@ -471,7 +518,8 @@ def pad(basin: str = _BASIN, pad_key: str = Query(...), session: Session = Depen
     vols: dict[int, np.ndarray] = {i: np.zeros(K_CHART) for i in ids}
     for m in mrows:
         vols[m["location_id"]][m["month_no"] - 1] = m["volume"]
-    forecast = [{"location_id": i, "stick_id": next(d["stick_id"] for d in covered if d["location_id"] == i),
+    by_loc = {d["location_id"]: d for d in covered}
+    forecast = [{"location_id": i, "stick_id": by_loc[i]["stick_id"], "tier": by_loc[i]["tier"],
                  "cum_per_kft": [float(v) for v in np.cumsum(vols[i]) / (lat[i] / 1000.0)]} for i in ids]
 
     # analog actuals: calendar cumulative oil per 1,000 ft (carries downtime; the

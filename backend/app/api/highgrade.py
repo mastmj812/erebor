@@ -22,8 +22,10 @@ Forecast SOURCE (BOX plan step 8): every endpoint takes `source` = novi | box.
           stick_id. The screened population is the SAME Novi PUD set either way; only
           the forecast numbers change. Every screened PUD gets a BOX coverage class
           (box.pud_forecast.coverage, or derived when the PUD has no BOX row) and
-          aggregates use COVERED rows only, with the not-covered count reported per
-          class — a not-covered PUD is never a zero (D2/D67).
+          aggregates use FORECAST-CARRYING rows only (covered = validated tier, plus
+          covered_provisional, D105), with the validated / provisional valued counts
+          reported apart and the not-covered count reported per class — a not-covered
+          PUD is never a zero (D2/D67).
   BOX econ CAVEAT (sibling of the Novi caveat above): box_pv* metrics are Steven's
   box_econ.box_pud_econ values for ONE named deck + assumption set — a display-only
   screen with provenance (D13: nothing here computes economics, and econ never flows
@@ -41,7 +43,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
-from app.api.box import COVERAGE_CLASSES, box_joins, coverage_sql, econ_join, record_run
+from app.api.box import COVERAGE_CLASSES, FORECAST_IN_SQL, box_joins, coverage_sql, econ_join, record_run
 from app.db import get_session
 
 router = APIRouter(prefix="/highgrade", tags=["highgrade"])
@@ -305,14 +307,17 @@ def value_expr(metric: str, agg: str, source: str, a: str = "il") -> str:
     return f"{fn}({row_value_sql(metric, source, a)})"
 
 
-def n_valued_expr(metric: str, source: str, a: str = "il") -> str:
-    """Wells contributing to the pad value (well_count: every screened well)."""
+def n_valued_expr(metric: str, source: str, a: str = "il", coverage: str | None = None) -> str:
+    """Wells contributing to the pad value (well_count: every screened well). With
+    `coverage` (BOX), only that tier's wells: the validated / provisional split (D105)."""
+    tier = f"bp.coverage = '{coverage}'" if coverage else None
     if metric == "well_count":
-        return "count(*)"
+        return f"count(*) FILTER (WHERE {tier})" if tier else "count(*)"
     if metric.endswith("_per_kft"):
         eur, kft = _eur_kft(metric, source, a)
-        return f"count(*) FILTER (WHERE {eur} IS NOT NULL AND {kft} > 0)"
-    return f"count({row_value_sql(metric, source, a)})"
+        return f"count(*) FILTER (WHERE {eur} IS NOT NULL AND {kft} > 0{' AND ' + tier if tier else ''})"
+    v = f"count({row_value_sql(metric, source, a)})"
+    return f"{v} FILTER (WHERE {tier})" if tier else v
 
 
 def _build_filters(filters: HighgradeFilters, box: bool = False) -> tuple[list[str], dict, list]:
@@ -334,7 +339,7 @@ def _build_filters(filters: HighgradeFilters, box: bool = False) -> tuple[list[s
         lo, hi = bounds
         ref = _num_sql(col)  # support scores -> sup.<col>; others stay bare (il/w safe)
         # a BOX bound never drops a not-covered PUD (see BOX_NUMERIC)
-        keep = "bp.coverage IS DISTINCT FROM 'covered' OR " if col in BOX_NUMERIC else ""
+        keep = f"bp.coverage IS NULL OR bp.coverage NOT IN {FORECAST_IN_SQL} OR " if col in BOX_NUMERIC else ""
         if lo is not None:
             clauses.append(f"({keep}{ref} >= :{col}_lo)")
             params[f"{col}_lo"] = lo
@@ -380,11 +385,18 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
         # one count per coverage class per pad (+ the screen-wide totals below)
         cov = coverage_sql("il")
         cov_cols = "".join(f", count(*) FILTER (WHERE {cov} = '{c}') AS nc_{c}" for c in COVERAGE_CLASSES)
-        nc_select = "".join(f", a.nc_{c}" for c in COVERAGE_CLASSES)
-        cov_props = "".join(f", 'nc_{c}', nc_{c}" for c in COVERAGE_CLASSES)
+        # valued wells per tier (D105): the pad value carries both tiers, so its
+        # validated / provisional make-up is reported, never folded into one count
+        tiers = {"validated": "covered", "provisional": "covered_provisional"}
+        cov_cols += "".join(f", {n_valued_expr(body.metric, body.source, coverage=c)} AS nv_{t}" for t, c in tiers.items())
+        nc_select = "".join(f", a.nc_{c}" for c in COVERAGE_CLASSES) + "".join(f", a.nv_{t}" for t in tiers)
+        cov_props = "".join(f", 'nc_{c}', nc_{c}" for c in COVERAGE_CLASSES) + "".join(f", 'nv_{t}', nv_{t}" for t in tiers)
         cov_summary = (
             ", 'coverage_counts', (SELECT json_build_object("
             + ", ".join(f"'{c}', COALESCE(sum(nc_{c}), 0)" for c in COVERAGE_CLASSES)
+            + ") FROM agg)"
+            + ", 'valued_by_tier', (SELECT json_build_object("
+            + ", ".join(f"'{t}', COALESCE(sum(nv_{t}), 0)" for t in tiers)
             + ") FROM agg)"
         )
 

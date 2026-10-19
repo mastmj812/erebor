@@ -47,11 +47,14 @@ export interface WellProduction {
   has_forecast?: boolean;
   box?: WellBoxForecast | null; // BOX record run for this PUD (null = not a Novi PUD)
 }
-// BOX forecast for one PUD (backend app/api/box.well_forecast). Series only when covered.
+// BOX forecast for one PUD (backend app/api/box.well_forecast). Series only when forecast-carrying
+// (covered = validated, covered_provisional = provisional tier, D105).
 export interface BoxWellSeries { rate_day: number[]; rate: number[]; cum_day: number[]; cum: number[] }
 export interface WellBoxForecast {
   run_id: number; data_through: string; coverage: string; stick_id: number;
-  lateral_ft: number | null;
+  tier?: "validated" | "provisional" | null;
+  lateral_ft: number | null; formation_blueox?: string;
+  flags?: string[]; // the run's own sentences (tier, edge caveats, at-bound fits)
   eur: { oil: number | null; gas: number | null };
   eur_per_kft: { oil: number | null; gas: number | null };
   streams: Partial<Record<"oil" | "gas", BoxWellSeries>>;
@@ -126,7 +129,8 @@ export interface HighgradeResult {
   value_max: number | null;
   pads: GeoJSON.FeatureCollection;
   source?: ForecastSource;
-  valued_count?: number;    // wells carrying a value (BOX: covered; BOX econ: priced)
+  valued_count?: number;    // wells carrying a value (BOX: covered + provisional; BOX econ: priced)
+  valued_by_tier?: { validated: number; provisional: number } | null; // BOX: valued_count split by tier (D105)
   pads_unvalued?: number;   // drawn pads with no valued well (BOX: grey "not covered")
   coverage_counts?: Record<string, number> | null; // BOX: screened PUDs per coverage class
   box_run?: { run_id: number; report_version: string; data_through: string; code_sha: string };

@@ -63,7 +63,8 @@ def test_n_valued_counts_only_wells_with_a_value():
 def test_box_range_never_drops_a_not_covered_pud():
     f = HighgradeFilters(ranges={"box_oil_eur_per_kft": (60000.0, None), "rqs": (None, 0.5)})
     clauses, params, _ = highgrade._build_filters(f, box=True)
-    assert "(bp.coverage IS DISTINCT FROM 'covered' OR bso.eur_per_kft >= :box_oil_eur_per_kft_lo)" in clauses
+    assert ("(bp.coverage IS NULL OR bp.coverage NOT IN ('covered', 'covered_provisional') OR "
+            "bso.eur_per_kft >= :box_oil_eur_per_kft_lo)") in clauses
     assert "(rqs <= :rqs_hi)" in clauses  # Novi attribute bounds keep their NULL-drop semantics
     assert params == {"box_oil_eur_per_kft_lo": 60000.0, "rqs_hi": 0.5}
 
@@ -75,8 +76,8 @@ def test_box_range_ignored_without_box_joins():
 
 
 def test_coverage_classes_cover_the_sql_60_values():
-    # every box.pud_forecast.coverage value (sql/60 CHECK) must be a class, plus the derived three
-    sql60 = {"covered", "not_covered_emerging", "not_covered_wcxy", "not_covered_unvalidated",
+    # every box.pud_forecast.coverage value (sql/60 CHECK + sql/63's D105 tier) must be a class, plus the derived three
+    sql60 = {"covered", "covered_provisional", "not_covered_emerging", "not_covered_wcxy", "not_covered_unvalidated",
              "not_covered_outside_extent", "not_covered_no_analogs"}
     assert sql60 <= set(box.COVERAGE_CLASSES)
     assert set(box.COVERAGE_CLASSES) - sql60 == {"bench_not_in_box", "realized", "no_box_row"}
@@ -182,3 +183,54 @@ def test_group_of_and_pre_9c_runs_have_one_wca_group():
     run["disclosure"]["radius_ranges"] = {}
     blocks = box.group_blocks(run, {"WCA"})
     assert [b["group"] for b in blocks] == ["WCA"] and blocks[0]["disclosure"][0]["haircut"] == 0.9
+
+
+def test_n_valued_splits_by_tier():
+    assert highgrade.n_valued_expr("oil_eur", "box", coverage="covered") == "count(bso.eur) FILTER (WHERE bp.coverage = 'covered')"
+    assert highgrade.n_valued_expr("well_count", "box", coverage="covered_provisional") ==         "count(*) FILTER (WHERE bp.coverage = 'covered_provisional')"
+    assert "AND bp.coverage = 'covered'" in highgrade.n_valued_expr("oil_eur_per_kft", "box", coverage="covered")
+    assert box.TIER_OF == {"covered": "validated", "covered_provisional": "provisional"}
+    assert set(box.FORECAST_CLASSES) <= set(box.COVERAGE_CLASSES)
+
+
+def _step15_disc(tier, holdout, lead_scope, scopes):
+    lines = [{"label": "BS3_S", "scope": sc, "stream": s, "horizon": h, "packages": 100, "bias": -0.03,
+              "range_95": [-0.07, 0.01], "cutoffs": 6} for sc in scopes for s in box.STREAMS for h in (12, 24, 36)]
+    hb = {s: {k: {"record_variant": "box_v2", "box_v2_pooled_bias": -0.06, "box_v2_pooled_packages": 470,
+                  "disclosed_bias": -0.032, "disclosed_packages": 630, "haircut_factor": 1.0,
+                  "holdout_bias": 0.055 if holdout.startswith("FAIL") else None, "holdout_packages": 160,
+                  "d99_judged": holdout.startswith("FAIL"), "d99_interval": [-0.10, 0.10] if holdout.startswith("FAIL") else None}
+              for k in box.HORIZONS} for s in box.STREAMS}
+    return {"tier": tier, "label": "why", "holdout": holdout, "lead": {"label": "BS3_S", "scope": lead_scope},
+            "lines": lines, "latest_vintage_text": "latest vintage: oil 12.4% below forecast", "hindcast_bias": hb,
+            "error_convention": "actual / forecast - 1 (negative = forecast HIGH)",
+            "radius_ranges": {"past 5 mi|cum-12": {"p90_low": -0.5, "p10_high": 0.4, "packages": 385, "bias": -0.07}}}
+
+
+def test_step15_groups_are_keyed_by_bench_and_carry_their_tier():
+    run = _run9c()
+    raw = {"method": "none (D97)", **{s: {k: {"factor": 1.0} for k in box.HORIZONS} for s in box.STREAMS}}
+    cf = {s: {"F": [0.9] * 48} for s in box.STREAMS}
+    for g, disc in {"BS3_S": _step15_disc("provisional", "FAIL (scored once 2026-10-18, D99)", "tuning + holdout",
+                                          ("tuning", "holdout", "tuning + holdout")),
+                    "AVA_1": _step15_disc("provisional", "none (D105: never out-of-time validated)", "tuning", ("tuning",)),
+                    "WCB_1": {**_step15_disc("validated", "", "", ()), "holdout": None, "lead": None, "lines": None}}.items():
+        run["haircut"]["by_bench"][g] = raw
+        run["disclosure"]["by_bench"][g] = disc
+        run["calendar_factor"]["by_bench"][g] = cf
+    groups = box.run_groups(run)
+    assert box.group_of("BS3_S", groups) == "BS3_S" and box.group_of("WCXY", groups) == "WCXY_WCA1"
+    assert box.group_of("WCA_1", groups) == "WCA" and box.group_of("BS9_X", groups) is None
+    g = {b["group"]: b for b in box.group_blocks(run, set(groups))}
+    assert g["WCA"]["tier"] == "validated" and g["WCA"]["lines"] == []  # 9c shape, no tier key in the jsonb
+    assert g["WCB_1"]["tier"] == "validated" and not g["WCB_1"]["holdout_failed"]
+    bs = g["BS3_S"]
+    assert bs["tier"] == "provisional" and bs["holdout_failed"] and bs["spec"] == "box_v2"
+    assert bs["formations"] == ["BS3_S"] and bs["lead"] == {"label": "BS3_S", "scope": "tuning + holdout"}
+    assert {ln["scope"] for ln in bs["lines"]} == {"tuning", "holdout", "tuning + holdout"}
+    assert set(bs["lines"][0]) == {"label", "scope", "stream", "horizon", "packages", "bias", "range_95"}
+    # the pooled (disclosed) figure and the holdout score travel in the same row
+    assert (bs["disclosure"][0]["disclosed_bias"], bs["disclosure"][0]["holdout_bias_after"]) == (-0.032, 0.055)
+    ava = g["AVA_1"]
+    assert ava["tier"] == "provisional" and not ava["holdout_failed"] and ava["disclosure"][0]["holdout_bias_after"] is None
+    assert ava["latest_vintage_text"].startswith("latest vintage")

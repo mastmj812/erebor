@@ -221,3 +221,10 @@ button.link { background: none; border: none; color: #2563eb; cursor: pointer; f
 .box-tbl th { color: #52525b; font-weight: 600; background: #fafafa; position: sticky; top: 0; }
 .box-tbl tr.nc td { color: #a1a1aa; }
 .box-tbl td.box-flags { white-space: normal; min-width: 180px; color: #92400e; }
+/* BOX provisional tier (D105): amber badge + disclosure box; validated keeps the plain look */
+.box-prov-badge { display: inline-block; padding: 0 5px; border-radius: 3px; background: #fef3c7; color: #92400e;
+  border: 1px solid #f59e0b; font-size: 10px; font-weight: 700; letter-spacing: 0.02em; vertical-align: 1px; }
+.box-prov-badge.fail { background: #fee2e2; color: #991b1b; border-color: #f87171; }
+.box-prov { border-left: 3px solid #f59e0b; padding: 2px 0 2px 8px; margin: 6px 0; }
+.box-prov.fail { border-left-color: #f87171; }
+.box-tbl td.box-hold { background: #fef2f2; }

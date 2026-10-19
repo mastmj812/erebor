@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from "react";
 
 import { fetchProductionAggregate } from "../api/production";
 import { colorForBlueox } from "../map/formations";
-import { COVERAGE_LABELS } from "../api/highgrade";
+import { COVERAGE_LABELS, isForecastClass } from "../api/highgrade";
 import { useMapStore, type Phase, type WellSource } from "../store";
 import { LineChart, type Series } from "./LineChart";
 
@@ -94,7 +94,8 @@ export function ProductionView(_props: { width?: number; height?: number }) {
   // BOX for the clicked well: offered only when the record run covers it. Volumes are
   // uptime-free (D63), so the BOX "rate" is volume / days in month, not a calendar rate.
   const box = overlay?.box ?? null;
-  const boxCovered = box?.coverage === "covered";
+  const boxCovered = box != null && isForecastClass(box.coverage); // validated or provisional tier (D105)
+  const boxProv = box?.coverage === "covered_provisional";
   const src: WellSource = boxCovered ? wellSource : "novi";
   const boxStream = phase === "water" ? undefined : box?.streams[phase];
   if (overlay && src !== "novi" && boxStream) {
@@ -162,6 +163,9 @@ export function ProductionView(_props: { width?: number; height?: number }) {
             {box && !boxCovered ? ` · BOX: not covered (${COVERAGE_LABELS[box.coverage] ?? box.coverage})` : ""}
             {boxCovered && src !== "novi" && box.eur_per_kft.oil != null
               ? ` · BOX oil ${Math.round(box.eur_per_kft.oil).toLocaleString()} bbl/kft` : ""}
+            {boxProv && (
+              <> <span className="box-prov-badge" title={(box.flags ?? []).join("\n")}>BOX PROVISIONAL</span></>
+            )}
             <button className="link" onClick={() => st.getState().setWellOverlay(null)}>clear</button>
           </span>
         )}

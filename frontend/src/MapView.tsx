@@ -710,6 +710,11 @@ function padPopupHtml(p: Record<string, unknown>, metric: string, agg: string, s
       .map(([k, label]) => `<tr><td>${esc(label)}</td><td>${fmtInt(p[`nc_${k}`])}</td></tr>`)
       .join("")
     : "";
+  // BOX: the value's validated / provisional make-up (D105), stated whenever a provisional PUD is in it
+  const nProv = Number(p.nv_provisional ?? 0);
+  const tierRow = box && nValued > 0 && nProv > 0
+    ? `<tr><td>valued PUDs</td><td>${fmtInt(p.nv_validated ?? 0)} validated · ${fmtInt(nProv)} PROVISIONAL</td></tr>`
+    : "";
   const acresRow = p.acres == null ? "" : `<tr><td>Acres</td><td>${fmtInt(p.acres)}</td></tr>`;
   const nParts = Number(p.n_parts ?? 1);
   const splitRow = nParts > 1
@@ -719,6 +724,7 @@ function padPopupHtml(p: Record<string, unknown>, metric: string, agg: string, s
       <div class="mtt-name">${esc(p.pad_key)}</div>
       <table class="mtt-table">
         <tr><td>${esc(metricLabel)}</td><td>${valStr}</td></tr>
+        ${tierRow}
         <tr><td>Wells</td><td>${fmtInt(p.n_wells)}</td></tr>
         ${acresRow}
         ${splitRow}

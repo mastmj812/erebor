@@ -46,7 +46,8 @@ export interface HighgradeFilters {
 
 // Coverage classes, in display order (backend app/api/box.py COVERAGE_CLASSES).
 export const COVERAGE_LABELS: Record<string, string> = {
-  covered: "covered (BOX forecast)",
+  covered: "covered — validated (BOX forecast)",
+  covered_provisional: "covered — PROVISIONAL tier (BOX forecast, D105)",
   not_covered_no_analogs: "no analogs at the 20-mi cap (D74)",
   not_covered_outside_extent: "outside the BOX extent",
   not_covered_wcxy: "WCXY target, not covered by this run (D61)",
@@ -74,13 +75,31 @@ export interface BoxDisclosureRow {
   // step-9c groups (BS2_S, WCXY): D100 disclosed bias (= tuning bias), frozen D99 interval, record variant
   record_variant?: string | null; disclosed_bias?: number | null; d99_interval?: [number, number] | null;
 }
-// One coverage group of the record run (D103 by_bench): WCA, BS2_S or WCXY_WCA1.
+// The coverage classes that carry a BOX forecast (backend box.FORECAST_CLASSES): covered = the
+// VALIDATED tier, covered_provisional = the PROVISIONAL tier (D105). Counted apart, never summed silently.
+export const FORECAST_CLASSES = ["covered", "covered_provisional"];
+export const isForecastClass = (c: string | null | undefined) => c != null && FORECAST_CLASSES.includes(c);
+// One step-15 disclosure line: bias (actual ÷ forecast − 1, negative = forecast HIGH) with its 95 % range.
+export interface BoxTierLine {
+  label: string; scope: string; stream: string; horizon: number; packages: number;
+  bias: number; range_95: [number, number] | null;
+}
+// One coverage group of the record run (D103 by_bench): WCA, BS2_S, WCXY_WCA1, or a step-15 bench.
 export interface BoxGroup {
   group: string; label: string; formations: string[]; spec: string; radius_basis: string;
   disclosure: BoxDisclosureRow[];
   haircut_method: BoxHaircutMethod;
   radius_ranges: BoxRadiusRange[];
   calendar_factor: Record<string, Record<string, number>>;
+  // evidence tier (D105); absent on a pre-step-15 backend = validated
+  tier?: "validated" | "provisional";
+  tier_label?: string | null;        // why the group is provisional
+  holdout?: string | null;           // the one-time D99 result, or "none (D105 …)"
+  holdout_failed?: boolean;          // show the holdout line beside the pooled one, never the pooled alone
+  lead?: { label: string; scope: string } | null;
+  lines?: BoxTierLine[];
+  latest_vintage_text?: string | null;
+  error_convention?: string;
 }
 // How the run applied its haircut (backend box.haircut_method): D92 = smooth rate factor fitted to the
 // D62 targets, held at `tail` after month 48; method null = D62 as built (linear cumulative factor).
@@ -114,7 +133,7 @@ export interface BoxMeta {
 export interface BoxPadLocation {
   stick_id: number; unique_id: string; formation_blueox: string; ll_ft: number | null;
   novi_oil_eur: number | null; novi_gas_eur: number | null; novi_oil_eur_per_kft: number | null;
-  recon_status: string | null; coverage: string; group?: string | null;
+  recon_status: string | null; coverage: string; group?: string | null; tier?: "validated" | "provisional" | null;
   location_id: number | null; lateral_ft: number | null; completed_lateral_ft: number | null;
   planned_spacing_ft: number | null; spacing_source: string | null;
   search_mode: string | null; radius_mi: number | null; radius_class: string | null;
@@ -135,7 +154,7 @@ export interface BoxPad {
   analogs: BoxPadAnalog[];
   chart: {
     months: number; unit: string; n_analog_curves: number;
-    forecast: { location_id: number; stick_id: number; cum_per_kft: number[] }[];
+    forecast: { location_id: number; stick_id: number; tier?: "validated" | "provisional"; cum_per_kft: number[] }[];
     analog_band: { p10: (number | null)[]; p50: (number | null)[]; p90: (number | null)[]; n: number[] } | null;
   } | null;
   disclosure: BoxDisclosureRow[];
@@ -143,6 +162,7 @@ export interface BoxPad {
   radius_ranges: BoxRadiusRange[];
   calendar_factor: Record<string, Record<string, number>>;
   groups?: BoxGroup[];
+  tier_counts?: { validated: number; provisional: number };
 }
 
 export async function fetchFacets(

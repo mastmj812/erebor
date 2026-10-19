@@ -65,7 +65,7 @@ const HG_OVERLAYS: { key: OverlayKey; label: string }[] = [
 
 // numeric range sliders (min/max entry, seeded with the facet bounds)
 // `sources` limits a row to one forecast source (default: both — Novi screen attributes).
-const BOX_RANGE_HINT = "BOX bounds apply to covered PUDs only; a PUD without a BOX forecast stays in the screen, counted under its not-covered class.";
+const BOX_RANGE_HINT = "BOX bounds apply to forecast PUDs only (validated + provisional); a PUD without a BOX forecast stays in the screen, counted under its not-covered class.";
 const RANGE_FIELDS: { col: string; label: string; money?: boolean; hint?: string; sources?: ForecastSource[] }[] = [
   { col: "rqs", label: "Rock-quality score" },
   { col: "spacing_s", label: "Spacing score" },
@@ -414,6 +414,7 @@ export function HighgradePanel() {
           </div>
           {highgrade.source === "box" && highgrade.coverage_counts && (
             <CoverageSummary counts={highgrade.coverage_counts} valued={highgrade.valued_count ?? 0}
+              valuedByTier={highgrade.valued_by_tier ?? null}
               total={highgrade.well_count + highgrade.wells_without_pad} metric={highgrade.metric}
               padsUnvalued={highgrade.pads_unvalued ?? 0} />
           )}
@@ -492,6 +493,9 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
   const d92 = meta.haircut_method.method != null;
   const tail = meta.haircut_method.tail?.oil;
   const others = (meta.groups ?? []).filter((g) => g.group !== "WCA");
+  const forms = (gs: typeof others) => gs.map((g) => g.formations.join(" / ")).join(", ");
+  const validated = (meta.groups ?? []).filter((g) => g.tier !== "provisional");
+  const provisional = (meta.groups ?? []).filter((g) => g.tier === "provisional");
   return (
     <div className="caveat" style={{ margin: "4px 0 10px" }}>
       <div>
@@ -501,7 +505,10 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
       <div style={{ marginTop: 4 }}>
         Analog-workup forecasts (D57): deal-intake analog cohort <strong>P50</strong> per 1,000 ft × lateral, then a
         stated walk-forward haircut. Uptime-free (apply F(k) or a downtime factor, never both); oil + gas only, no
-        water (D72); EUR = raw 50-yr technical integral. Covers Delaware {(meta.groups ?? []).map((g) => g.formations.join(" / ")).join(", ") || "WCA_1 / WCA_2"}{" "}
+        water (D72); EUR = raw 50-yr technical integral. Covers Delaware {forms(validated) || "WCA_1 / WCA_2"}{" "}
+        (validated)
+        {provisional.length > 0 && <>, plus <span className="box-prov-badge">PROVISIONAL</span> {forms(provisional)} (D105: raw
+          box_v2, never out-of-time validated or failed its one-time holdout — counted apart from validated)</>}{" "}
         inside their extents; every other PUD is shown as not covered, never zero. The table is WCA's; each pad workup
         shows its own group's.
       </div>
@@ -527,14 +534,26 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
         <table className="hg-box-tbl">
           <thead><tr><th>oil, other groups</th>{oil.map((d) => <th key={d.horizon}>{d.horizon}</th>)}</tr></thead>
           <tbody>
-            {others.map((g) => (
-              <tr key={g.group}>
-                <td>{g.group === "WCXY_WCA1" ? "WCXY" : g.group} ({g.spec}): haircut · disclosed bias</td>
-                {g.disclosure.filter((d) => d.stream === "oil").map((d) => (
-                  <td key={d.horizon}>×{d.haircut.toFixed(3)} · {pct(d.disclosed_bias ?? null)}</td>
-                ))}
-              </tr>
-            ))}
+            {others.map((g) => {
+              // a holdout-FAILED bench never shows its pooled (disclosed) figure without the holdout one (D105)
+              const fail = g.tier === "provisional" && !!g.holdout_failed;
+              return (
+                <tr key={g.group}>
+                  <td>
+                    {g.group === "WCXY_WCA1" ? "WCXY" : g.group} ({g.spec}){" "}
+                    {g.tier === "provisional" && <span className={`box-prov-badge${fail ? " fail" : ""}`}>{fail ? "PROV · HOLDOUT FAIL" : "PROV"}</span>}
+                    : haircut · disclosed bias{fail ? " · holdout" : ""}
+                  </td>
+                  {g.disclosure.filter((d) => d.stream === "oil").map((d) => (
+                    <td key={d.horizon}>
+                      ×{d.haircut.toFixed(3)} · {pct(d.disclosed_bias ?? null)}
+                      {fail && (d.disclosed_bias != null || d.holdout_bias_after != null)
+                        ? ` · ${d.holdout_bias_after == null ? "no holdout" : pct(d.holdout_bias_after)}` : ""}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}
@@ -571,22 +590,28 @@ function BoxEconNote({ meta, deck, metric }: { meta: BoxMeta | null; deck: EconD
   );
 }
 
-function CoverageSummary({ counts, valued, total, metric, padsUnvalued }: {
-  counts: Record<string, number>; valued: number; total: number; metric: string; padsUnvalued: number;
+function CoverageSummary({ counts, valued, valuedByTier, total, metric, padsUnvalued }: {
+  counts: Record<string, number>; valued: number; valuedByTier: { validated: number; provisional: number } | null;
+  total: number; metric: string; padsUnvalued: number;
 }) {
   const rows = Object.entries(COVERAGE_LABELS).filter(([k]) => (counts[k] ?? 0) > 0);
+  // validated and provisional (D105) stay separate: the value carries both, so say how many of each
+  const split = valuedByTier
+    ? ` (${valuedByTier.validated.toLocaleString()} validated · ${valuedByTier.provisional.toLocaleString()} PROVISIONAL)`
+    : "";
   const valueNote =
     metric === "well_count" ? "Well count includes every screened PUD."
-    : metric.startsWith("box_pv") ? `${valued.toLocaleString()} priced PUDs carry the value; the rest are excluded, not zeroed.`
-    : `${valued.toLocaleString()} covered PUDs carry the value; the rest are excluded, not zeroed.`;
+    : metric.startsWith("box_pv") ? `${valued.toLocaleString()} priced PUDs${split} carry the value; the rest are excluded, not zeroed.`
+    : `${valued.toLocaleString()} forecast PUDs${split} carry the value; the rest are excluded, not zeroed.`;
   return (
     <div style={{ margin: "6px 0 0" }}>
       <div className="count" style={{ margin: 0 }}>BOX coverage of the {total.toLocaleString()} screened PUDs:</div>
       <table className="hg-box-tbl">
         <tbody>
           {rows.map(([k, label]) => (
-            <tr key={k} className={k === "covered" ? "" : "nc"}>
-              <td>{label}</td><td style={{ textAlign: "right" }}>{(counts[k] ?? 0).toLocaleString()}</td>
+            <tr key={k} className={k === "covered" || k === "covered_provisional" ? "" : "nc"}>
+              <td>{k === "covered_provisional" ? <><span className="box-prov-badge">PROVISIONAL</span> {label}</> : label}</td>
+              <td style={{ textAlign: "right" }}>{(counts[k] ?? 0).toLocaleString()}</td>
             </tr>
           ))}
         </tbody>
@@ -594,7 +619,7 @@ function CoverageSummary({ counts, valued, total, metric, padsUnvalued }: {
       <div className="count" style={{ margin: "2px 0 0" }}>{valueNote}</div>
       {padsUnvalued > 0 && (
         <div className="count" style={{ margin: "2px 0 0" }}>
-          {padsUnvalued.toLocaleString()} pads have no {metric.startsWith("box_pv") ? "priced" : "covered"} PUD — drawn grey.
+          {padsUnvalued.toLocaleString()} pads have no {metric.startsWith("box_pv") ? "priced" : "forecast"} PUD — drawn grey.
         </div>
       )}
     </div>

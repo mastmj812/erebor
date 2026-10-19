@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 
-import { COVERAGE_LABELS, fetchBoxPad, type BoxGroup, type BoxPad, type BoxPadLocation } from "../api/highgrade";
+import {
+  COVERAGE_LABELS, fetchBoxPad, isForecastClass, type BoxGroup, type BoxPad, type BoxPadLocation, type BoxTierLine,
+} from "../api/highgrade";
 
 // BOX workup for one Highgrade pad, rendered on demand from box.* (D80: the database
 // is the record, pages are renders). Same content as engineering_db's committed pad
@@ -37,8 +39,12 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
     radius_basis: "held-out packages (D69)", disclosure: data.disclosure, haircut_method: data.haircut_method,
     radius_ranges: data.radius_ranges, calendar_factor: data.calendar_factor,
   }];
-  const covered = data.locations.filter((l) => l.coverage === "covered");
-  const others = data.locations.filter((l) => l.coverage !== "covered");
+  // both tiers carry a forecast (D105); their counts stay apart
+  const covered = data.locations.filter((l) => isForecastClass(l.coverage));
+  const others = data.locations.filter((l) => !isForecastClass(l.coverage));
+  const nVal = covered.filter((l) => l.coverage === "covered").length;
+  const nProv = covered.length - nVal;
+  const anyProv = groups.some((g) => g.tier === "provisional");
   const byClass = others.reduce<Record<string, number>>((a, l) => ({ ...a, [l.coverage]: (a[l.coverage] ?? 0) + 1 }), {});
 
   return (
@@ -46,7 +52,8 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
       <div className="count" style={{ margin: 0 }}>
         BOX run {r.run_id} · spec {groups.map((g) => g.spec).filter((v, i, a) => a.indexOf(v) === i).join(" + ")} · code {r.code_sha.slice(0, 7)} · boxfit {r.engine_sha?.slice(0, 7)} ·
         deal-intake config v{r.dealintake_config} · Novi {r.report_version} · production through {r.data_through} ·
-        {" "}{covered.length} covered of {data.locations.length} PUDs · {data.analogs.length} named analogs
+        {" "}{nVal} covered (validated){nProv > 0 ? ` · ${nProv} covered PROVISIONAL (D105)` : ""} of {data.locations.length} PUDs ·
+        {" "}{data.analogs.length} named analogs
       </div>
 
       {others.length > 0 && (
@@ -62,9 +69,16 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
             (deal-intake selection: same bench, nearest-first, lateral band, representative spacing; D57), scaled to the
             location's lateral (Cui &amp; Cross below 7,500 ft, D50), then the stated walk-forward haircut (D62 factors
             {d92 ? ", applied to the rate as a smooth curve fitted to them per location — D92" : ""}; BS2_S its own, D94 / D102;
-            WCXY none, D97). Volumes
+            WCXY none, D97{anyProv ? "; provisional benches none, D105" : ""}). Volumes
             are <strong>uptime-free</strong> (D63); oil + gas only, no water (D72); EUR = raw 50-yr technical integral, no
             economic limit. Error = actual ÷ forecast − 1 (negative = the method forecast HIGH).
+            {anyProv && (
+              <>
+                {" "}<span className="box-prov-badge">PROVISIONAL</span> benches (D105) carry a forecast exactly like a
+                validated one but were never out-of-time validated, or failed their one-time holdout: read each one with its
+                own disclosure below.
+              </>
+            )}
           </div>
           {groups.map((g) => <GroupDisclosure key={g.group} g={g} multi={groups.length > 1 || g.group !== "WCA"} />)}
         </>
@@ -78,7 +92,7 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
           <h4>Forecast vs analog actuals (oil, cumulative per 1,000 ft)</h4>
           <Chart chart={data.chart} />
           <div className="count" style={{ margin: "2px 0 0" }}>
-            Blue = each covered location's forecast (P50 × haircut, uptime-free). Grey = the named analogs' ACTUAL calendar
+            Blue = each validated location's forecast (P50 × haircut, uptime-free){nProv > 0 ? "; amber dashed = each PROVISIONAL location's (raw P50, no haircut, D105)" : ""}. Grey = the named analogs' ACTUAL calendar
             cumulative per 1,000 ft: P10 (high) – P90 (low) band and P50, months with ≥ 3 analogs reporting
             ({data.chart.n_analog_curves} analogs). Calendar actuals carry downtime; the forecast does not (D63).
           </div>
@@ -117,13 +131,15 @@ function LocationsTable({ rows }: { rows: BoxPadLocation[] }) {
       </thead>
       <tbody>
         {rows.map((l) => {
-          const cov = l.coverage === "covered";
+          const cov = isForecastClass(l.coverage);
           const ratio = cov && l.oil_eur_per_kft && l.novi_oil_eur_per_kft ? l.oil_eur_per_kft / l.novi_oil_eur_per_kft : null;
           return (
             <tr key={l.stick_id} className={cov ? "" : "nc"}>
               <td title={l.unique_id}>{l.stick_id}</td>
               <td>{l.formation_blueox}</td>
-              <td>{cov ? "covered" : COVERAGE_LABELS[l.coverage] ?? l.coverage}</td>
+              <td>{l.coverage === "covered" ? "covered"
+                : l.coverage === "covered_provisional" ? <span className="box-prov-badge">PROVISIONAL</span>
+                : COVERAGE_LABELS[l.coverage] ?? l.coverage}</td>
               <td>{n0(cov ? l.lateral_ft : l.ll_ft)}</td>
               <td>{cov ? `${n0(l.planned_spacing_ft)}${l.spacing_source === "default_880" ? " (default)" : ""}` : ""}</td>
               <td>{cov || l.n_analogs != null ? `${l.n_analogs ?? "—"} · ${l.radius_mi?.toFixed(1) ?? "—"} mi${l.search_mode === "strike" ? " strike" : ""}` : ""}</td>
@@ -189,7 +205,9 @@ function Chart({ chart }: { chart: NonNullable<BoxPad["chart"]> }) {
       {area && <path d={area} fill="#a1a1aa" opacity={0.3} />}
       {band && <path d={path(band.p50)} fill="none" stroke="#52525b" strokeWidth={1.5} strokeDasharray="4 3" />}
       {chart.forecast.map((f) => (
-        <path key={f.location_id} d={path(f.cum_per_kft)} fill="none" stroke="#2563eb" strokeWidth={1} opacity={0.8} />
+        f.tier === "provisional"
+          ? <path key={f.location_id} d={path(f.cum_per_kft)} fill="none" stroke="#d97706" strokeWidth={1.2} strokeDasharray="5 2" opacity={0.9} />
+          : <path key={f.location_id} d={path(f.cum_per_kft)} fill="none" stroke="#2563eb" strokeWidth={1} opacity={0.8} />
       ))}
     </svg>
   );
@@ -200,15 +218,21 @@ function Chart({ chart }: { chart: NonNullable<BoxPad["chart"]> }) {
 function GroupDisclosure({ g, multi }: { g: BoxGroup; multi: boolean }) {
   const d92 = g.haircut_method.method != null && !g.haircut_method.method.startsWith("none");
   const has9c = g.disclosure.some((d) => d.disclosed_bias != null);
+  const prov = g.tier === "provisional";
+  const fail = prov && !!g.holdout_failed;
   return (
     <>
-      <h4>Measured bias and haircut (D59 condition 3){multi ? ` — ${g.label}` : ""}</h4>
+      <h4>
+        Measured bias and haircut (D59 condition 3){multi ? ` — ${g.label}` : ""}
+        {prov && <> <span className={`box-prov-badge${fail ? " fail" : ""}`}>PROVISIONAL{fail ? " · HOLDOUT FAILED" : ""}</span></>}
+      </h4>
+      {prov && <ProvisionalDisclosure g={g} />}
       <table className="box-tbl">
         <thead>
           <tr><th>stream</th><th>horizon</th><th>measured bias{has9c ? " (raw box_v2)" : ""}</th><th>packages</th><th>{d92 ? "D62 target" : "haircut applied"}</th>
             {d92 && <th>realised (D92, median · P10–P90)</th>}
             {has9c && <th>disclosed bias ({g.disclosure[0]?.record_variant ?? g.spec}, D100)</th>}
-            <th>held-out bias{has9c ? " (9b)" : " after"}</th>{has9c && <th>D99 interval</th>}<th>F(k) (published, not applied)</th></tr>
+            <th>held-out bias{prov ? (fail ? " (one-time D99, FAILED)" : " (none, D105)") : has9c ? " (9b)" : " after"}</th>{has9c && <th>D99 interval</th>}<th>F(k) (published, not applied)</th></tr>
         </thead>
         <tbody>
           {g.disclosure.map((d) => (
@@ -217,8 +241,10 @@ function GroupDisclosure({ g, multi }: { g: BoxGroup; multi: boolean }) {
               <td>×{d.haircut.toFixed(3)}</td>
               {d92 && <td>×{d.realised_median?.toFixed(3) ?? "—"} · {d.realised_p10?.toFixed(3) ?? "—"}–{d.realised_p90?.toFixed(3) ?? "—"}</td>}
               {has9c && <td><strong>{pct(d.disclosed_bias)}</strong></td>}
-              <td>{pct(d.holdout_bias_after)}</td>
-              {has9c && <td>{d.d99_interval ? `${pct(d.d99_interval[0])} … ${pct(d.d99_interval[1])}` : "not judged in 9b"}</td>}
+              <td className={fail ? "box-hold" : undefined}>
+                {fail && d.holdout_bias_after == null && d.disclosed_bias != null ? "no holdout packages" : pct(d.holdout_bias_after)}
+              </td>
+              {has9c && <td>{d.d99_interval ? `${pct(d.d99_interval[0])} … ${pct(d.d99_interval[1])}` : (prov ? "not judged" : "not judged in 9b")}</td>}
               <td>{g.calendar_factor[d.stream]?.[d.horizon.replace("cum-", "")]?.toFixed(3) ?? "—"}</td>
             </tr>
           ))}
@@ -250,5 +276,68 @@ function GroupDisclosure({ g, multi }: { g: BoxGroup; multi: boolean }) {
         </>
       )}
     </>
+  );
+}
+
+// D105 provisional tier: why the bench is provisional, its holdout status, and the step-15 lines (bias with
+// its 95 % range) per label × stream × horizon. Scope columns run lead first, then the holdout, so on a
+// holdout-FAILED bench the holdout figure always sits beside the pooled one — never the pooled figure alone.
+function ProvisionalDisclosure({ g }: { g: BoxGroup }) {
+  const lines = g.lines ?? [];
+  const fail = !!g.holdout_failed;
+  const scopes = [...new Set(lines.map((l) => l.scope))].sort((a, b) => rank(a) - rank(b));
+  function rank(s: string) {
+    if (s === g.lead?.scope) return 0;
+    if (s === "holdout") return 1;
+    return 2;
+  }
+  const key = (l: BoxTierLine) => `${l.label}|${l.stream}|${l.horizon}`;
+  const rows = new Map<string, { label: string; stream: string; horizon: number; by: Record<string, BoxTierLine> }>();
+  for (const l of lines) {
+    const r = rows.get(key(l)) ?? { label: l.label, stream: l.stream, horizon: l.horizon, by: {} };
+    r.by[l.scope] = l;
+    rows.set(key(l), r);
+  }
+  const ordered = [...rows.values()].sort((a, b) =>
+    (a.label === g.lead?.label ? 0 : 1) - (b.label === g.lead?.label ? 0 : 1)
+    || a.label.localeCompare(b.label) || (a.stream === "oil" ? 0 : 1) - (b.stream === "oil" ? 0 : 1) || a.horizon - b.horizon);
+  return (
+    <div className={`box-prov${fail ? " fail" : ""}`}>
+      <div className="count" style={{ margin: 0 }}>
+        <strong>{g.tier_label ?? "provisional tier (D105)"}</strong>. Holdout: {g.holdout ?? "none"}. Raw box_v2, no haircut.
+        {g.lead ? ` Lead line: ${g.lead.label}, ${g.lead.scope}.` : ""}
+        {g.latest_vintage_text ? ` ${g.latest_vintage_text[0].toUpperCase()}${g.latest_vintage_text.slice(1)}.` : ""}
+      </div>
+      {ordered.length > 0 && (
+        <table className="box-tbl">
+          <thead>
+            <tr>
+              <th>line</th><th>stream</th><th>horizon</th>
+              {scopes.map((s) => <th key={s}>bias, {s}{s === g.lead?.scope ? " (lead)" : ""} · 95 % range · packages</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {ordered.map((r) => (
+              <tr key={`${r.label}${r.stream}${r.horizon}`}>
+                <td>{r.label}</td><td>{r.stream}</td><td>cum-{r.horizon}</td>
+                {scopes.map((s) => {
+                  const l = r.by[s];
+                  return (
+                    <td key={s} className={s === "holdout" ? "box-hold" : undefined}>
+                      {l ? <><strong>{pct(l.bias)}</strong> · {l.range_95 ? `${pct(l.range_95[0])} … ${pct(l.range_95[1])}` : "—"} · {l.packages}</>
+                        : s === "holdout" && fail ? "no holdout packages" : "—"}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div className="count" style={{ margin: "2px 0 0" }}>
+        Bias = {g.error_convention ?? "actual ÷ forecast − 1 (negative = forecast HIGH)"}.
+        {fail ? " This bench FAILED its one-time holdout: quote the holdout figure with the pooled one, never the pooled figure alone." : ""}
+      </div>
+    </div>
   );
 }

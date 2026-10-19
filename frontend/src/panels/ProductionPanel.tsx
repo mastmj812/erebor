@@ -97,7 +97,8 @@ export function ProductionView(_props: { width?: number; height?: number }) {
   const boxCovered = box != null && isForecastClass(box.coverage); // validated or provisional tier (D105)
   const boxProv = box?.coverage === "covered_provisional";
   const src: WellSource = boxCovered ? wellSource : "novi";
-  const boxStream = phase === "water" ? undefined : box?.streams[phase];
+  const boxStream = box?.streams[phase]; // water since sql/62 (its own tier: box.water_tier)
+  const boxWaterProv = phase === "water" && box?.water_tier === "provisional";
   if (overlay && src !== "novi" && boxStream) {
     const label = `${overlay.name} (BOX run ${box?.run_id})`;
     series.push(mode === "rate"
@@ -174,7 +175,13 @@ export function ProductionView(_props: { width?: number; height?: number }) {
       {overlay && boxCovered && src !== "novi" && (
         <div className="count" style={{ margin: "0 0 4px" }}>
           {phase === "water"
-            ? "BOX v1 forecasts oil + gas only — no water (D72)."
+            ? (box.streams.water
+              ? <>BOX water = WOR vs cumulative oil fitted on MEASURED-water analogs{box.water_source === "calculated_fallback" ? " (none within 50 mi: calculated-water fallback)" : ""}, applied to the
+                  raw box_v2 oil (before any haircut), uptime-free; production through {box.data_through}.
+                  {" "}{boxWaterProv
+                    ? <span className="box-prov-badge">WATER PROVISIONAL</span>
+                    : <span>Water tier: validated (WCA / BS2_S holdout, D110).</span>}</>
+              : "This BOX run carries no water.")
             : `BOX = analog cohort P50 × walk-forward haircut, uptime-free (apply F(k) or a downtime factor, never both); production through ${box.data_through}. Novi = Novi's own forecast.`}
         </div>
       )}

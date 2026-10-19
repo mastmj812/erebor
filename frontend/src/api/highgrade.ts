@@ -23,6 +23,7 @@ export type HighgradeMetric =
   | "npv5" | "npv10" | "npv15" | "npv20" | "npv25"
   | "pv5" | "pv10" | "pv15" | "pv20" | "pv25"
   | "oil_eur" | "gas_eur" | "oil_eur_per_kft" | "gas_eur_per_kft" | "well_count"
+  | "water_eur" | "water_eur_per_kft" // BOX only (sql/62)
   | "box_pv0" | "box_pv10" | "box_pv15" | "box_pv20" | "box_pv25" | "box_pv30";
 export type HighgradeAgg = "sum" | "avg" | "per_acre";
 
@@ -100,6 +101,19 @@ export interface BoxGroup {
   lines?: BoxTierLine[];
   latest_vintage_text?: string | null;
   error_convention?: string;
+  water?: BoxWaterBlock | null;      // the group's water disclosure (D110); null on a run without water
+}
+// A group's WATER disclosure (engineering_db D107-D110): tier, and per horizon the tuning / holdout / pooled
+// package bias (actual ÷ forecast − 1, negative = forecast HIGH) — shown together, never the pooled alone.
+export interface BoxWaterLine {
+  horizon: string;
+  tuning_bias: number | null; tuning_packages: number | null;
+  holdout_bias: number | null; holdout_packages: number | null;
+  pooled_bias: number | null; pooled_packages: number | null;
+}
+export interface BoxWaterBlock {
+  method: string | null; oil_basis: string | null; tier: "validated" | "provisional" | null;
+  caveat: string | null; lines: BoxWaterLine[];
 }
 // How the run applied its haircut (backend box.haircut_method): D92 = smooth rate factor fitted to the
 // D62 targets, held at `tail` after month 48; method null = D62 as built (linear cumulative factor).
@@ -143,6 +157,20 @@ export interface BoxPadLocation {
   gas_eur: number | null; gas_eur_per_kft: number | null;
   oil_di_nominal: number | null; oil_di_eff_1yr: number | null; oil_b: number | null;
   gas_di_nominal: number | null; gas_di_eff_1yr: number | null; gas_b: number | null;
+  // water (sql/62): its own tier + measured-water provenance; null on a run without water
+  water_eur?: number | null; water_eur_per_kft?: number | null; water_cum12?: number | null;
+  water_tier?: "validated" | "provisional" | null; water_source?: "measured" | "calculated_fallback" | null;
+  water_radius_mi?: number | null; water_n_analogs?: number | null; water_thin?: boolean | null;
+  water_nm_share?: number | null; water_wor_cum12?: number | null;
+}
+export interface BoxWaterAnalog {
+  api10: string; nearest_ft: number; used_by: number; state_code: string | null; water_label: string;
+  first_production: string | null; well_name: string | null; operator: string | null; lateral_ft: number | null;
+}
+export interface BoxChart {
+  months: number; unit: string; n_analog_curves: number;
+  forecast: { location_id: number; stick_id: number; tier?: "validated" | "provisional" | null; cum_per_kft: number[] }[];
+  analog_band: { p10: (number | null)[]; p50: (number | null)[]; p90: (number | null)[]; n: number[] } | null;
 }
 export interface BoxPadAnalog {
   api10: string; nearest_ft: number; used_by: number; lateral_ft: number | null;
@@ -152,11 +180,9 @@ export interface BoxPad {
   basin: string; pad_key: string; run: BoxRun;
   locations: BoxPadLocation[];
   analogs: BoxPadAnalog[];
-  chart: {
-    months: number; unit: string; n_analog_curves: number;
-    forecast: { location_id: number; stick_id: number; tier?: "validated" | "provisional"; cum_per_kft: number[] }[];
-    analog_band: { p10: (number | null)[]; p50: (number | null)[]; p90: (number | null)[]; n: number[] } | null;
-  } | null;
+  chart: BoxChart | null;
+  water_analogs?: BoxWaterAnalog[];
+  water_chart?: BoxChart | null;
   disclosure: BoxDisclosureRow[];
   haircut_method: BoxHaircutMethod;
   radius_ranges: BoxRadiusRange[];

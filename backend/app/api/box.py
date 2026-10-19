@@ -5,11 +5,15 @@ workup pages are renders).
 Read-only like the rest of erebor. BOX = defensible analog type-curve workups (D54/D57):
 deal-intake analog cohort P50 per 1,000 ft x lateral (Cui & Cross below 7,500 ft, D50)
 x the stated walk-forward haircut (D62); uptime-free volumes (D63; F(k) is published,
-not applied); oil + gas only (D72); EUR = raw 50-yr technical integral (no economic
+not applied); water since sql/62 (below; D72 retired); EUR = raw 50-yr technical integral (no economic
 limit). Run 7 covered Delaware WCA_1 / WCA_2 inside the WCA extent (D60/D61); record
 run 8 (step 9c) adds BS2_S (extent 7, its own haircut, D94/D102) and WCXY (WCA extent,
 raw box_v2 with no haircut, D93/D95/D97). Everything else is a stated not-covered
-class, never a zero.
+class, never a zero. Water (engineering_db D107-D111, sql/62; D72 retired 2026-10-19):
+WOR vs cumulative oil fitted on MEASURED-water analogs (box.location_water_analog),
+applied to the raw box_v2 oil months, no haircut, uptime-free; its own tier on the stream
+row (validated on WCA / BS2_S covered rows, provisional elsewhere, never above the
+location's coverage) and its disclosure lines in forecast_run.disclosure -> 'water'.
 
 Per-group disclosure (D103): a multi-group run keeps the first group's (WCA) haircut /
 disclosure / calendar factor at the top level of box.forecast_run's jsonb and every
@@ -75,7 +79,8 @@ FORECAST_CLASSES: tuple[str, ...] = ("covered", "covered_provisional")
 TIER_OF: dict[str, str] = {"covered": "validated", "covered_provisional": "provisional"}
 FORECAST_IN_SQL = "('covered', 'covered_provisional')"
 
-STREAMS = ("oil", "gas")
+STREAMS = ("oil", "gas")  # the streams with a haircut / F(k) / D59 disclosure
+SERIES_STREAMS = ("oil", "gas", "water")  # the streams with monthly volumes (water: sql/62)
 HORIZONS = ("12", "24", "36", "48")
 K_CHART = 48  # months of cum per 1,000 ft on the workup chart (engineering_db box/production_pages.K_CHART)
 
@@ -90,6 +95,8 @@ def box_joins(a: str) -> str:
         "AND bso.location_id = bp.location_id AND bso.stream = 'oil' "
         "LEFT JOIN box.pud_forecast_stream bsg ON bsg.run_id = bp.run_id "
         "AND bsg.location_id = bp.location_id AND bsg.stream = 'gas' "
+        "LEFT JOIN box.pud_forecast_stream bsw ON bsw.run_id = bp.run_id "
+        "AND bsw.location_id = bp.location_id AND bsw.stream = 'water' "
         # the PUD's bench is in a BOX pool (bench_scope.member_benches; DISTINCT so a
         # bench listed in two pools could never multiply rows). Needs the `fb` join first.
         "LEFT JOIN (SELECT DISTINCT basin, unnest(member_benches) AS bench FROM box.bench_scope) bsm "
@@ -273,8 +280,22 @@ def group_blocks(run: dict[str, Any], groups: list[str] | set[str], classes: set
                                                         "box_v2_wf oil package errors, held-out packages (D69)"),
                     "disclosure": disclosure_rows(v), "haircut_method": hm,
                     "radius_ranges": radius_ranges(v, classes), "calendar_factor": calendar_factor_points(v),
-                    **tier_block(v["disclosure"])})
+                    **tier_block(v["disclosure"]),
+                    "water": water_block(run, g)})
     return out
+
+
+def water_block(run: dict[str, Any], group: str) -> dict[str, Any] | None:
+    """The group's WATER disclosure (D110): its tier, the tuning / holdout / pooled bias per horizon (error = actual /
+    forecast - 1; shown together, never the pooled figure alone) and its caveat. None on a run without water."""
+    w = (run.get("disclosure") or {}).get("water")
+    if not w:
+        return None
+    g = (w.get("by_bench") or {}).get(group)
+    if not g:
+        return None
+    return {"method": w.get("method"), "oil_basis": w.get("oil_basis"), "tier": g.get("tier"), "caveat": g.get("caveat"),
+            "lines": [{"horizon": f"cum-{k}", **v} for k, v in sorted((g.get("lines") or {}).items(), key=lambda kv: int(kv[0]))]}
 
 
 @router.get("/meta")
@@ -342,14 +363,16 @@ def monthly_series(months: list[int], volumes: list[float]) -> dict[str, list[fl
 def well_forecast(session: Session, basin: str, unique_id: str) -> dict[str, Any] | None:
     """The record run's BOX forecast for one Novi PUD (by its Novi name). None when the name
     is not a Novi PUD (PDP / RES); otherwise its coverage class, and for a covered PUD the
-    oil + gas monthly series (no water in v1, D72)."""
+    oil + gas + water monthly series (water since sql/62, with its own tier)."""
     run = record_run(session)
     row = session.execute(
         text(f"""
             SELECT il.stick_id, {coverage_sql('il')} AS coverage, bp.location_id, bp.lateral_ft, bp.flags,
                    COALESCE(fb.formation_blueox, '(unmapped)') AS formation_blueox,
                    bso.eur AS oil_eur, bso.eur_per_kft AS oil_eur_per_kft,
-                   bsg.eur AS gas_eur, bsg.eur_per_kft AS gas_eur_per_kft
+                   bsg.eur AS gas_eur, bsg.eur_per_kft AS gas_eur_per_kft,
+                   bsw.eur AS water_eur, bsw.eur_per_kft AS water_eur_per_kft, bsw.tier AS water_tier,
+                   bsw.params->>'source' AS water_source
             FROM curated.intel_locations il
             LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = il.stick_id
             LEFT JOIN curated.reconciled_inventory rec ON rec.stick_id = il.stick_id
@@ -367,8 +390,9 @@ def well_forecast(session: Session, basin: str, unique_id: str) -> dict[str, Any
         "lateral_ft": row["lateral_ft"], "formation_blueox": row["formation_blueox"],
         # the run's own sentences: the tier (D105 PROVISIONAL ...), edge caveats, at-bound fits
         "flags": row["flags"] or [],
-        "eur": {"oil": row["oil_eur"], "gas": row["gas_eur"]},
-        "eur_per_kft": {"oil": row["oil_eur_per_kft"], "gas": row["gas_eur_per_kft"]},
+        "eur": {"oil": row["oil_eur"], "gas": row["gas_eur"], "water": row["water_eur"]},
+        "eur_per_kft": {"oil": row["oil_eur_per_kft"], "gas": row["gas_eur_per_kft"], "water": row["water_eur_per_kft"]},
+        "water_tier": row["water_tier"], "water_source": row["water_source"],
         "streams": {},
     }
     if row["coverage"] not in FORECAST_CLASSES:
@@ -380,7 +404,7 @@ def well_forecast(session: Session, basin: str, unique_id: str) -> dict[str, Any
         """),
         {"r": run["run_id"], "loc": row["location_id"]},
     ).mappings().all()
-    for s in STREAMS:
+    for s in SERIES_STREAMS:
         rs = [m for m in mrows if m["stream"] == s]
         if rs:
             out["streams"][s] = monthly_series([m["month_no"] for m in rs], [m["volume"] for m in rs])
@@ -442,7 +466,9 @@ def pad(basin: str = _BASIN, pad_key: str = Query(...), session: Session = Depen
                    bso.eur AS oil_eur, bso.eur_raw AS oil_eur_raw, bso.eur_haircut AS oil_haircut,
                    bso.eur_per_kft AS oil_eur_per_kft, bso.cum12 AS oil_cum12, bso.cum24 AS oil_cum24,
                    bso.params AS oil_params,
-                   bsg.eur AS gas_eur, bsg.eur_per_kft AS gas_eur_per_kft, bsg.params AS gas_params
+                   bsg.eur AS gas_eur, bsg.eur_per_kft AS gas_eur_per_kft, bsg.params AS gas_params,
+                   bsw.eur AS water_eur, bsw.eur_per_kft AS water_eur_per_kft, bsw.cum12 AS water_cum12,
+                   bsw.tier AS water_tier, bsw.params AS water_params
             FROM curated.intel_locations il
             JOIN curated.intel_pad_member pm ON pm.stick_id = il.stick_id AND pm.pad_key = :pad_key
             LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = il.stick_id
@@ -462,6 +488,7 @@ def pad(basin: str = _BASIN, pad_key: str = Query(...), session: Session = Depen
             d[f"{s}_di_nominal"] = prm.get("Di_nominal") if prm else None
             d[f"{s}_di_eff_1yr"] = prm.get("Di_eff_1yr") if prm else None
             d[f"{s}_b"] = prm.get("b") if prm else None
+        d.update(water_fields(d.pop("water_params"), d.get("water_cum12"), d.get("oil_cum12")))
         d["tier"] = TIER_OF.get(d["coverage"])
         d["group"] = (group_of(d["formation_blueox"], groups)
                       if d["coverage"] in (*FORECAST_CLASSES, "not_covered_no_analogs") else None)
@@ -475,7 +502,7 @@ def pad(basin: str = _BASIN, pad_key: str = Query(...), session: Session = Depen
         "basin": basin, "pad_key": pad_key,
         "run": {k: run[k] for k in ("run_id", "report_version", "data_through", "code_sha", "engine_sha",
                                     "dealintake_config", "created_at")},
-        "locations": locations, "analogs": [], "chart": None,
+        "locations": locations, "analogs": [], "water_analogs": [], "chart": None, "water_chart": None,
         "tier_counts": {t: sum(1 for d in covered if d["tier"] == t) for t in ("validated", "provisional")},
         "disclosure": disclosure_rows(run),
         "haircut_method": haircut_method(run),
@@ -543,4 +570,74 @@ def pad(basin: str = _BASIN, pad_key: str = Query(...), session: Session = Depen
                 curves.append(actual_cum_per_kft(by[a["api10"]], a["first_production"], a["lateral_ft"], data_through))
     out["chart"] = {"months": K_CHART, "unit": "bbl oil per 1,000 ft (cumulative)",
                     "forecast": forecast, "analog_band": band(curves), "n_analog_curves": len(curves)}
+    water_workup(session, run, covered, out, data_through)
     return out
+
+
+def water_fields(params: dict[str, Any] | None, water_cum12: float | None, oil_cum12: float | None) -> dict[str, Any]:
+    """A location's water provenance from its stream row's params (sql/62): measured | calculated_fallback, the radius its
+    measured-water search reached, analog count, thin flag, NM share; plus the cum-12 WOR (water / oil on the delivered rows)."""
+    p = params or {}
+    return {"water_source": p.get("source"), "water_radius_mi": p.get("radius_mi"), "water_n_analogs": p.get("n_analogs"),
+            "water_thin": p.get("thin"), "water_nm_share": p.get("nm_share"),
+            "water_wor_cum12": water_cum12 / oil_cum12 if water_cum12 is not None and oil_cum12 else None}
+
+
+def water_workup(session: Session, run: dict[str, Any], covered: list[dict[str, Any]], out: dict[str, Any],
+                 data_through: dt.date) -> None:
+    """Water provenance for the pad (sql/62): the named MEASURED-water analogs (a wider, different set than the oil / gas
+    cohort) and each location's water forecast (cumulative per 1,000 ft) against those analogs' actual calendar water.
+    A run without water leaves both empty."""
+    wl = [d for d in covered if d.get("water_eur") is not None]
+    if not wl:
+        return
+    ids = [d["location_id"] for d in wl]
+    wa = session.execute(
+        text("""
+            SELECT a.api10, min(a.dist_ft) AS nearest_ft, count(*) AS used_by, max(a.state_code) AS state_code,
+                   max(a.water_label) AS water_label, min(a.first_production) AS first_production,
+                   max(w.well_name) AS well_name, max(w.current_operator) AS operator,
+                   max(we.lateral_length_ft) AS lateral_ft
+            FROM box.location_water_analog a
+            LEFT JOIN curated.wells w ON w.api10 = a.api10
+            LEFT JOIN curated.wells_enriched we ON we.api10 = a.api10
+            WHERE a.run_id = :r AND a.location_id IN :ids
+            GROUP BY a.api10 ORDER BY nearest_ft
+        """).bindparams(bindparam("ids", expanding=True)),
+        {"r": run["run_id"], "ids": ids},
+    ).mappings().all()
+    out["water_analogs"] = [{**a, "first_production": a["first_production"].isoformat() if a["first_production"] else None}
+                            for a in wa]
+    mrows = session.execute(
+        text("""
+            SELECT location_id, month_no, volume FROM box.pud_forecast_month
+            WHERE run_id = :r AND stream = 'water' AND location_id IN :ids AND month_no <= :k
+            ORDER BY location_id, month_no
+        """).bindparams(bindparam("ids", expanding=True)),
+        {"r": run["run_id"], "ids": ids, "k": K_CHART},
+    ).mappings().all()
+    vols: dict[int, np.ndarray] = {i: np.zeros(K_CHART) for i in ids}
+    for m in mrows:
+        vols[m["location_id"]][m["month_no"] - 1] = m["volume"]
+    by_loc = {d["location_id"]: d for d in wl}
+    forecast = [{"location_id": i, "stick_id": by_loc[i]["stick_id"], "tier": by_loc[i]["water_tier"],
+                 "cum_per_kft": [float(v) for v in np.cumsum(vols[i]) / (by_loc[i]["lateral_ft"] / 1000.0)]} for i in ids]
+    # actual water only from MEASURED analogs (a calculated-fallback cohort's vendor water is not drawn as evidence)
+    usable = [a for a in wa if a["first_production"] and a["lateral_ft"] and a["water_label"] == "measured"]
+    curves: list[np.ndarray] = []
+    if usable:
+        prod = session.execute(
+            text("""
+                SELECT api10, prod_date, water_per_month_bbl AS oil FROM curated.production
+                WHERE api10 IN :api AND prod_date <= :thru
+            """).bindparams(bindparam("api", expanding=True)),
+            {"api": [a["api10"] for a in usable], "thru": data_through},
+        ).mappings().all()
+        by: dict[str, list[dict[str, Any]]] = {}
+        for r in prod:
+            by.setdefault(r["api10"], []).append(dict(r))
+        for a in usable:
+            if a["api10"] in by:
+                curves.append(actual_cum_per_kft(by[a["api10"]], a["first_production"], float(a["lateral_ft"]), data_through))
+    out["water_chart"] = {"months": K_CHART, "unit": "bbl water per 1,000 ft (cumulative)",
+                          "forecast": forecast, "analog_band": band(curves), "n_analog_curves": len(curves)}

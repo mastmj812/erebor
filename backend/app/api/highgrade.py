@@ -26,6 +26,11 @@ Forecast SOURCE (BOX plan step 8): every endpoint takes `source` = novi | box.
           covered_provisional, D105), with the validated / provisional valued counts
           reported apart and the not-covered count reported per class — a not-covered
           PUD is never a zero (D2/D67).
+  PDP proximity (record run 14, D112-D116): BOX EUR already carries the oil
+  configuration factor (box.pud_forecast_stream.eur), so the screen needs no change to
+  pick it up. `filters.prox` screens on the PUD's proximity outcome (as_is / haircut /
+  no_precedent; a PUD BOX never measured matches none) and `box_prox_factor` bounds the
+  factor like any BOX range (forecast PUDs only). Each pad reports its outcome counts.
   BOX econ CAVEAT (sibling of the Novi caveat above): box_pv* metrics are Steven's
   box_econ.box_pud_econ values for ONE named deck + assumption set — a display-only
   screen with provenance (D13: nothing here computes economics, and econ never flows
@@ -43,7 +48,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
-from app.api.box import COVERAGE_CLASSES, FORECAST_IN_SQL, box_joins, coverage_sql, econ_join, record_run
+from app.api.box import (
+    COVERAGE_CLASSES, FORECAST_IN_SQL, PROX_GROUPS, box_joins, coverage_sql, econ_join, record_run,
+)
 from app.db import get_session
 
 router = APIRouter(prefix="/highgrade", tags=["highgrade"])
@@ -95,7 +102,7 @@ NUMERIC: tuple[str, ...] = (
     "pv5", "pv10", "pv15", "pv20", "pv25",
     "oil_eur", "gas_eur", "ll_ft", "tvd", "fp_year",
     *SUPPORT_NUMERIC,
-    "box_oil_eur", "box_gas_eur", "box_oil_eur_per_kft",
+    "box_oil_eur", "box_gas_eur", "box_oil_eur_per_kft", "box_prox_factor",
 )
 # BOX range filters (need the BOX joins). They bound COVERED PUDs only: a PUD without a
 # BOX forecast stays in the screen and is counted under its not-covered class, never
@@ -104,6 +111,8 @@ BOX_NUMERIC: dict[str, str] = {
     "box_oil_eur": "bso.eur",
     "box_gas_eur": "bsg.eur",
     "box_oil_eur_per_kft": "bso.eur_per_kft",
+    # D113 PDP-proximity oil factor (1 = as-is; 0.75-0.94 = multi-parent haircut)
+    "box_prox_factor": "bso.prox_factor",
 }
 # Selectable per-pad metrics. NPV/PV/EUR aggregate via sum|avg; well_count is a count.
 Metric = Literal[
@@ -263,6 +272,8 @@ class HighgradeFilters(BaseModel):
     deplet_t: list[str] | None = None
     complet_t: list[str] | None = None
     rqt: list[str] | None = None
+    # BOX PDP-proximity outcome groups (box.PROX_GROUPS); ignored without the BOX joins
+    prox: list[Literal["as_is", "haircut", "no_precedent"]] | None = None
     # numeric ranges keyed by whitelisted column -> [min, max] (either side nullable)
     ranges: dict[str, tuple[float | None, float | None]] = Field(default_factory=dict)
 
@@ -320,6 +331,11 @@ def n_valued_expr(metric: str, source: str, a: str = "il", coverage: str | None 
     return f"{v} FILTER (WHERE {tier})" if tier else v
 
 
+def _in_list(values: tuple[str, ...]) -> str:
+    """SQL IN-list of whitelisted constants (box.PROX_GROUPS — never user input)."""
+    return "(" + ", ".join(f"'{v}'" for v in values) + ")"
+
+
 def _build_filters(filters: HighgradeFilters, box: bool = False) -> tuple[list[str], dict, list]:
     """Return (where_fragments, params, expanding_bindparams) from validated filters."""
     clauses: list[str] = []
@@ -346,6 +362,13 @@ def _build_filters(filters: HighgradeFilters, box: bool = False) -> tuple[list[s
         if hi is not None:
             clauses.append(f"({keep}{ref} <= :{col}_hi)")
             params[f"{col}_hi"] = hi
+
+    # PDP-proximity outcome (BOX only): an explicit categorical screen, so it DOES drop
+    # PUDs outside the selection — including those BOX never measured (no bpp row)
+    if box and filters.prox:
+        clauses.append("bpp.outcome IN :prox")
+        params["prox"] = [o for g in filters.prox for o in PROX_GROUPS[g]]
+        expanding.append(bindparam("prox", expanding=True))
 
     return clauses, params, expanding
 
@@ -389,8 +412,15 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
         # validated / provisional make-up is reported, never folded into one count
         tiers = {"validated": "covered", "provisional": "covered_provisional"}
         cov_cols += "".join(f", {n_valued_expr(body.metric, body.source, coverage=c)} AS nv_{t}" for t, c in tiers.items())
-        nc_select = "".join(f", a.nc_{c}" for c in COVERAGE_CLASSES) + "".join(f", a.nv_{t}" for t in tiers)
-        cov_props = "".join(f", 'nc_{c}', nc_{c}" for c in COVERAGE_CLASSES) + "".join(f", 'nv_{t}', nv_{t}" for t in tiers)
+        # PDP-proximity outcome counts per pad + the haircut factor range on the pad
+        cov_cols += "".join(f", count(*) FILTER (WHERE bpp.outcome IN {_in_list(o)}) AS np_{g}" for g, o in PROX_GROUPS.items())
+        cov_cols += (", min(bpp.factor) FILTER (WHERE bpp.outcome = 'haircut') AS prox_min"
+                     ", max(bpp.factor) FILTER (WHERE bpp.outcome = 'haircut') AS prox_max")
+        extra = [*(f"np_{g}" for g in PROX_GROUPS), "prox_min", "prox_max"]
+        nc_select = ("".join(f", a.nc_{c}" for c in COVERAGE_CLASSES) + "".join(f", a.nv_{t}" for t in tiers)
+                     + "".join(f", a.{x}" for x in extra))
+        cov_props = ("".join(f", 'nc_{c}', nc_{c}" for c in COVERAGE_CLASSES) + "".join(f", 'nv_{t}', nv_{t}" for t in tiers)
+                     + "".join(f", '{x}', {x}" for x in extra))
         cov_summary = (
             ", 'coverage_counts', (SELECT json_build_object("
             + ", ".join(f"'{c}', COALESCE(sum(nc_{c}), 0)" for c in COVERAGE_CLASSES)
@@ -398,6 +428,9 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
             + ", 'valued_by_tier', (SELECT json_build_object("
             + ", ".join(f"'{t}', COALESCE(sum(nv_{t}), 0)" for t in tiers)
             + ") FROM agg)"
+            + ", 'proximity_counts', (SELECT json_build_object("
+            + ", ".join(f"'{g}', COALESCE(sum(np_{g}), 0)" for g in PROX_GROUPS)
+            + ", 'factor_min', min(prox_min), 'factor_max', max(prox_max)) FROM agg)"
         )
 
     sql = text(f"""

@@ -23,6 +23,16 @@ back-compat; runs without by_bench (4, 6, 7) have the one WCA group.
                                        numbers vs Novi, named analogs, forecast vs
                                        analog actuals (oil cum per 1,000 ft)
 
+PDP-proximity layer (record run 14, D112-D116, engineering_db sql/65): a PUD with 2+
+depleted parents (>= 12 mo on production, >= 30 % alongside, inside the class envelope)
+carries an OIL factor of 0.75-0.94 from its configuration's cum-24 table when that
+configuration has drilled precedent ("validated_with_exception": the pre-registered
+walk-forward failed as written, multi-parent cells held within +-5 %); without precedent
+it gets no forecast (coverage not_covered_no_precedent, search provenance kept).
+Single-parent / unexposed PUDs are BOX as-is; gas and water are untouched. Stored EUR
+already carries it (eur = eur_raw x eur_haircut x prox_factor), so every BOX EUR here
+picks it up; box.pud_proximity (alias `bpp`) is read only to SHOW the configuration.
+
 The fragments below (box_joins / coverage_sql / econ_join) are shared with
 highgrade.py so the choropleth, the gunbarrel and this workup class every PUD the
 same way. Nothing here reads the retired step-4/5 tables (D66).
@@ -52,6 +62,9 @@ _BASIN = Query(..., pattern="^(delaware|midland)$")
 #                        but the bench was never out-of-time tested (AVA_0/1/2, BS2_C) or
 #                        failed its one-time holdout (BS3_S, BS3_C, WCB_2, BS1_S). Counted
 #                        apart from covered everywhere, never silently summed into it
+#   not_covered_no_precedent  (D114, sql/65) a searched, in-extent PUD whose PDP-proximity
+#                        configuration has no drilled precedent: no forecast, search
+#                        provenance kept (like not_covered_no_analogs)
 #   bench_not_in_box  its bench is in no box.bench_scope pool (not part of BOX v1)
 #   realized          reconciliation matched it to production (shown only when the
 #                     Highgrade "All Novi BASE_CASE" toggle readmits realized PUDs)
@@ -61,6 +74,7 @@ COVERAGE_CLASSES: tuple[str, ...] = (
     "covered",
     "covered_provisional",
     "not_covered_no_analogs",
+    "not_covered_no_precedent",
     "not_covered_outside_extent",
     "not_covered_wcxy",
     "not_covered_unvalidated",
@@ -74,6 +88,19 @@ COVERAGE_CLASSES: tuple[str, ...] = (
 FORECAST_CLASSES: tuple[str, ...] = ("covered", "covered_provisional")
 TIER_OF: dict[str, str] = {"covered": "validated", "covered_provisional": "provisional"}
 FORECAST_IN_SQL = "('covered', 'covered_provisional')"
+# Searched PUDs without a forecast: they keep the analog search provenance and their
+# bench's disclosure group (the "screen identity" of a PUD BOX looked at and declined).
+SEARCHED_CLASSES: tuple[str, ...] = (*FORECAST_CLASSES, "not_covered_no_analogs", "not_covered_no_precedent")
+
+# PDP-proximity outcomes (box.pud_proximity.outcome, sql/65) grouped into the three
+# Highgrade filter values. A PUD with no box.pud_proximity row (outside the extent,
+# emerging, ... — never measured) matches none of them.
+PROX_GROUPS: dict[str, tuple[str, ...]] = {
+    "as_is": ("as_is_unexposed", "as_is_single_parent"),
+    "haircut": ("haircut",),
+    "no_precedent": ("no_forecast_precedent", "no_forecast_package"),
+}
+PROX_OUTCOMES: tuple[str, ...] = tuple(o for g in PROX_GROUPS.values() for o in g)
 
 STREAMS = ("oil", "gas")
 HORIZONS = ("12", "24", "36", "48")
@@ -90,6 +117,8 @@ def box_joins(a: str) -> str:
         "AND bso.location_id = bp.location_id AND bso.stream = 'oil' "
         "LEFT JOIN box.pud_forecast_stream bsg ON bsg.run_id = bp.run_id "
         "AND bsg.location_id = bp.location_id AND bsg.stream = 'gas' "
+        # PDP-proximity record (sql/65), PK (run_id, location_id); no row on runs before 11
+        "LEFT JOIN box.pud_proximity bpp ON bpp.run_id = bp.run_id AND bpp.location_id = bp.location_id "
         # the PUD's bench is in a BOX pool (bench_scope.member_benches; DISTINCT so a
         # bench listed in two pools could never multiply rows). Needs the `fb` join first.
         "LEFT JOIN (SELECT DISTINCT basin, unnest(member_benches) AS bench FROM box.bench_scope) bsm "
@@ -277,6 +306,71 @@ def group_blocks(run: dict[str, Any], groups: list[str] | set[str], classes: set
     return out
 
 
+def proximity_block(run: dict[str, Any]) -> dict[str, Any] | None:
+    """The run-level PDP-proximity disclosure (forecast_run.disclosure -> 'proximity',
+    sql/65 / D112-D116), or None on a run that did not measure proximity (before 11).
+    Keeps the run's own sentences: method, the "validated with exception" basis
+    (verdict as written + what it was accepted as + the prospective confirmation), the
+    survivorship caveat, the outcome counts and the oil EUR before / after (MMbbl)."""
+    p = (run.get("disclosure") or {}).get("proximity")
+    if not p:
+        return None
+    v = p.get("validation") or {}
+    eur = p.get("oil_eur_mmbbl") or {}
+    before, after = eur.get("before"), eur.get("after")
+    return {
+        "method": p.get("method"),
+        "decisions": p.get("decisions"),
+        "table_ref": p.get("table_ref"),
+        "label": "validated_with_exception",
+        "verdict_as_written": v.get("verdict_as_written"),
+        "accepted_as": v.get("accepted_as"),
+        "confirmation": v.get("confirmation"),
+        "prereg_commit": v.get("prereg_commit"),
+        "survivorship": p.get("survivorship"),
+        "counts": {o: int((p.get("counts") or {}).get(o, 0)) for o in PROX_OUTCOMES},
+        "source_run": (p.get("inputs") or {}).get("source_run"),
+        "oil_eur_mmbbl_before": before,
+        "oil_eur_mmbbl_after": after,
+        "oil_eur_change": (after / before - 1.0) if before and after is not None else None,
+    }
+
+
+PROX_OUTCOME_TEXT: dict[str, str] = {
+    "as_is_unexposed": "BOX as-is (no depleted parent)",
+    "as_is_single_parent": "BOX as-is (single parent)",
+    "haircut": "oil × configuration factor (D113)",
+    "no_forecast_precedent": "no forecast: < 30 drilled multi-parent wells of the bench pair (D114)",
+    "no_forecast_package": "no forecast: factor <= 0.80 and < 30 drilled packages (D114)",
+}
+
+
+def nearest_parent(parents: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The closest named parent by straight-line gap sqrt(vt^2 + hz^2)."""
+    return min(parents, key=lambda q: (q["dv_ft"] ** 2 + q["dh_ft"] ** 2, q["api10"]), default=None)
+
+
+def config_line(prox: dict[str, Any], parents: list[dict[str, Any]]) -> str:
+    """One PUD's configuration in words, e.g. "topfill · 3 parents · flanked · nearest
+    WCA_1 340 ft vt / 450 ft hz". `prox` = its box.pud_proximity row, `parents` = its
+    box.pud_proximity_parent rows. "flanked" = parents of that class on both sides."""
+    cls = prox.get("config_class")
+    n = int(prox.get("n_parents_total") or 0)
+    if cls is None or n == 0:
+        return "no depleted parent"
+    parts = [cls, f"{n} parent{'s' if n != 1 else ''}"]
+    if cls == "mixed":
+        parts[1] += " (" + " / ".join(f"{prox[f'n_{c}']} {c}" for c in ("same", "topfill", "underfill")
+                                      if prox.get(f"n_{c}")) + ")"
+    flanked = [c for c in ("same", "topfill", "underfill") if prox.get(f"flanked_{c}")]
+    if flanked:
+        parts.append("flanked" if flanked == [cls] else "flanked " + " + ".join(flanked))
+    near = nearest_parent(parents)
+    if near is not None:
+        parts.append(f"nearest {near['parent_bench']} {near['dv_ft']:,.0f} ft vt / {near['dh_ft']:,.0f} ft hz")
+    return " · ".join(parts)
+
+
 @router.get("/meta")
 def meta(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict:
     run = record_run(session)
@@ -307,6 +401,7 @@ def meta(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict:
         "radius_ranges": radius_ranges(run),
         "calendar_factor": calendar_factor_points(run),
         "groups": group_blocks(run, run_groups(run)),
+        "proximity": proximity_block(run),
         "decks": [{**d, "built_at": d["built_at"].isoformat() if d["built_at"] else None} for d in decks],
         "intel_report_versions": list(vintages),
         # the record run keys on its own vintage's stick ids; a newer Novi vintage in the
@@ -441,8 +536,15 @@ def pad(basin: str = _BASIN, pad_key: str = Query(...), session: Session = Depen
                    bp.spacing_source, bp.search_mode, bp.radius_mi, bp.radius_class, bp.n_analogs, bp.flags,
                    bso.eur AS oil_eur, bso.eur_raw AS oil_eur_raw, bso.eur_haircut AS oil_haircut,
                    bso.eur_per_kft AS oil_eur_per_kft, bso.cum12 AS oil_cum12, bso.cum24 AS oil_cum24,
-                   bso.params AS oil_params,
-                   bsg.eur AS gas_eur, bsg.eur_per_kft AS gas_eur_per_kft, bsg.params AS gas_params
+                   bso.params AS oil_params, bso.prox_factor AS oil_prox_factor,
+                   bsg.eur AS gas_eur, bsg.eur_per_kft AS gas_eur_per_kft, bsg.params AS gas_params,
+                   bpp.outcome AS prox_outcome, bpp.config_class AS prox_config_class, bpp.factor AS prox_factor,
+                   bpp.label AS prox_label, bpp.haircut_key AS prox_haircut_key, bpp.pair_key AS prox_pair_key,
+                   bpp.prec_multi AS prox_prec_multi, bpp.prec_package AS prox_prec_package,
+                   bpp.n_same AS prox_n_same, bpp.n_topfill AS prox_n_topfill, bpp.n_underfill AS prox_n_underfill,
+                   bpp.n_parents_total AS prox_n_parents, bpp.flanked_same AS prox_flanked_same,
+                   bpp.flanked_topfill AS prox_flanked_topfill, bpp.flanked_underfill AS prox_flanked_underfill,
+                   bpp.n_permit_parents AS prox_n_permit_parents, bpp.n_recent_producers AS prox_n_recent_producers
             FROM curated.intel_locations il
             JOIN curated.intel_pad_member pm ON pm.stick_id = il.stick_id AND pm.pad_key = :pad_key
             LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = il.stick_id
@@ -463,8 +565,7 @@ def pad(basin: str = _BASIN, pad_key: str = Query(...), session: Session = Depen
             d[f"{s}_di_eff_1yr"] = prm.get("Di_eff_1yr") if prm else None
             d[f"{s}_b"] = prm.get("b") if prm else None
         d["tier"] = TIER_OF.get(d["coverage"])
-        d["group"] = (group_of(d["formation_blueox"], groups)
-                      if d["coverage"] in (*FORECAST_CLASSES, "not_covered_no_analogs") else None)
+        d["group"] = group_of(d["formation_blueox"], groups) if d["coverage"] in SEARCHED_CLASSES else None
         d["novi_oil_eur_per_kft"] = (d["novi_oil_eur"] * 1000.0 / d["ll_ft"]
                                      if d["novi_oil_eur"] is not None and d["ll_ft"] else None)
         locations.append(d)
@@ -483,7 +584,40 @@ def pad(basin: str = _BASIN, pad_key: str = Query(...), session: Session = Depen
         "calendar_factor": calendar_factor_points(run),
         "groups": group_blocks(run, {d["group"] for d in covered if d["group"]},
                                {d["radius_class"] for d in covered if d["radius_class"]}),
+        "proximity": proximity_block(run),
+        "parents": [],
     }
+
+    # PDP proximity (sql/65): the named parents behind every measured PUD on the pad —
+    # forecast and no-precedent alike — and each PUD's configuration in words
+    measured = [d for d in locations if d["prox_outcome"] is not None]
+    if measured:
+        prows = session.execute(
+            text("""
+                SELECT pp.location_id, pp.api10, pp.cls, pp.parent_bench, pp.dv_ft, pp.dh_ft, pp.dxy_ft,
+                       pp.overlap, pp.age_days, pp.permit, w.well_name, w.current_operator AS operator
+                FROM box.pud_proximity_parent pp
+                LEFT JOIN curated.wells w ON w.api10 = pp.api10
+                WHERE pp.run_id = :r AND pp.location_id IN :ids
+                ORDER BY pp.location_id, pp.dh_ft
+            """).bindparams(bindparam("ids", expanding=True)),
+            {"r": run["run_id"], "ids": [d["location_id"] for d in measured]},
+        ).mappings().all()
+        by_parent: dict[int, list[dict[str, Any]]] = {}
+        for pr in prows:
+            by_parent.setdefault(pr["location_id"], []).append(dict(pr))
+        stick_of = {d["location_id"]: d["stick_id"] for d in measured}
+        for d in measured:
+            mine = by_parent.get(d["location_id"], [])
+            prox = {k.removeprefix("prox_"): d[k] for k in d if k.startswith("prox_")}
+            prox["n_parents_total"] = prox.pop("n_parents")
+            d["prox_config_line"] = config_line(prox, mine)
+            d["prox_outcome_text"] = PROX_OUTCOME_TEXT.get(d["prox_outcome"], d["prox_outcome"])
+        out["parents"] = [{**pr, "stick_id": stick_of[pr["location_id"]]} for pr in prows]
+    for d in locations:
+        d.setdefault("prox_config_line", None)
+        d.setdefault("prox_outcome_text", None)
+
     if not covered:
         return out
 

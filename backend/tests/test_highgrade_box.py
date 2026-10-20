@@ -76,9 +76,9 @@ def test_box_range_ignored_without_box_joins():
 
 
 def test_coverage_classes_cover_the_sql_60_values():
-    # every box.pud_forecast.coverage value (sql/60 CHECK + sql/63's D105 tier) must be a class, plus the derived three
+    # every box.pud_forecast.coverage value (sql/60 CHECK + sql/63's D105 tier + sql/65) must be a class, plus the derived three
     sql60 = {"covered", "covered_provisional", "not_covered_emerging", "not_covered_wcxy", "not_covered_unvalidated",
-             "not_covered_outside_extent", "not_covered_no_analogs"}
+             "not_covered_outside_extent", "not_covered_no_analogs", "not_covered_no_precedent"}  # + sql/65 (D114)
     assert sql60 <= set(box.COVERAGE_CLASSES)
     assert set(box.COVERAGE_CLASSES) - sql60 == {"bench_not_in_box", "realized", "no_box_row"}
     derived = set(re.findall(r"THEN '([a-z_]+)'", box.coverage_sql("il")))
@@ -234,3 +234,84 @@ def test_step15_groups_are_keyed_by_bench_and_carry_their_tier():
     ava = g["AVA_1"]
     assert ava["tier"] == "provisional" and not ava["holdout_failed"] and ava["disclosure"][0]["holdout_bias_after"] is None
     assert ava["latest_vintage_text"].startswith("latest vintage")
+
+
+# ---------------------------------------------------------------------------
+# PDP-proximity layer (record run 14, D112-D116, sql/65)
+# ---------------------------------------------------------------------------
+def test_no_precedent_is_a_searched_class_without_a_forecast():
+    assert "not_covered_no_precedent" in box.COVERAGE_CLASSES
+    assert "not_covered_no_precedent" not in box.FORECAST_CLASSES  # no forecast, never a zero
+    assert "not_covered_no_precedent" in box.SEARCHED_CLASSES  # keeps its search provenance + bench group
+    assert set(box.PROX_OUTCOMES) == {"as_is_unexposed", "as_is_single_parent", "haircut",
+                                      "no_forecast_precedent", "no_forecast_package"}  # sql/65 CHECK
+
+
+def test_box_joins_read_the_proximity_record_without_multiplying_rows():
+    j = box.box_joins("il")
+    assert "LEFT JOIN box.pud_proximity bpp ON bpp.run_id = bp.run_id AND bpp.location_id = bp.location_id" in j
+
+
+def test_prox_filter_is_an_explicit_box_screen():
+    f = HighgradeFilters(prox=["haircut", "no_precedent"])
+    clauses, params, expanding = highgrade._build_filters(f, box=True)
+    assert clauses == ["bpp.outcome IN :prox"]
+    assert params == {"prox": ["haircut", "no_forecast_precedent", "no_forecast_package"]}
+    assert [b.key for b in expanding] == ["prox"]
+    assert highgrade._build_filters(f, box=False) == ([], {}, [])  # needs the BOX joins
+    with pytest.raises(ValueError):
+        HighgradeFilters(prox=["bogus"])
+
+
+def test_prox_factor_bound_keeps_not_covered_puds():
+    f = HighgradeFilters(ranges={"box_prox_factor": (None, 0.9)})
+    clauses, params, _ = highgrade._build_filters(f, box=True)
+    assert clauses == ["(bp.coverage IS NULL OR bp.coverage NOT IN ('covered', 'covered_provisional') OR "
+                       "bso.prox_factor <= :box_prox_factor_hi)"]
+    assert params == {"box_prox_factor_hi": 0.9}
+
+
+def _prox_jsonb():
+    return {"counts": {"haircut": 9706, "as_is_unexposed": 25789, "as_is_single_parent": 6980,
+                       "no_forecast_package": 4561, "no_forecast_precedent": 3927},
+            "inputs": {"source_run": 10, "haircut_table": "0a62"},
+            "method": "parents = producing horizontals >= 12 mo ...",
+            "decisions": "D112-D116", "table_ref": "haircut_table sha256:0a62 prereg:b20603d",
+            "validation": {"accepted_as": "option (a), validated_with_exception: ...",
+                           "confirmation": "2026 prospective cohort, first cum-12 read ~2027-Q2",
+                           "prereg_commit": "b20603d", "verdict_as_written": "FAIL (P1 1.060 ...)"},
+            "survivorship": "factors are measured on operator-selected infills: an upper bound ...",
+            "oil_eur_mmbbl": {"after": 23300.106, "before": 29559.533}}
+
+
+def test_proximity_block_carries_the_basis_and_the_survivorship_caveat():
+    b = box.proximity_block({"disclosure": {"by_bench": {}, "proximity": _prox_jsonb()}})
+    assert b is not None
+    assert b["label"] == "validated_with_exception"
+    assert b["verdict_as_written"].startswith("FAIL") and b["accepted_as"].startswith("option (a)")
+    assert b["survivorship"].startswith("factors are measured on operator-selected infills")
+    assert sum(b["counts"].values()) == 50963 and b["counts"]["haircut"] == 9706
+    assert b["counts"]["no_forecast_precedent"] + b["counts"]["no_forecast_package"] == 8488  # = not_covered_no_precedent
+    assert b["oil_eur_change"] == pytest.approx(-0.2117, abs=1e-4)  # oil EUR -21 % overall
+    assert box.proximity_block({"disclosure": {"hindcast_bias": {}}}) is None  # runs before 11
+
+
+def _parent(api, cls, bench, dv, dh):
+    return {"api10": api, "cls": cls, "parent_bench": bench, "dv_ft": dv, "dh_ft": dh}
+
+
+def test_config_line_reads_like_the_record_plan():
+    prox = {"config_class": "topfill", "n_same": 0, "n_topfill": 3, "n_underfill": 0, "n_parents_total": 3,
+            "flanked_same": False, "flanked_topfill": True, "flanked_underfill": False}
+    ps = [_parent("4201", "topfill", "WCA_1", 340.0, 450.0), _parent("4202", "topfill", "WCA_1", 300.0, 1100.0),
+          _parent("4203", "topfill", "WCA_2", 520.0, 600.0)]
+    assert box.config_line(prox, ps) == "topfill · 3 parents · flanked · nearest WCA_1 340 ft vt / 450 ft hz"
+
+
+def test_config_line_mixed_and_unexposed():
+    prox = {"config_class": "mixed", "n_same": 1, "n_topfill": 2, "n_underfill": 2, "n_parents_total": 5,
+            "flanked_same": False, "flanked_topfill": True, "flanked_underfill": False}
+    line = box.config_line(prox, [_parent("1", "topfill", "WCC", 171.0, 1164.7), _parent("2", "same", "WCA", 0.0, 1300.0)])
+    assert line == "mixed · 5 parents (1 same / 2 topfill / 2 underfill) · flanked topfill · nearest WCC 171 ft vt / 1,165 ft hz"
+    assert box.config_line({"config_class": None, "n_parents_total": 0}, []) == "no depleted parent"
+    assert box.nearest_parent([]) is None

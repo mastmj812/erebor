@@ -55,9 +55,12 @@ export interface WellBoxForecast {
   tier?: "validated" | "provisional" | null;
   lateral_ft: number | null; formation_blueox?: string;
   flags?: string[]; // the run's own sentences (tier, edge caveats, at-bound fits)
-  eur: { oil: number | null; gas: number | null };
-  eur_per_kft: { oil: number | null; gas: number | null };
-  streams: Partial<Record<"oil" | "gas", BoxWellSeries>>;
+  eur: { oil: number | null; gas: number | null; water?: number | null };
+  eur_per_kft: { oil: number | null; gas: number | null; water?: number | null };
+  // water (sql/62): its own tier (validated on WCA / BS2_S covered rows, provisional elsewhere) and analog source
+  water_tier?: "validated" | "provisional" | null;
+  water_source?: "measured" | "calculated_fallback" | null;
+  streams: Partial<Record<"oil" | "gas" | "water", BoxWellSeries>>;
 }
 export type WellSource = "novi" | "box" | "both";
 export type BottomTab = "production" | "gunbarrel";

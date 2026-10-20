@@ -20,6 +20,7 @@ function metricMeta(metric: string | undefined, box: boolean): { label: string; 
   }
   if (box && metric === "oil_eur") return { label, fmt: (v) => `${Math.round(v).toLocaleString()} bbl` };
   if (box && metric === "gas_eur") return { label, fmt: (v) => `${Math.round(v).toLocaleString()} mcf` };
+  if (box && metric === "water_eur") return { label, fmt: (v) => `${Math.round(v).toLocaleString()} bbl` };
   if (metric.startsWith("npv") || metric.startsWith("pv")) {
     const rate = metric.replace(/^(npv|pv)/, "");
     const label = `${metric.startsWith("npv") ? "NPV" : "PV"} @ ${rate}%`;

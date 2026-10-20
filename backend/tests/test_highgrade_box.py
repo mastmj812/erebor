@@ -236,6 +236,35 @@ def test_step15_groups_are_keyed_by_bench_and_carry_their_tier():
     assert ava["latest_vintage_text"].startswith("latest vintage")
 
 
+def test_water_metrics_are_box_only_and_read_the_water_stream():
+    assert highgrade.row_value_sql("water_eur", "box", "il") == "bsw.eur"
+    assert "bsw.eur" in highgrade.row_value_sql("water_eur_per_kft", "box", "il")
+    for m in ("water_eur", "water_eur_per_kft"):
+        assert m in highgrade.METRICS_BY_SOURCE["box"]
+        assert m not in highgrade.METRICS_BY_SOURCE["novi"]  # Novi TX water is a fixed gas allocation
+    assert "bsw" in box.box_joins("il") and "stream = 'water'" in box.box_joins("il")
+    assert highgrade.BOX_NUMERIC["box_water_eur_per_kft"] == "bsw.eur_per_kft"
+
+
+def test_water_block_shows_every_line_and_the_caveat():
+    run = {"disclosure": {"water": {"method": "ratio", "oil_basis": "raw box_v2", "by_bench": {
+        "WCA": {"tier": "validated", "caveat": "TX high", "lines": {
+            "24": {"tuning_bias": -0.04, "holdout_bias": -0.08, "pooled_bias": -0.05},
+            "12": {"tuning_bias": -0.08, "holdout_bias": -0.11, "pooled_bias": -0.09}}}}}}}
+    b = box.water_block(run, "WCA")
+    assert b["tier"] == "validated" and b["caveat"] == "TX high"
+    assert [x["horizon"] for x in b["lines"]] == ["cum-12", "cum-24"]  # numeric order
+    assert {"tuning_bias", "holdout_bias", "pooled_bias"} <= set(b["lines"][0])  # never the pooled figure alone
+    assert box.water_block(run, "BS3_S") is None
+    assert box.water_block({"disclosure": {}}, "WCA") is None  # a run without water
+
+
+def test_water_fields_from_params():
+    f = box.water_fields({"source": "measured", "radius_mi": 30.0, "n_analogs": 12, "thin": False, "nm_share": 0.25}, 300.0, 100.0)
+    assert f["water_source"] == "measured" and f["water_radius_mi"] == 30.0 and f["water_wor_cum12"] == 3.0
+    assert box.water_fields(None, None, 100.0)["water_wor_cum12"] is None
+
+
 # ---------------------------------------------------------------------------
 # PDP-proximity layer (record run 14, D112-D116, sql/65)
 # ---------------------------------------------------------------------------

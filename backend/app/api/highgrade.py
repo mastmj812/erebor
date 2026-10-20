@@ -18,7 +18,7 @@ authoritative value) — consistent with the rest of erebor.
 Forecast SOURCE (BOX plan step 8): every endpoint takes `source` = novi | box.
   novi -> Novi Intelligence EUR / NPV columns on curated.intel_locations (unchanged).
   box  -> the BOX record run (box.forecast_run.is_record; analog-workup EUR, D57/D62,
-          uptime-free, raw 50-yr technical integral, oil + gas only — D72) joined by
+          uptime-free, raw 50-yr technical integral; water since sql/62, D111) joined by
           stick_id. The screened population is the SAME Novi PUD set either way; only
           the forecast numbers change. Every screened PUD gets a BOX coverage class
           (box.pud_forecast.coverage, or derived when the PUD has no BOX row) and
@@ -95,7 +95,7 @@ NUMERIC: tuple[str, ...] = (
     "pv5", "pv10", "pv15", "pv20", "pv25",
     "oil_eur", "gas_eur", "ll_ft", "tvd", "fp_year",
     *SUPPORT_NUMERIC,
-    "box_oil_eur", "box_gas_eur", "box_oil_eur_per_kft",
+    "box_oil_eur", "box_gas_eur", "box_oil_eur_per_kft", "box_water_eur", "box_water_eur_per_kft",
 )
 # BOX range filters (need the BOX joins). They bound COVERED PUDs only: a PUD without a
 # BOX forecast stays in the screen and is counted under its not-covered class, never
@@ -104,12 +104,15 @@ BOX_NUMERIC: dict[str, str] = {
     "box_oil_eur": "bso.eur",
     "box_gas_eur": "bsg.eur",
     "box_oil_eur_per_kft": "bso.eur_per_kft",
+    "box_water_eur": "bsw.eur",
+    "box_water_eur_per_kft": "bsw.eur_per_kft",
 }
 # Selectable per-pad metrics. NPV/PV/EUR aggregate via sum|avg; well_count is a count.
 Metric = Literal[
     "npv5", "npv10", "npv15", "npv20", "npv25",
     "pv5", "pv10", "pv15", "pv20", "pv25",
     "oil_eur", "gas_eur", "oil_eur_per_kft", "gas_eur_per_kft", "well_count",
+    "water_eur", "water_eur_per_kft",
     "box_pv0", "box_pv10", "box_pv15", "box_pv20", "box_pv25", "box_pv30",
 ]
 Agg = Literal["sum", "avg", "per_acre"]
@@ -120,7 +123,8 @@ _NOVI_ECON = ("npv5", "npv10", "npv15", "npv20", "npv25", "pv5", "pv10", "pv15",
 BOX_ECON = ("box_pv0", "box_pv10", "box_pv15", "box_pv20", "box_pv25", "box_pv30")
 METRICS_BY_SOURCE: dict[str, tuple[str, ...]] = {
     "novi": (*_NOVI_ECON, *_EUR_METRICS, "well_count"),
-    "box": (*_EUR_METRICS, *BOX_ECON, "well_count"),
+    # water: BOX only (sql/62, measured-water analogs); Novi's TX water is a fixed gas allocation, not offered
+    "box": (*_EUR_METRICS, "water_eur", "water_eur_per_kft", *BOX_ECON, "well_count"),
 }
 
 
@@ -132,9 +136,9 @@ def _eur_kft(metric: str, source: str, a: str) -> tuple[str, str]:
     """(row EUR, row lateral in kft) SQL for an EUR metric. BOX's lateral basis is the
     one its stored eur_per_kft used (box.pud_forecast.lateral_ft), recovered as
     eur / eur_per_kft so a one-well pad reproduces the stored per-row value exactly."""
-    stream = "gas" if metric.startswith("gas") else "oil"
+    stream = "gas" if metric.startswith("gas") else "water" if metric.startswith("water") else "oil"
     if source == "box":
-        t = "bsg" if stream == "gas" else "bso"
+        t = {"gas": "bsg", "water": "bsw"}.get(stream, "bso")
         return f"{t}.eur", f"({t}.eur / NULLIF({t}.eur_per_kft, 0))"
     return f"{a}.{stream}_eur", f"({a}.ll_ft / 1000.0)"
 

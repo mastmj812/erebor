@@ -36,6 +36,9 @@ export const METRICS: { value: HighgradeMetric; label: string; sources: Forecast
   { value: "gas_eur", label: "Gas EUR", sources: ["novi", "box"] },
   { value: "oil_eur_per_kft", label: "Oil EUR / 1,000 ft", sources: ["novi", "box"] },
   { value: "gas_eur_per_kft", label: "Gas EUR / 1,000 ft", sources: ["novi", "box"] },
+  // BOX water (sql/62): WOR vs cum oil on measured-water analogs; validated on WCA / BS2_S, provisional elsewhere
+  { value: "water_eur", label: "Water EUR", sources: ["box"] },
+  { value: "water_eur_per_kft", label: "Water EUR / 1,000 ft", sources: ["box"] },
   // Steven's box_econ values on BOX volumes, one named deck (display-only, D13)
   { value: "box_pv0", label: "Steven PV0", sources: ["box"] },
   { value: "box_pv10", label: "Steven PV10", sources: ["box"] },
@@ -75,6 +78,7 @@ const RANGE_FIELDS: { col: string; label: string; money?: boolean; hint?: string
   { col: "oil_eur", label: "Oil EUR (bbl)", sources: ["novi"] },
   { col: "box_oil_eur", label: "BOX oil EUR (bbl)", sources: ["box"], hint: BOX_RANGE_HINT },
   { col: "box_oil_eur_per_kft", label: "BOX oil EUR / 1,000 ft (bbl)", sources: ["box"], hint: BOX_RANGE_HINT },
+  { col: "box_water_eur_per_kft", label: "BOX water EUR / 1,000 ft (bbl)", sources: ["box"], hint: BOX_RANGE_HINT },
   { col: "ll_ft", label: "Lateral length (ft)" },
   // offset-PDP support (curated.intel_pdp_support, sql/30) — verifiability screen
   { col: "pdp_count_3mi", label: "PDP offsets (3 mi)" },
@@ -485,7 +489,7 @@ function pct(v: number | null | undefined, digits = 1): string {
 }
 
 // BOX provenance + the method statement every BOX number carries (D59 condition 3,
-// D62/D63/D72). Sibling of the Novi caveat line.
+// D62/D63; water D107-D110). Sibling of the Novi caveat line.
 function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
   if (!meta) return <div className="count">Loading BOX record run…</div>;
   const r = meta.run;
@@ -496,6 +500,8 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
   const forms = (gs: typeof others) => gs.map((g) => g.formations.join(" / ")).join(", ");
   const validated = (meta.groups ?? []).filter((g) => g.tier !== "provisional");
   const provisional = (meta.groups ?? []).filter((g) => g.tier === "provisional");
+  const waterOk = (meta.groups ?? []).filter((g) => g.water?.tier === "validated").map((g) => g.formations.join(" / "));
+  const hasWater = (meta.groups ?? []).some((g) => g.water);
   return (
     <div className="caveat" style={{ margin: "4px 0 10px" }}>
       <div>
@@ -504,8 +510,12 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
       </div>
       <div style={{ marginTop: 4 }}>
         Analog-workup forecasts (D57): deal-intake analog cohort <strong>P50</strong> per 1,000 ft × lateral, then a
-        stated walk-forward haircut. Uptime-free (apply F(k) or a downtime factor, never both); oil + gas only, no
-        water (D72); EUR = raw 50-yr technical integral. Covers Delaware {forms(validated) || "WCA_1 / WCA_2"}{" "}
+        stated walk-forward haircut. Uptime-free (apply F(k) or a downtime factor, never both); EUR = raw 50-yr technical
+        integral.{" "}
+        {hasWater
+          ? <>Water = WOR vs cumulative oil on MEASURED-water analogs, applied to the raw box_v2 oil (no haircut, D107 / D108);
+              water tier validated on {waterOk.join(", ") || "none"}, provisional elsewhere (D110).</>
+          : "Oil + gas only on this run."} Covers Delaware {forms(validated) || "WCA_1 / WCA_2"}{" "}
         (validated)
         {provisional.length > 0 && <>, plus <span className="box-prov-badge">PROVISIONAL</span> {forms(provisional)} (D105: raw
           box_v2, never out-of-time validated or failed its one-time holdout — counted apart from validated)</>}{" "}

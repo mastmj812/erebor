@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 
 import {
-  COVERAGE_LABELS, fetchBoxPad, isForecastClass, type BoxGroup, type BoxPad, type BoxPadLocation, type BoxTierLine,
+  COVERAGE_LABELS, fetchBoxPad, isForecastClass, type BoxChart, type BoxGroup, type BoxPad, type BoxPadLocation,
+  type BoxTierLine,
 } from "../api/highgrade";
 
 // BOX workup for one Highgrade pad, rendered on demand from box.* (D80: the database
@@ -45,6 +46,7 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
   const nVal = covered.filter((l) => l.coverage === "covered").length;
   const nProv = covered.length - nVal;
   const anyProv = groups.some((g) => g.tier === "provisional");
+  const hasWater = covered.some((l) => l.water_eur != null);
   const byClass = others.reduce<Record<string, number>>((a, l) => ({ ...a, [l.coverage]: (a[l.coverage] ?? 0) + 1 }), {});
 
   return (
@@ -70,8 +72,13 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
             location's lateral (Cui &amp; Cross below 7,500 ft, D50), then the stated walk-forward haircut (D62 factors
             {d92 ? ", applied to the rate as a smooth curve fitted to them per location — D92" : ""}; BS2_S its own, D94 / D102;
             WCXY none, D97{anyProv ? "; provisional benches none, D105" : ""}). Volumes
-            are <strong>uptime-free</strong> (D63); oil + gas only, no water (D72); EUR = raw 50-yr technical integral, no
-            economic limit. Error = actual ÷ forecast − 1 (negative = the method forecast HIGH).
+            are <strong>uptime-free</strong> (D63); EUR = raw 50-yr technical integral, no economic limit.
+            {hasWater
+              ? <> <strong>Water</strong> = WOR vs cumulative oil fitted on nearby same-bench wells with MEASURED water
+                  (reaching up to 50 mi; a calculated-water fallback is flagged), applied to the raw box_v2 oil before any
+                  haircut; it carries its own tier — validated on WCA / BS2_S, provisional elsewhere (D107–D110).</>
+              : " Oil + gas only on this run."}
+            {" "}Error = actual ÷ forecast − 1 (negative = the method forecast HIGH).
             {anyProv && (
               <>
                 {" "}<span className="box-prov-badge">PROVISIONAL</span> benches (D105) carry a forecast exactly like a
@@ -81,6 +88,7 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
             )}
           </div>
           {groups.map((g) => <GroupDisclosure key={g.group} g={g} multi={groups.length > 1 || g.group !== "WCA"} />)}
+          {hasWater && <WaterDisclosure groups={groups} />}
         </>
       )}
 
@@ -95,6 +103,17 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
             Blue = each validated location's forecast (P50 × haircut, uptime-free){nProv > 0 ? "; amber dashed = each PROVISIONAL location's (raw P50, no haircut, D105)" : ""}. Grey = the named analogs' ACTUAL calendar
             cumulative per 1,000 ft: P10 (high) – P90 (low) band and P50, months with ≥ 3 analogs reporting
             ({data.chart.n_analog_curves} analogs). Calendar actuals carry downtime; the forecast does not (D63).
+          </div>
+        </>
+      )}
+
+      {data.water_chart && (
+        <>
+          <h4>Water forecast vs measured-water analog actuals (cumulative per 1,000 ft)</h4>
+          <Chart chart={data.water_chart} label="BOX water forecast vs measured-water analog actuals" />
+          <div className="count" style={{ margin: "2px 0 0" }}>
+            Blue = each location's water with VALIDATED tier; amber dashed = PROVISIONAL water. Grey = the named
+            measured-water analogs' ACTUAL calendar water per 1,000 ft (P10 high – P90 low, P50; {data.water_chart.n_analog_curves} analogs).
           </div>
         </>
       )}
@@ -115,7 +134,57 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
           </table>
         </>
       )}
+
+      {(data.water_analogs?.length ?? 0) > 0 && (
+        <>
+          <h4>Named water analogs (measured water; a different, wider set than the oil / gas cohort)</h4>
+          <table className="box-tbl">
+            <thead><tr><th>api10</th><th>well</th><th>operator</th><th>state</th><th>water label</th><th>first prod</th><th>lateral ft</th><th>nearest ft</th><th>used by</th></tr></thead>
+            <tbody>
+              {data.water_analogs!.map((a) => (
+                <tr key={a.api10}>
+                  <td>{a.api10}</td><td>{a.well_name ?? "—"}</td><td>{a.operator ?? "—"}</td>
+                  <td>{a.state_code === "30" ? "NM" : a.state_code === "42" ? "TX" : "—"}</td>
+                  <td>{a.water_label}</td><td>{a.first_production ?? "—"}</td><td>{n0(a.lateral_ft)}</td><td>{n0(a.nearest_ft)}</td><td>{a.used_by}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
     </div>
+  );
+}
+
+// Water disclosure (D110) for the pad's groups: tier, tuning / holdout / pooled bias side by side (never the
+// pooled figure alone), and each group's caveat (WCA-TX holdout over-forecast; tuning-only for AVA / BS2_C).
+function WaterDisclosure({ groups }: { groups: BoxGroup[] }) {
+  const ws = groups.filter((g) => g.water);
+  if (!ws.length) return null;
+  return (
+    <>
+      <h4>Water: measured bias by group (D110)</h4>
+      <table className="box-tbl">
+        <thead>
+          <tr><th>group</th><th>water tier</th><th>horizon</th><th>tuning bias · packages</th><th>holdout bias · packages</th><th>pooled bias · packages</th></tr>
+        </thead>
+        <tbody>
+          {ws.flatMap((g) => g.water!.lines.map((l, i) => (
+            <tr key={`${g.group}${l.horizon}`}>
+              <td>{i === 0 ? g.group : ""}</td>
+              <td>{i === 0 ? (g.water!.tier === "provisional" ? <span className="box-prov-badge">PROVISIONAL</span> : "validated") : ""}</td>
+              <td>{l.horizon}</td>
+              <td>{pct(l.tuning_bias)} · {n0(l.tuning_packages)}</td>
+              <td className="box-hold">{l.holdout_bias == null ? "no holdout" : `${pct(l.holdout_bias)} · ${n0(l.holdout_packages)}`}</td>
+              <td>{pct(l.pooled_bias)} · {n0(l.pooled_packages)}</td>
+            </tr>
+          )))}
+        </tbody>
+      </table>
+      {ws.filter((g) => g.water!.caveat).map((g) => (
+        <div key={g.group} className="count" style={{ margin: "2px 0 0" }}><strong>{g.group}:</strong> {g.water!.caveat}</div>
+      ))}
+    </>
   );
 }
 
@@ -126,7 +195,8 @@ function LocationsTable({ rows }: { rows: BoxPadLocation[] }) {
         <tr>
           <th>stick</th><th>bench</th><th>BOX coverage</th><th>lateral ft</th><th>spacing ft</th><th>analogs · radius</th>
           <th>BOX oil EUR bbl</th><th>EUR haircut</th><th>BOX oil /kft</th><th>Novi oil /kft</th><th>BOX ÷ Novi</th><th>oil cum-12</th>
-          <th>oil Di nom (1-yr eff) · b</th><th>BOX gas EUR mcf</th><th>flags</th>
+          <th>oil Di nom (1-yr eff) · b</th><th>BOX gas EUR mcf</th>
+          <th>BOX water EUR bbl</th><th>water /kft</th><th>WOR cum-12</th><th>water tier · analogs · reach</th><th>flags</th>
         </tr>
       </thead>
       <tbody>
@@ -153,6 +223,14 @@ function LocationsTable({ rows }: { rows: BoxPadLocation[] }) {
                 ? `${l.oil_di_nominal.toFixed(2)}/yr (${((l.oil_di_eff_1yr ?? 0) * 100).toFixed(0)}%) · ${l.oil_b?.toFixed(2) ?? "—"}`
                 : ""}</td>
               <td>{cov ? n0(l.gas_eur) : ""}</td>
+              <td>{cov ? n0(l.water_eur) : ""}</td>
+              <td>{cov ? n0(l.water_eur_per_kft) : ""}</td>
+              <td>{cov && l.water_wor_cum12 != null ? l.water_wor_cum12.toFixed(2) : ""}</td>
+              <td>{cov && l.water_eur != null ? <>
+                {l.water_tier === "provisional" ? <span className="box-prov-badge">PROV</span> : "validated"}
+                {` · ${l.water_n_analogs ?? "—"} · ${l.water_radius_mi?.toFixed(1) ?? "—"} mi`}
+                {l.water_source === "calculated_fallback" ? " · CALCULATED fallback" : l.water_thin ? " · thin" : ""}
+              </> : ""}</td>
               <td className="box-flags">{(l.flags ?? []).join("; ")}</td>
             </tr>
           );
@@ -162,7 +240,7 @@ function LocationsTable({ rows }: { rows: BoxPadLocation[] }) {
   );
 }
 
-function Chart({ chart }: { chart: NonNullable<BoxPad["chart"]> }) {
+function Chart({ chart, label = "BOX forecast vs analog actuals" }: { chart: BoxChart; label?: string }) {
   const W = 640, H = 240, L = 56, R = 10, T = 8, B = 28;
   const K = chart.months;
   const band = chart.analog_band;
@@ -191,7 +269,7 @@ function Chart({ chart }: { chart: NonNullable<BoxPad["chart"]> }) {
   }
   const yt = [0, 0.25, 0.5, 0.75, 1].map((f) => f * ymax);
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W }} role="img" aria-label="BOX forecast vs analog actuals">
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W }} role="img" aria-label={label}>
       {yt.map((v) => (
         <g key={v}>
           <line x1={L} x2={W - R} y1={Y(v)} y2={Y(v)} stroke="#e4e4e7" />

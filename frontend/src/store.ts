@@ -133,6 +133,8 @@ export interface HighgradeResult {
   valued_by_tier?: { validated: number; provisional: number } | null; // BOX: valued_count split by tier (D105)
   pads_unvalued?: number;   // drawn pads with no valued well (BOX: grey "not covered")
   coverage_counts?: Record<string, number> | null; // BOX: screened PUDs per coverage class
+  // BOX: screened PUDs per PDP-proximity outcome group + the haircut factor range (D112–D116)
+  proximity_counts?: { as_is: number; haircut: number; no_precedent: number; factor_min: number | null; factor_max: number | null } | null;
   box_run?: { run_id: number; report_version: string; data_through: string; code_sha: string };
   econ?: EconDeck;
 }

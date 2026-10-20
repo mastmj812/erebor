@@ -40,6 +40,8 @@ export interface HighgradeFilters {
   deplet_t?: string[];
   complet_t?: string[];
   rqt?: string[];
+  // BOX PDP-proximity outcome groups (backend box.PROX_GROUPS); BOX source only
+  prox?: ProxGroup[];
   // whitelisted column -> [min, max], either side null = unbounded
   ranges?: Record<string, [number | null, number | null]>;
 }
@@ -49,6 +51,7 @@ export const COVERAGE_LABELS: Record<string, string> = {
   covered: "covered — validated (BOX forecast)",
   covered_provisional: "covered — PROVISIONAL tier (BOX forecast, D105)",
   not_covered_no_analogs: "no analogs at the 20-mi cap (D74)",
+  not_covered_no_precedent: "no forecast — configuration without drilled precedent (D114)",
   not_covered_outside_extent: "outside the BOX extent",
   not_covered_wcxy: "WCXY target, not covered by this run (D61)",
   not_covered_unvalidated: "bench not yet validated (D60)",
@@ -57,6 +60,35 @@ export const COVERAGE_LABELS: Record<string, string> = {
   realized: "realized per reconciliation",
   no_box_row: "no BOX row (vintage drift?)",
 };
+
+// PDP-proximity layer (record run 14, D112–D116): the three Highgrade filter values over
+// box.pud_proximity.outcome. A PUD BOX never measured (outside the extent, emerging, …) matches none.
+export type ProxGroup = "as_is" | "haircut" | "no_precedent";
+export const PROX_GROUP_LABELS: Record<ProxGroup, string> = {
+  as_is: "as-is (unexposed / single parent)",
+  haircut: "oil haircut (multi-parent, D113)",
+  no_precedent: "no precedent — no forecast (D114)",
+};
+export const PROX_OUTCOME_GROUP: Record<string, ProxGroup> = {
+  as_is_unexposed: "as_is", as_is_single_parent: "as_is", haircut: "haircut",
+  no_forecast_precedent: "no_precedent", no_forecast_package: "no_precedent",
+};
+// The run-level proximity disclosure (backend box.proximity_block; null on runs before 11).
+export interface BoxProximity {
+  method: string | null; decisions: string | null; table_ref: string | null;
+  label: "validated_with_exception";
+  verdict_as_written: string | null; accepted_as: string | null; confirmation: string | null; prereg_commit: string | null;
+  survivorship: string | null;
+  counts: Record<string, number>;
+  source_run: number | null;
+  oil_eur_mmbbl_before: number | null; oil_eur_mmbbl_after: number | null; oil_eur_change: number | null;
+}
+// One named parent behind a PUD's configuration (box.pud_proximity_parent).
+export interface BoxPadParent {
+  location_id: number; stick_id: number; api10: string; cls: "same" | "topfill" | "underfill"; parent_bench: string;
+  dv_ft: number; dh_ft: number; dxy_ft: number; overlap: number; age_days: number; permit: boolean;
+  well_name: string | null; operator: string | null;
+}
 
 export interface BoxDeck extends EconDeck {
   downtime_basis: string;
@@ -124,6 +156,7 @@ export interface BoxMeta {
   radius_ranges: BoxRadiusRange[];
   calendar_factor: Record<string, Record<string, number>>;
   groups?: BoxGroup[];
+  proximity?: BoxProximity | null;
   decks: BoxDeck[];
   intel_report_versions: string[];
   stale: boolean;
@@ -143,6 +176,15 @@ export interface BoxPadLocation {
   gas_eur: number | null; gas_eur_per_kft: number | null;
   oil_di_nominal: number | null; oil_di_eff_1yr: number | null; oil_b: number | null;
   gas_di_nominal: number | null; gas_di_eff_1yr: number | null; gas_b: number | null;
+  // PDP proximity (box.pud_proximity; null when BOX did not measure this PUD)
+  oil_prox_factor?: number | null;
+  prox_outcome?: string | null; prox_outcome_text?: string | null; prox_config_line?: string | null;
+  prox_config_class?: string | null; prox_factor?: number | null; prox_label?: string | null;
+  prox_haircut_key?: string | null; prox_pair_key?: string | null;
+  prox_prec_multi?: number | null; prox_prec_package?: number | null;
+  prox_n_same?: number | null; prox_n_topfill?: number | null; prox_n_underfill?: number | null; prox_n_parents?: number | null;
+  prox_flanked_same?: boolean | null; prox_flanked_topfill?: boolean | null; prox_flanked_underfill?: boolean | null;
+  prox_n_permit_parents?: number | null; prox_n_recent_producers?: number | null;
 }
 export interface BoxPadAnalog {
   api10: string; nearest_ft: number; used_by: number; lateral_ft: number | null;
@@ -163,6 +205,8 @@ export interface BoxPad {
   calendar_factor: Record<string, Record<string, number>>;
   groups?: BoxGroup[];
   tier_counts?: { validated: number; provisional: number };
+  proximity?: BoxProximity | null;
+  parents?: BoxPadParent[];
 }
 
 export async function fetchFacets(

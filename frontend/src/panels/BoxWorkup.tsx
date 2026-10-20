@@ -1,14 +1,17 @@
 import { useEffect, useState } from "react";
 
 import {
-  COVERAGE_LABELS, fetchBoxPad, isForecastClass, type BoxGroup, type BoxPad, type BoxPadLocation, type BoxTierLine,
+  COVERAGE_LABELS, PROX_OUTCOME_GROUP, fetchBoxPad, isForecastClass, type BoxGroup, type BoxPad, type BoxPadLocation,
+  type BoxPadParent, type BoxProximity, type BoxTierLine,
 } from "../api/highgrade";
 
 // BOX workup for one Highgrade pad, rendered on demand from box.* (D80: the database
 // is the record, pages are renders). Same content as engineering_db's committed pad
 // pages (box/production_pages.py): method statement + measured bias / haircut (D59
 // condition 3), radius-class range (D69), locations, forecast vs analog actuals, the
-// named analogs. Plus the Novi number next to each BOX one (the toggle's comparison).
+// named analogs. Plus the Novi number next to each BOX one (the toggle's comparison), and the
+// PDP-proximity layer (record run 14, D112–D116): each PUD's parent configuration, its oil factor or
+// no-precedent outcome, the precedent counts and the named parents.
 
 const n0 = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? "—" : Math.round(v).toLocaleString());
 const pct = (v: number | null | undefined, d = 1) =>
@@ -46,6 +49,8 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
   const nProv = covered.length - nVal;
   const anyProv = groups.some((g) => g.tier === "provisional");
   const byClass = others.reduce<Record<string, number>>((a, l) => ({ ...a, [l.coverage]: (a[l.coverage] ?? 0) + 1 }), {});
+  const measured = data.locations.filter((l) => l.prox_outcome != null);
+  const nHaircut = measured.filter((l) => l.prox_outcome === "haircut").length;
 
   return (
     <div className="box-wu">
@@ -69,7 +74,10 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
             (deal-intake selection: same bench, nearest-first, lateral band, representative spacing; D57), scaled to the
             location's lateral (Cui &amp; Cross below 7,500 ft, D50), then the stated walk-forward haircut (D62 factors
             {d92 ? ", applied to the rate as a smooth curve fitted to them per location — D92" : ""}; BS2_S its own, D94 / D102;
-            WCXY none, D97{anyProv ? "; provisional benches none, D105" : ""}). Volumes
+            WCXY none, D97{anyProv ? "; provisional benches none, D105" : ""}){data.proximity
+              ? <>, then for a PUD with 2+ depleted parents the PDP-proximity <strong>oil</strong> factor of its configuration
+                (D113; gas untouched; a configuration without drilled precedent gets no forecast, D114)</>
+              : null}. Volumes
             are <strong>uptime-free</strong> (D63); oil + gas only, no water (D72); EUR = raw 50-yr technical integral, no
             economic limit. Error = actual ÷ forecast − 1 (negative = the method forecast HIGH).
             {anyProv && (
@@ -87,12 +95,27 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
       <h4>Locations — BOX vs Novi</h4>
       <LocationsTable rows={[...covered, ...others]} />
 
+      {measured.length > 0 && (
+        <>
+          <h4>PDP proximity (D112–D116){nHaircut > 0 ? ` — ${nHaircut} oil haircut` : ""}</h4>
+          {data.proximity && <BoxProximityNote p={data.proximity} compact />}
+          <ProximityTable rows={measured} />
+          {(data.parents ?? []).length > 0 && (
+            <>
+              <h5 style={{ margin: "6px 0 2px" }}>Named parents ({(data.parents ?? []).length})</h5>
+              <ParentsTable parents={data.parents ?? []} locations={measured} />
+            </>
+          )}
+        </>
+      )}
+
       {data.chart && (
         <>
           <h4>Forecast vs analog actuals (oil, cumulative per 1,000 ft)</h4>
           <Chart chart={data.chart} />
           <div className="count" style={{ margin: "2px 0 0" }}>
-            Blue = each validated location's forecast (P50 × haircut, uptime-free){nProv > 0 ? "; amber dashed = each PROVISIONAL location's (raw P50, no haircut, D105)" : ""}. Grey = the named analogs' ACTUAL calendar
+            Blue = each validated location's forecast (P50 × haircut, uptime-free){nProv > 0 ? "; amber dashed = each PROVISIONAL location's (raw P50, no haircut, D105)" : ""}{nHaircut > 0
+              ? "; either × its PDP-proximity oil factor where multi-parent (D113)" : ""}. Grey = the named analogs' ACTUAL calendar
             cumulative per 1,000 ft: P10 (high) – P90 (low) band and P50, months with ≥ 3 analogs reporting
             ({data.chart.n_analog_curves} analogs). Calendar actuals carry downtime; the forecast does not (D63).
           </div>
@@ -125,7 +148,7 @@ function LocationsTable({ rows }: { rows: BoxPadLocation[] }) {
       <thead>
         <tr>
           <th>stick</th><th>bench</th><th>BOX coverage</th><th>lateral ft</th><th>spacing ft</th><th>analogs · radius</th>
-          <th>BOX oil EUR bbl</th><th>EUR haircut</th><th>BOX oil /kft</th><th>Novi oil /kft</th><th>BOX ÷ Novi</th><th>oil cum-12</th>
+          <th>BOX oil EUR bbl</th><th>EUR haircut</th><th>PDP prox ×</th><th>BOX oil /kft</th><th>Novi oil /kft</th><th>BOX ÷ Novi</th><th>oil cum-12</th>
           <th>oil Di nom (1-yr eff) · b</th><th>BOX gas EUR mcf</th><th>flags</th>
         </tr>
       </thead>
@@ -145,6 +168,7 @@ function LocationsTable({ rows }: { rows: BoxPadLocation[] }) {
               <td>{cov || l.n_analogs != null ? `${l.n_analogs ?? "—"} · ${l.radius_mi?.toFixed(1) ?? "—"} mi${l.search_mode === "strike" ? " strike" : ""}` : ""}</td>
               <td>{cov ? n0(l.oil_eur) : "not covered"}</td>
               <td>{cov && l.oil_haircut != null ? `×${l.oil_haircut.toFixed(3)}` : ""}</td>
+              <td title={l.prox_outcome_text ?? undefined}>{proxCell(l)}</td>
               <td>{cov ? n0(l.oil_eur_per_kft) : ""}</td>
               <td>{n0(l.novi_oil_eur_per_kft)}</td>
               <td>{ratio == null ? "" : `${ratio.toFixed(2)}×`}</td>
@@ -159,6 +183,115 @@ function LocationsTable({ rows }: { rows: BoxPadLocation[] }) {
         })}
       </tbody>
     </table>
+  );
+}
+
+// The location table's PDP-proximity cell: the oil factor the stored EUR carries, or why there is none.
+function proxCell(l: BoxPadLocation): string {
+  const g = l.prox_outcome ? PROX_OUTCOME_GROUP[l.prox_outcome] : undefined;
+  if (g === "haircut") return `×${(l.oil_prox_factor ?? l.prox_factor ?? 1).toFixed(3)}`;
+  if (g === "as_is") return "×1 (as-is)";
+  if (g === "no_precedent") return "no precedent";
+  return "";
+}
+
+const n0f = (v: number) => Math.round(v).toLocaleString();
+
+// One row per measured PUD: configuration in words, outcome, factor + label, precedent counts, flags.
+function ProximityTable({ rows }: { rows: BoxPadLocation[] }) {
+  return (
+    <table className="box-tbl">
+      <thead>
+        <tr>
+          <th>stick</th><th>bench</th><th>configuration (parents ≥ 12 mo, ≥ 30 % alongside)</th><th>outcome</th>
+          <th>oil factor</th><th>basis</th><th>precedent (bench pair: drilled multi-parent wells · packages)</th><th>flags</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((l) => {
+          const g = l.prox_outcome ? PROX_OUTCOME_GROUP[l.prox_outcome] : undefined;
+          const flags = [
+            l.prox_n_permit_parents ? `${l.prox_n_permit_parents} parent${l.prox_n_permit_parents === 1 ? "" : "s"} on a permit-round TVD` : "",
+            l.prox_n_recent_producers ? `${l.prox_n_recent_producers} producer${l.prox_n_recent_producers === 1 ? "" : "s"} < 12 mo in the envelope (a parent within the year; not counted)` : "",
+          ].filter(Boolean);
+          return (
+            <tr key={l.stick_id} className={g === "no_precedent" ? "nc" : ""}>
+              <td title={l.unique_id}>{l.stick_id}</td>
+              <td>{l.formation_blueox}</td>
+              <td>{l.prox_config_line ?? "—"}</td>
+              <td className={g === "no_precedent" ? "box-hold" : undefined}>{l.prox_outcome_text ?? l.prox_outcome}</td>
+              <td>{g === "haircut" ? <strong>×{(l.oil_prox_factor ?? l.prox_factor ?? 1).toFixed(3)}</strong>
+                : g === "no_precedent" ? `(table ×${l.prox_factor?.toFixed(3) ?? "—"}, not applied)` : "×1"}</td>
+              <td>{[l.prox_label === "validated_with_exception" ? "validated with exception" : "", l.prox_haircut_key ?? ""]
+                .filter(Boolean).join(" · ")}</td>
+              <td>{l.prox_pair_key ? `${l.prox_pair_key}: ${l.prox_prec_multi ?? "—"} wells · ${l.prox_prec_package ?? "—"} packages` : ""}</td>
+              <td className="box-flags">{flags.join("; ")}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+// The named parents behind each configuration (box.pud_proximity_parent), nearest first per PUD.
+function ParentsTable({ parents, locations }: { parents: BoxPadParent[]; locations: BoxPadLocation[] }) {
+  const bench = Object.fromEntries(locations.map((l) => [l.stick_id, l.formation_blueox]));
+  return (
+    <table className="box-tbl">
+      <thead>
+        <tr>
+          <th>PUD stick</th><th>PUD bench</th><th>parent api10</th><th>well</th><th>operator</th><th>class</th><th>parent bench</th>
+          <th>vt ft</th><th>hz ft</th><th>offset ft (+ = left of heading)</th><th>alongside</th><th>age at data date</th><th>permit TVD</th>
+        </tr>
+      </thead>
+      <tbody>
+        {parents.map((p) => (
+          <tr key={`${p.location_id}-${p.api10}`}>
+            <td>{p.stick_id}</td><td>{bench[p.stick_id] ?? "—"}</td><td>{p.api10}</td><td>{p.well_name ?? "—"}</td><td>{p.operator ?? "—"}</td>
+            <td>{p.cls}</td><td>{p.parent_bench}</td><td>{n0f(p.dv_ft)}</td><td>{n0f(p.dh_ft)}</td>
+            <td>{`${p.dxy_ft >= 0 ? "+" : "−"}${n0f(Math.abs(p.dxy_ft))}`}</td>
+            <td>{(p.overlap * 100).toFixed(0)}%</td><td>{(p.age_days / 365.25).toFixed(1)} yr</td><td>{p.permit ? "yes" : ""}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// The run-level PDP-proximity disclosure (forecast_run.disclosure.proximity): method, the "validated with
+// exception" basis (the pre-registered verdict as written beside what it was accepted as), the survivorship
+// caveat, the prospective confirmation, the outcome counts and the oil EUR effect. Shared with the Highgrade note.
+export function BoxProximityNote({ p, compact = false }: { p: BoxProximity; compact?: boolean }) {
+  const c = p.counts;
+  const nNoPrec = (c.no_forecast_precedent ?? 0) + (c.no_forecast_package ?? 0);
+  const eurPct = p.oil_eur_change == null ? null : `${p.oil_eur_change >= 0 ? "+" : ""}${(p.oil_eur_change * 100).toFixed(1)}%`;
+  return (
+    <div className="box-prov" style={{ marginTop: 6 }}>
+      <div className="count" style={{ margin: 0 }}>
+        <strong>PDP proximity (D112–D116)</strong> · <span className="box-prov-badge">VALIDATED WITH EXCEPTION</span>
+        {" "}{p.table_ref ? `· ${p.table_ref}` : ""}
+      </div>
+      {!compact && <div className="count" style={{ margin: "2px 0 0" }}>{p.method}</div>}
+      <div className="count" style={{ margin: "2px 0 0" }}>
+        <strong>Basis:</strong> pre-registered walk-forward (prereg {p.prereg_commit ?? "—"}) as written: {p.verdict_as_written ?? "—"}.
+        Accepted as {p.accepted_as ?? "—"}. Confirmation: {p.confirmation ?? "—"}.
+      </div>
+      <div className="count" style={{ margin: "2px 0 0", color: "#92400e" }}>
+        <strong>Survivorship:</strong> {p.survivorship ?? "—"}.
+      </div>
+      {!compact && (
+        <div className="count" style={{ margin: "2px 0 0" }}>
+          Run-wide: {(c.haircut ?? 0).toLocaleString()} haircut · {nNoPrec.toLocaleString()} no precedent, no forecast
+          ({(c.no_forecast_precedent ?? 0).toLocaleString()} bench pair &lt; 30 multi-parent wells · {(c.no_forecast_package ?? 0).toLocaleString()} factor ≤ 0.80 with &lt; 30 packages)
+          · {(c.as_is_single_parent ?? 0).toLocaleString()} single parent · {(c.as_is_unexposed ?? 0).toLocaleString()} unexposed.
+          {p.oil_eur_mmbbl_before != null && p.oil_eur_mmbbl_after != null && (
+            <> Oil EUR {Math.round(p.oil_eur_mmbbl_before).toLocaleString()} → {Math.round(p.oil_eur_mmbbl_after).toLocaleString()} MMbbl
+              ({eurPct}) vs run {p.source_run ?? "—"}.</>
+          )}{" "}Gas and water untouched.
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -715,6 +715,13 @@ function padPopupHtml(p: Record<string, unknown>, metric: string, agg: string, s
   const tierRow = box && nValued > 0 && nProv > 0
     ? `<tr><td>valued PUDs</td><td>${fmtInt(p.nv_validated ?? 0)} validated · ${fmtInt(nProv)} PROVISIONAL</td></tr>`
     : "";
+  // BOX: the pad's PDP-proximity outcomes (D112–D116) and the oil factor range of its haircut PUDs
+  const npAsIs = Number(p.np_as_is ?? 0), npHc = Number(p.np_haircut ?? 0), npNo = Number(p.np_no_precedent ?? 0);
+  const hcRange = npHc > 0 && p.prox_min != null && p.prox_max != null
+    ? ` ×${Number(p.prox_min).toFixed(2)}${Number(p.prox_max) !== Number(p.prox_min) ? `–${Number(p.prox_max).toFixed(2)}` : ""}` : "";
+  const proxRow = box && npAsIs + npHc + npNo > 0
+    ? `<tr><td>PDP proximity</td><td>${fmtInt(npAsIs)} as-is · ${fmtInt(npHc)} oil haircut${hcRange} · ${fmtInt(npNo)} no precedent</td></tr>`
+    : "";
   const acresRow = p.acres == null ? "" : `<tr><td>Acres</td><td>${fmtInt(p.acres)}</td></tr>`;
   const nParts = Number(p.n_parts ?? 1);
   const splitRow = nParts > 1
@@ -729,6 +736,7 @@ function padPopupHtml(p: Record<string, unknown>, metric: string, agg: string, s
         ${acresRow}
         ${splitRow}
         ${covRows}
+        ${proxRow}
       </table>
       ${box ? `<div class="count" style="margin:2px 0 0">click for the BOX workup</div>` : ""}
     </div>`;

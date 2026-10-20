@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import {
   COVERAGE_LABELS,
+  PROX_GROUP_LABELS,
   fetchBoxMeta,
   fetchFacets,
   fetchHighgradePads,
@@ -15,9 +16,11 @@ import {
   type HighgradeFacets,
   type HighgradeFilters,
   type HighgradeMetric,
+  type ProxGroup,
 } from "../api/highgrade";
 import { colorForBlueox } from "../map/formations";
-import { useMapStore, type OverlayKey } from "../store";
+import { useMapStore, type HighgradeResult, type OverlayKey } from "../store";
+import { BoxProximityNote } from "./BoxWorkup";
 import { ChipGroup } from "./ChipGroup";
 
 // Exported: the legend and the gunbarrel label from the same table.
@@ -79,6 +82,8 @@ const RANGE_FIELDS: { col: string; label: string; money?: boolean; hint?: string
   { col: "box_oil_eur", label: "BOX oil EUR (bbl)", sources: ["box"], hint: BOX_RANGE_HINT },
   { col: "box_oil_eur_per_kft", label: "BOX oil EUR / 1,000 ft (bbl)", sources: ["box"], hint: BOX_RANGE_HINT },
   { col: "box_water_eur_per_kft", label: "BOX water EUR / 1,000 ft (bbl)", sources: ["box"], hint: BOX_RANGE_HINT },
+  { col: "box_prox_factor", label: "BOX PDP-proximity oil factor (×)", sources: ["box"],
+    hint: `D113 oil factor: 1 = as-is (unexposed / single parent), 0.75–0.94 = multi-parent haircut. ${BOX_RANGE_HINT}` },
   { col: "ll_ft", label: "Lateral length (ft)" },
   // offset-PDP support (curated.intel_pdp_support, sql/30) — verifiability screen
   { col: "pdp_count_3mi", label: "PDP offsets (3 mi)" },
@@ -115,6 +120,13 @@ const DEPLET_HINT: Record<ForecastSource, string> = {
 
 type RangeMap = Record<string, [number | null, number | null]>;
 
+// PDP-proximity screen (BOX only, D112–D116): empty = all. Unlike a BOX range bound this is an
+// explicit outcome screen, so it drops every PUD outside the selection — including the classes
+// BOX never measured for proximity (outside the extent, emerging, bench not in BOX, …).
+const PROX_OPTIONS: ProxGroup[] = ["as_is", "haircut", "no_precedent"];
+const PROX_SHORT: Record<ProxGroup, string> = { as_is: "as-is", haircut: "haircut", no_precedent: "no precedent" };
+const PROX_HINT = "as-is = unexposed or single parent (BOX unchanged) · haircut = 2+ depleted parents with drilled precedent, oil × 0.75–0.94 (D113) · no precedent = no forecast (D114). Selecting any drops the PUDs BOX never measured (outside the extent, emerging, …).";
+
 // Depth-anomaly default (2026-09 WCB_2 deep-TVD audit): sticks landed > 200 ft
 // deeper than any same-bench producer within 3 mi are suspect Novi landings —
 // visible on the map, excluded from the default screen. The <= 200 bound also
@@ -144,6 +156,7 @@ export function HighgradePanel() {
   const [facets, setFacets] = useState<HighgradeFacets | null>(null);
   const [cats, setCats] = useState<Record<CategoricalField, string[]>>({ ...EMPTY_CATS });
   const [ranges, setRanges] = useState<RangeMap>({ ...DEFAULT_RANGES });
+  const [prox, setProx] = useState<ProxGroup[]>([]);
   const [metric, setMetric] = useState<HighgradeMetric>("npv25");
   const [agg, setAgg] = useState<HighgradeAgg>("sum");
   const [opSearch, setOpSearch] = useState("");
@@ -155,6 +168,7 @@ export function HighgradePanel() {
   useEffect(() => {
     setCats({ ...DEFAULT_CATS[useMapStore.getState().hgSource] });
     setRanges({ ...DEFAULT_RANGES });
+    setProx([]);
     setOpSearch("");
   }, [basin]);
 
@@ -196,6 +210,7 @@ export function HighgradePanel() {
       RANGE_FIELDS.forEach((f) => { if (f.sources && !f.sources.includes(src)) delete out[f.col]; });
       return out;
     });
+    if (src !== "box") setProx([]);
   };
 
   // per_acre is only offered for the $-metrics; drop it if the metric changes away.
@@ -229,6 +244,7 @@ export function HighgradePanel() {
       (Object.keys(cats) as CategoricalField[]).forEach((f) => {
         if (cats[f].length) filters[f] = cats[f];
       });
+      if (source === "box" && prox.length) filters.prox = prox;
       const rangeEntries = Object.entries(ranges).filter(([, [lo, hi]]) => lo != null || hi != null);
       if (rangeEntries.length) filters.ranges = Object.fromEntries(rangeEntries);
       const res = await fetchHighgradePads({
@@ -248,6 +264,7 @@ export function HighgradePanel() {
   const reset = () => {
     setCats({ ...DEFAULT_CATS[source] });
     setRanges({ ...DEFAULT_RANGES });
+    setProx([]);
     setHighgrade(null);
     setHighgradeFilters(null);
     closeHgGunbarrel();
@@ -357,6 +374,17 @@ export function HighgradePanel() {
             />
           ))}
 
+          {source === "box" && (
+            <ChipGroup
+              label="BOX PDP proximity"
+              hint={PROX_HINT}
+              options={PROX_OPTIONS}
+              selected={prox}
+              onToggle={(v) => setProx((p) => (p.includes(v as ProxGroup) ? p.filter((x) => x !== v) : [...p, v as ProxGroup]))}
+              labelOf={(v) => PROX_SHORT[v as ProxGroup] ?? v}
+            />
+          )}
+
           <ChipGroup
             label="Formation (Blue Ox)"
             options={facets.categorical.formation_blueox}
@@ -422,6 +450,7 @@ export function HighgradePanel() {
               total={highgrade.well_count + highgrade.wells_without_pad} metric={highgrade.metric}
               padsUnvalued={highgrade.pads_unvalued ?? 0} />
           )}
+          {highgrade.source === "box" && highgrade.proximity_counts && <ProximitySummary pc={highgrade.proximity_counts} />}
           {highgrade.pads_missing_geom > 0 && (
             <div className="count" style={{ margin: "2px 0 0", color: "#92400e" }}>
               {highgrade.pads_missing_geom.toLocaleString()} matching pads have no polygon (not drawn)
@@ -521,6 +550,8 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
           box_v2, never out-of-time validated or failed its one-time holdout — counted apart from validated)</>}{" "}
         inside their extents; every other PUD is shown as not covered, never zero. The table is WCA's; each pad workup
         shows its own group's.
+        {meta.proximity && <> Then the PDP-proximity layer (D112–D116): multi-parent PUDs with drilled precedent carry an
+          oil factor, those without get no forecast — below.</>}
       </div>
       <table className="hg-box-tbl">
         <thead><tr><th>oil</th><th>measured bias</th><th>{d92 ? "D62 target" : "haircut"}</th>{d92 && <th>realised (D92)</th>}<th>held-out after</th></tr></thead>
@@ -567,6 +598,7 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
           </tbody>
         </table>
       )}
+      {meta.proximity && <BoxProximityNote p={meta.proximity} />}
       {meta.stale && (
         <div style={{ color: "#991b1b", marginTop: 4 }}>
           The warehouse holds Novi {meta.intel_report_versions.join(", ")}; this run keys on {r.report_version} sticks —
@@ -635,6 +667,29 @@ function CoverageSummary({ counts, valued, valuedByTier, total, metric, padsUnva
     </div>
   );
 }
+// Screen-wide PDP-proximity outcomes (D112–D116): BOX's EUR already carries the oil factor.
+function ProximitySummary({ pc }: { pc: NonNullable<HighgradeResult["proximity_counts"]> }) {
+  const n = pc.as_is + pc.haircut + pc.no_precedent;
+  if (n === 0) return null;
+  const range = pc.factor_min != null && pc.factor_max != null ? ` (oil ×${pc.factor_min.toFixed(3)}–×${pc.factor_max.toFixed(3)})` : "";
+  return (
+    <div style={{ margin: "6px 0 0" }}>
+      <div className="count" style={{ margin: 0 }}>PDP proximity of the {n.toLocaleString()} PUDs BOX measured:</div>
+      <table className="hg-box-tbl">
+        <tbody>
+          <tr><td>{PROX_GROUP_LABELS.as_is}</td><td style={{ textAlign: "right" }}>{pc.as_is.toLocaleString()}</td></tr>
+          <tr><td>{PROX_GROUP_LABELS.haircut}{range}</td><td style={{ textAlign: "right" }}>{pc.haircut.toLocaleString()}</td></tr>
+          <tr className="nc"><td>{PROX_GROUP_LABELS.no_precedent}</td><td style={{ textAlign: "right" }}>{pc.no_precedent.toLocaleString()}</td></tr>
+        </tbody>
+      </table>
+      <div className="count" style={{ margin: "2px 0 0" }}>
+        BOX EUR already carries the oil factor (gas / water untouched). The haircut is validated with exception and,
+        measured on operator-selected infills, an upper bound for undrilled PUDs — see the BOX note above.
+      </div>
+    </div>
+  );
+}
+
 function fmt(v: number | null, money: boolean): string {
   if (v == null || !Number.isFinite(v)) return "—";
   if (money) return `$${Math.round(v).toLocaleString()}`;

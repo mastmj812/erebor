@@ -1,8 +1,9 @@
 // Multi-select chip group: empty selection = "all" (no constraint), click a chip
 // to include it. Shared by the Highgrade filter panel and the Map-tab formation
-// picker. Optional `swatch` paints a color dot (e.g. formation_blueox color).
+// picker. Optional `swatch` paints a color dot (e.g. formation_blueox color);
+// optional `labelOf` shows a display label for a chip value.
 export function ChipGroup({
-  label, options, selected, onToggle, swatch, hint,
+  label, options, selected, onToggle, swatch, hint, labelOf,
 }: {
   label: string;
   options: string[];
@@ -10,6 +11,7 @@ export function ChipGroup({
   onToggle: (v: string) => void;
   swatch?: (name: string) => string;
   hint?: string;
+  labelOf?: (value: string) => string;
 }) {
   if (!options || options.length === 0) return null;
   return (
@@ -24,7 +26,7 @@ export function ChipGroup({
             onClick={() => onToggle(o)}
           >
             {swatch && <span className="swatch" style={{ background: swatch(o), width: 9, height: 9, marginRight: 4 }} />}
-            {o}
+            {labelOf ? labelOf(o) : o}
           </button>
         ))}
       </div>

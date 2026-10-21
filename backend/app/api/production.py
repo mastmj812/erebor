@@ -49,7 +49,7 @@ def _seg_decline_per_year(seg) -> float:
     decline from the segment's own endpoints: ln(q_start/q_stop) over the
     segment span. Coalescing NULL->0 here (the pre-2026-09-17 behavior) made
     every tail run FLAT at the terminal q_start from ~month 360 on, inflating
-    long-horizon cums in the aggregate panel and the xlsx export vectors.
+    long-horizon cums in the aggregate panel (and the since-retired xlsx export).
     """
     d = seg["d_nom"]
     if d is not None:

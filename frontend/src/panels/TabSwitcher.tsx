@@ -7,7 +7,13 @@ export function TabSwitcher() {
     <div className="tabswitch seg">
       <button className={appMode === "map" ? "active" : ""} onClick={() => setAppMode("map")}>Map</button>
       <button className={appMode === "highgrade" ? "active" : ""} onClick={() => setAppMode("highgrade")}>Highgrade</button>
-      <button className={appMode === "accuracy" ? "active" : ""} onClick={() => setAppMode("accuracy")}>Accuracy</button>
+      <button
+        className={appMode === "accuracy" ? "active" : ""}
+        onClick={() => setAppMode("accuracy")}
+        title="Novi Intelligence forecast vs realized actuals (reference). A BOX hindcast is a later step."
+      >
+        Novi accuracy (ref)
+      </button>
     </div>
   );
 }

@@ -127,7 +127,7 @@ export function Controls() {
       <div style={{ marginTop: 10 }}>
         <ChipGroup
           label="Formations (Blue Ox)"
-          hint="Empty = all benches. Click to scout/screen specific ones — scopes the map, the selection rollup, and the export."
+          hint="Empty = all benches. Click to scout/screen specific ones — scopes the map and the selection rollup."
           options={formationCodes}
           selected={formationFilter}
           onToggle={toggleMapFormation}

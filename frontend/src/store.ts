@@ -187,7 +187,7 @@ interface MapState {
   dealZoom: { geometry: GeoJSON.Geometry } | null;
   excludedFormations: string[]; // formation_blueox codes dropped from the rollup (post-selection trim)
   formationFilter: string[];    // map-scouting INCLUDE filter (empty = all); scopes map + rollup + export
-  excludedSticks: number[];     // manually culled stick_ids (dropped from rollup/plot/export)
+  excludedSticks: number[];     // manually culled stick_ids (dropped from rollup/plot)
   unitFilter: string[];         // map-only: substring terms matched against unique_id (OR)
   colorMode: ColorMode;         // map sticks: Blue Ox bench / §6 reconciliation status / depletion tier
   reconCounts: Record<string, number> | null; // recon_status -> stick count for current basin (legend)

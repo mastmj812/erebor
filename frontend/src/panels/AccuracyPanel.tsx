@@ -133,6 +133,10 @@ export function AccuracyPanel() {
         <button className={basin === "delaware" ? "active" : ""} onClick={() => setBasin("delaware")}>Delaware</button>
         <button className={basin === "midland" ? "active" : ""} onClick={() => setBasin("midland")}>Midland</button>
       </div>
+      <div className="caveat">
+        Reference only: how <b>Novi</b>&rsquo;s forecasts tracked realized production on wells Novi was blind to
+        &mdash; the evidence behind replacing them with BOX. Not a BOX accuracy measure (that is a later step).
+      </div>
       <h3>Vintage</h3>
       <div className="seg sm">
         <button

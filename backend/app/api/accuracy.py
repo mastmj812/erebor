@@ -43,6 +43,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.db import get_session
+from app.novi_pads import current_pads_version
 
 router = APIRouter(prefix="/accuracy", tags=["accuracy"])
 
@@ -631,11 +632,10 @@ def well(
 ) -> dict:
     """One well's forecast-vs-actual series + a gunbarrel.
 
-    Gunbarrel frame is DSU-FIRST: the Novi DSU polygon (raw_novi_intel.pads)
-    containing the subject's lateral midpoint defines the well set — every
+    Gunbarrel frame is DSU-FIRST: the Novi DSU polygon (raw_novi_intel.pads,
+    newest loaded vintage — app.novi_pads; every DSU, sticks or not) containing the subject's lateral midpoint defines the well set — every
     producing well and Novi PUD/RES stick whose midpoint falls in that unit
-    (the same population rule as the Highgrade per-DSU gunbarrel; blind PDPs
-    carry no pad_name, so containment is spatial). Falls back to a 1-mi
+    (blind PDPs carry no pad_name, so containment is spatial). Falls back to a 1-mi
     radius when no pad polygon contains the well. The comparison sticks (the
     reconciled match(es) on the direct tier, the live representative set on
     the proxy tier — same SSOT selector and tolerances the matview used) are
@@ -693,16 +693,18 @@ def well(
     comp_set = set(comp)
 
     # Frame: the Novi DSU containing the subject's lateral midpoint, if any.
+    pads_rv = current_pads_version(session, basin)
     dsu_pad = session.execute(
         text("""
             SELECT p.pad_name
             FROM raw_novi_intel.pads p
             JOIN curated.producing_reference s ON s.api10 = :api10
-            WHERE p.basin = :basin AND p.geom IS NOT NULL AND p.pad_name IS NOT NULL
+            WHERE p.basin = :basin AND p.report_version = :pads_rv
+              AND p.geom IS NOT NULL AND p.pad_name IS NOT NULL
               AND ST_Contains(p.geom, ST_LineInterpolatePoint(s.geom, 0.5))
             ORDER BY p.pad_id LIMIT 1
         """),
-        {"api10": api10, "basin": basin},
+        {"api10": api10, "basin": basin, "pads_rv": pads_rv},
     ).scalar()
 
     _PDP_COLS = """
@@ -732,7 +734,8 @@ def well(
         context_sql = f"""
             WITH pad AS (
                 SELECT geom FROM raw_novi_intel.pads
-                WHERE basin = :basin AND pad_name = :pad_name AND geom IS NOT NULL
+                WHERE basin = :basin AND report_version = :pads_rv
+                  AND pad_name = :pad_name AND geom IS NOT NULL
                 ORDER BY pad_id LIMIT 1
             )
             {_PDP_COLS}
@@ -750,7 +753,7 @@ def well(
               AND ST_Intersects(il.wellstick_geom, pad.geom)
               AND ST_Contains(pad.geom, ST_LineInterpolatePoint(il.wellstick_geom, 0.5))
         """
-        ctx_params: dict = {"basin": basin, "pad_name": dsu_pad}
+        ctx_params: dict = {"basin": basin, "pad_name": dsu_pad, "pads_rv": pads_rv}
     else:
         # Radius fallback: no DSU polygon contains the well. The geography
         # predicates ride the sql/26 expression indexes.

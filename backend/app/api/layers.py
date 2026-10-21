@@ -1,6 +1,7 @@
 """GeoJSON overlays + basin metadata for the map.
 
-Pads (~4.5k) and the basin outline are served whole. The land grid (~20k
+Pads (one Novi vintage, ~4.5k-8.3k per basin) and the basin outline are
+served whole. The land grid (~20k
 polygons) is lightly simplified to keep the payload reasonable; it's an
 overlay, not the analytic layer.
 """
@@ -12,6 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_session
+from app.novi_pads import current_pads_version
 
 router = APIRouter(tags=["layers"])
 GEOJSON = "application/geo+json"
@@ -34,11 +36,13 @@ FROM ({inner_sql}) t
 
 @router.get("/layers/pads.geojson")
 def pads(basin: str = _BASIN, session: Session = Depends(get_session)) -> Response:
+    # One vintage only (app.novi_pads): the warehouse keeps 3Q25 and 2026Q3
+    # polygons side by side; drawing both stacks two DSU sets.
     return _fc(
         session,
         "SELECT pad_name, npv25 AS pad_npv25, geom FROM raw_novi_intel.pads "
-        "WHERE basin = :basin AND geom IS NOT NULL",
-        {"basin": basin},
+        "WHERE basin = :basin AND report_version = :rv AND geom IS NOT NULL",
+        {"basin": basin, "rv": current_pads_version(session, basin)},
     )
 
 

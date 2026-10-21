@@ -74,7 +74,7 @@ export function stickFilter(
     // Map-scouting INCLUDE filter (Controls formation picker): show only these
     // formation_blueox codes. "(unmapped)" matches features with no
     // formation_blueox — the MVT omits null props, so an absent property IS the
-    // unmapped case; mirrors the rollup/export COALESCE(..., '(unmapped)').
+    // unmapped case; mirrors the rollup's COALESCE(..., '(unmapped)').
     const codes = formationFilter.filter((f) => f !== "(unmapped)");
     const parts: unknown[] = [];
     if (codes.length > 0) parts.push(["in", ["get", "formation_blueox"], ["literal", codes]]);

@@ -319,6 +319,9 @@ def check_metric(metric: str, priced: bool) -> None:
         raise HTTPException(422, "econ metrics need a priced record run (Steven has not priced it yet)")
 
 
+_VALUED_PAD = "geom IS NOT NULL AND value IS NOT NULL AND n_valued > 0"
+
+
 def pads_sql(metric: str, agg: str, filt_sql: str, econ: bool) -> str:
     v_expr = value_expr(metric, agg)
     n_valued = n_valued_expr(metric)
@@ -382,6 +385,12 @@ def pads_sql(metric: str, agg: str, filt_sql: str, econ: bool) -> str:
             'wells_without_pad', COALESCE((SELECT n_wells FROM agg WHERE pad_key IS NULL), 0),
             'value_min',         min(value) FILTER (WHERE geom IS NOT NULL),
             'value_max',         max(value) FILTER (WHERE geom IS NOT NULL),
+            -- the color scale: P5 / P50 / P95 of the drawn, valued pads, so one huge stacked
+            -- DSU cannot compress every other pad into one end of the ramp (clamped client-side;
+            -- min / max above stay the true range)
+            'value_p5',  percentile_cont(0.05) WITHIN GROUP (ORDER BY value) FILTER (WHERE {_VALUED_PAD}),
+            'value_p50', percentile_cont(0.50) WITHIN GROUP (ORDER BY value) FILTER (WHERE {_VALUED_PAD}),
+            'value_p95', percentile_cont(0.95) WITHIN GROUP (ORDER BY value) FILTER (WHERE {_VALUED_PAD}),
             'pads', json_build_object(
                 'type', 'FeatureCollection',
                 'features', COALESCE(json_agg(

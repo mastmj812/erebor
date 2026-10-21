@@ -24,7 +24,7 @@ import {
 } from "./map/sticksLayers";
 import { EUR_UNIT, MAP_COVERAGE_LABELS, MAP_COVERAGE_ORDER, TIER_OF_COVERAGE, deckLabel, econMetricInfo } from "./api/boxMap";
 import { DrawingController, bboxToPolygon, type GeoJsonPolygon } from "./map/drawing";
-import { choroplethFillColor } from "./map/highgradeColors";
+import { choroplethFillColor, padScale } from "./map/highgradeColors";
 import { accuracyGridFill, accuracyLineColor } from "./map/accuracyColors";
 import { accErrProp, fetchAccSelection } from "./api/accuracy";
 import { fmtHgValue, hgAggLabel, hgMetricInfo, hgMetricLabel } from "./api/highgrade";
@@ -627,7 +627,7 @@ export function MapView() {
       features.sort((a, b) => Number((a.properties?.n_valued ?? 0) > 0) - Number((b.properties?.n_valued ?? 0) > 0));
       src.setData({ type: "FeatureCollection", features });
       map.setPaintProperty(HG_FILL, "fill-color", choroplethFillColor(
-        highgrade.value_min, highgrade.value_max, true, hgMetricInfo(highgrade.metric)?.lowIsBetter ?? false));
+        padScale(highgrade), true, hgMetricInfo(highgrade.metric)?.lowIsBetter ?? false));
     } else {
       src.setData(EMPTY_FC);
     }

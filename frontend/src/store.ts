@@ -146,6 +146,8 @@ export interface HighgradeResult {
   wells_without_pad: number; // screened locations with no pad assignment (not drawable)
   value_min: number | null;
   value_max: number | null;
+  // color scale: P5 / P50 / P95 of the drawn, valued pads (the true range is value_min / value_max)
+  value_p5: number | null; value_p50: number | null; value_p95: number | null;
   pads: GeoJSON.FeatureCollection;
   valued_count: number;      // locations carrying a value (BOX forecast; econ: priced)
   valued_by_tier: { validated: number; provisional: number }; // valued_count split by tier (D105)

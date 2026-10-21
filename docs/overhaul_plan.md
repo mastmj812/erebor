@@ -231,6 +231,18 @@ exists and how to verify it, then wait for Michael's go.
   - The new tiles are 28 % smaller than the Novi tiles they replace, at the same speed.
   - Slow low-zoom tiles were already there before this step. Follow-up: a server tile cache or a simplified
     z ≤ 8 point layer.
+  - **Done after step 3 (2026-10-21, `app/tile_cache.py`).** The tile bytes are unchanged. Three changes:
+    - The tile is fetched in psycopg's binary format (the text format shipped the bytea as hex).
+    - Finished tiles are kept gzipped in process memory: keyed on URL + record run + econ case, 1 h TTL,
+      256 MB LRU.
+    - A basin's first z ≤ 8 tile prewarms its z3–8 tiles in the background (Delaware 19 tiles ≈ 31 s,
+      Midland 26 ≈ 15 s, 37 MB gz for both).
+  - Measured in the browser (Delaware, 4–6 tiles per step):
+    - The first z7 view went from 7.3 s to 5.0 s.
+    - Once warm, every z6–8 step takes 0.09 s, against 6.4–8.5 s before.
+    - Each step is still 14.7 MB raw, but only ~4 MB goes over the wire.
+  - Not done: thinning or clustering (the client-side filters need every stick), and a warehouse matview
+    of the BOX projection (it would save ~1.5 s of the ~2.6 s PostGIS build on a cold tile).
 - Highgrade's BOX econ default deck now follows `default_deck` (WTI 70 / HH 3), so it works when the Map tab
   loaded `boxMeta` first.
 

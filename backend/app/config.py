@@ -31,6 +31,13 @@ class Settings(BaseSettings):
         alias="SECTIONS_GEOJSON_PATH",
     )
     report_version: str = Field(default="3Q25", alias="REPORT_VERSION")
+    # Map tile cache (app/tile_cache.py): gzipped tiles in process memory. Both basins'
+    # z3-8 pyramid is ~40 MB gzipped; the TTL lets the nightly erebor_locations refresh
+    # through within the hour. TILE_PREWARM builds a basin's z <= 8 tiles in the
+    # background on its first low-zoom tile request.
+    tile_cache_mb: int = Field(default=256, alias="TILE_CACHE_MB")
+    tile_cache_ttl_s: int = Field(default=3600, alias="TILE_CACHE_TTL_S")
+    tile_prewarm: bool = Field(default=True, alias="TILE_PREWARM")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
 

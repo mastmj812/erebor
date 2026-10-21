@@ -147,7 +147,7 @@ export function ResultsPanel() {
             <th className="num" title="lateral-weighted oil EUR per foot">bbl/ft</th>
             <th className="num" title="gas EUR, Bcf">Gas Bcf</th>
             <th className="num" title={`${info.label} — ${isSummed(econMetric) ? "sum" : "median"}, ${info.unit}`}>
-              {info.label.split(" ")[0]}{isSummed(econMetric) ? "" : " P50"}
+              {info.label.split(" ")[0]}{isSummed(econMetric) ? "" : " median"}
             </th>
           </tr>
         </thead>

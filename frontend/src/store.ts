@@ -342,7 +342,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   productionStale: false,
   productionPhase: "oil",
   chartMode: "rate",
-  wellSource: "novi",
+  wellSource: "both", // BOX vs Novi: BOX is the forecast of record, Novi the comparison
   aggMode: "avg",
   wellOverlay: null,
   bottomTab: "production",

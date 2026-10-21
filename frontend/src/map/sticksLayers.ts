@@ -27,21 +27,6 @@ export const LINES_LAYER = "intel-lines";
 export const POINTS_SRC_LAYER = "intel_points";
 export const LINES_SRC_LAYER = "intel_lines";
 
-export type Category = "PDP" | "PUD" | "RES";
-export const CATEGORIES: Category[] = ["PDP", "PUD", "RES"];
-
-// Display labels: Novi's native inventory-tier names. `category` (the wire/tile
-// value) stays PDP/PUD/RES as the legacy alias — PUD=BASE_CASE, RES=EMERGING — so
-// only the UI reads native; the API, tiles, and filter logic are unchanged.
-export const CATEGORY_LABEL: Record<Category, string> = {
-  PDP: "PDP",
-  PUD: "BASE_CASE",
-  RES: "EMERGING",
-};
-export function categoryLabel(c: string): string {
-  return CATEGORY_LABEL[c as Category] ?? c;
-}
-
 // Map color modes (overhaul step 3, BOX-first): Blue Ox bench, BOX coverage / tier,
 // BOX EUR per foot (one stream), or Steven's econ (one metric, one deck; display-only).
 export type ColorMode = "bench" | "coverage" | "eur" | "econ";

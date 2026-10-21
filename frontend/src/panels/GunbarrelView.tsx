@@ -18,7 +18,6 @@ import {
   colorForSource,
 } from "../map/formations";
 import { HG_GRADIENT_CSS, rampColor } from "../map/highgradeColors";
-import { categoryLabel } from "../map/sticksLayers";
 import { useMapStore, type GunbarrelPad, type GunbarrelWell } from "../store";
 
 const M = { l: 46, r: 10, t: 18, b: 26 };
@@ -87,7 +86,7 @@ function GbTooltip({ w, x, y, muted, interactive, metricLabel, formatMetric }: {
       <div className="gb-tip-name">{w.unique_id}</div>
       <table className="gb-tip-tbl">
         <tbody>
-          <tr><td>Type</td><td>{w.category === "PDP" ? "producing well (PDP)" : w.category === "LOCATION" ? "Novi stick location" : categoryLabel(w.category)}</td></tr>
+          <tr><td>Type</td><td>{w.category === "PDP" ? "producing well (PDP)" : "Novi stick location"}</td></tr>
           <tr><td>Formation</td><td>{w.formation}</td></tr>
           <tr><td>Blue Ox</td><td>
             {w.formation_blueox ?? "—"}

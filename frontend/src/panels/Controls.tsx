@@ -67,6 +67,8 @@ export function Controls() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [unitText, setUnitText] = useState("");
+  // setBasin clears the store's unitFilter; clear the box with it so it never shows dead terms.
+  useEffect(() => { setUnitText(""); }, [basin]);
 
   // BOX record run + scope + Steven's priced decks for this basin (shared with
   // Highgrade; setBasin clears it so it refetches per basin).

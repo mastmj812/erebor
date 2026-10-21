@@ -83,9 +83,9 @@ def _canonical_axis(perp: tuple[float, float]) -> tuple[tuple[float, float], str
 CATEGORICAL: tuple[str, ...] = ("formation_blueox", "operator", "spacing_t", "deplet_t", "complet_t", "rqt")
 # Offset-PDP support scores (curated.intel_pdp_support, sql/30) that are FILTERABLE
 # in Highgrade. They live on the `sup` join, not intel_locations (see _num_sql /
-# _support_join). The export-only members (dist_3rd_nearest_ft, n_offsets_5mi, the
-# offset medians, offset_median_tvd, tvd_delta_ft) are intentionally absent — they
-# ship in the xlsx, not as filters. tvd_excess_3mi_ft / wca_delta_ft are the
+# _support_join). The other members (dist_3rd_nearest_ft, n_offsets_5mi, the
+# offset medians, offset_median_tvd, tvd_delta_ft) are intentionally not filters
+# (they shipped in the retired xlsx export). tvd_excess_3mi_ft / wca_delta_ft are the
 # depth-plausibility screens from the 2026-09 WCB_2 deep-TVD audit: excess > 200 ft
 # = deeper than any same-bench producer within 3 mi (suspect Novi landing);
 # wca_delta band [400, 700] = the real WCB_2 landing convention below WCA.

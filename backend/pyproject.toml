@@ -9,7 +9,6 @@ dependencies = [
     "sqlalchemy>=2.0.34",
     "psycopg[binary]>=3.2",
     "pydantic-settings>=2.4",
-    "openpyxl>=3.1",
     # numpy is imported directly (grid math); it was only reaching us transitively
     # via `decline`, so declare it.
     "numpy>=1.24",

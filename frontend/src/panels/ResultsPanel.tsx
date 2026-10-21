@@ -1,6 +1,3 @@
-import { useState } from "react";
-
-import { exportSelection } from "../api/export";
 import { colorForBlueox } from "../map/formations";
 import { useMapStore, type DiscountRate, type SelectionStick } from "../store";
 
@@ -30,32 +27,8 @@ export function ResultsPanel() {
   const setDiscountRate = useMapStore((s) => s.setDiscountRate);
   const metric = useMapStore((s) => s.valueMetric);
   const setValueMetric = useMapStore((s) => s.setValueMetric);
-  const aoi = useMapStore((s) => s.aoi);
   const basin = useMapStore((s) => s.basin);
-  const rule = useMapStore((s) => s.selectionRule);
-  const [exporting, setExporting] = useState(false);
-  // null = use the default name; user edits make it sticky for the session.
-  const [filenameEdit, setFilenameEdit] = useState<string | null>(null);
   if (!sel) return null;
-
-  const defaultFilename = `erebor_${basin}_${new Date().toISOString().slice(0, 10)}`;
-  const filename = filenameEdit ?? defaultFilename;
-
-  const doExport = async () => {
-    if (!aoi) return;
-    setExporting(true);
-    try {
-      const byId = new Map(sel.sticks.map((s) => [s.stick_id, s.unique_id]));
-      const culledNames = excludedSticks
-        .map((id) => byId.get(id))
-        .filter((n): n is string => !!n);
-      await exportSelection(aoi, basin, rule, culledNames, excluded, filename, remainingOnly, excludeDepleted, formationFilter);
-    } catch (e) {
-      alert(`Export failed: ${e}`);
-    } finally {
-      setExporting(false);
-    }
-  };
 
   const valKey = `${metric}${rate}` as keyof SelectionStick;
   const exForm = new Set(excluded);
@@ -115,19 +88,6 @@ export function ResultsPanel() {
           <button className="link" onClick={() => clearCulls()}>clear culls</button>
         </div>
       )}
-
-      <label className="export-name">
-        <input
-          type="text"
-          value={filename}
-          onChange={(e) => setFilenameEdit(e.target.value)}
-          spellCheck={false}
-        />
-        <span className="ext">.xlsx</span>
-      </label>
-      <button className="export-btn" disabled={exporting} onClick={() => void doExport()}>
-        {exporting ? "Exporting…" : "⬇ Export workbook (.xlsx)"}
-      </button>
 
       <h3 style={{ marginTop: 8 }}>Value basis</h3>
       <div className="seg">
@@ -193,7 +153,7 @@ export function ResultsPanel() {
       <div className="caveat">
         Screening number from Novi’s economics on one flat deck — not the authoritative valuation.
         Convention: value PDP at <b>PV</b> (capex sunk), BASE_CASE/EMERGING at <b>NPV</b> (net of drilling
-        cost). Run your model on the workbook export.
+        cost).
       </div>
     </div>
   );

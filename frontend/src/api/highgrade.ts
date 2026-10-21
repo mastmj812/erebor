@@ -1,53 +1,94 @@
 import type { GunbarrelPad, HighgradeResult } from "../store";
 
-// Categorical filter fields (multi-select) returned by /facets.categorical.
-export type CategoricalField =
-  | "formation_blueox"
-  | "operator"
-  | "spacing_t"
-  | "deplet_t"
-  | "complet_t"
-  | "rqt";
-
+// Highgrade on BOX (overhaul step 5): Novi supplies the stick geometry and the DSU
+// polygons only; every value is the BOX record run (EUR) or Steven's econ on it (display
+// only, D13). Backend: app/api/highgrade.py.
 export interface HighgradeFacets {
   basin: string;
-  categorical: Record<CategoricalField, string[]>;
+  categorical: { formation_blueox: string[] };
   numeric: Record<string, { min: number | null; max: number | null }>;
+  econ_priced: boolean;
 }
 
-// Forecast source (BOX plan step 8): the screened PUD population is the same Novi
-// set either way; only the EUR / econ numbers change.
-export type ForecastSource = "novi" | "box";
-
 export type HighgradeMetric =
-  | "npv5" | "npv10" | "npv15" | "npv20" | "npv25"
-  | "pv5" | "pv10" | "pv15" | "pv20" | "pv25"
-  | "oil_eur" | "gas_eur" | "oil_eur_per_kft" | "gas_eur_per_kft" | "well_count"
-  | "water_eur" | "water_eur_per_kft" // BOX only (sql/62)
-  | "box_pv0" | "box_pv10" | "box_pv15" | "box_pv20" | "box_pv25" | "box_pv30";
+  | "oil_eur" | "gas_eur" | "water_eur" | "oil_eur_per_kft" | "gas_eur_per_kft" | "water_eur_per_kft"
+  | "pv0" | "pv10" | "pv15" | "pv20" | "pv25" | "pv30" | "irr" | "be_wti" | "capex"
+  | "well_count";
 export type HighgradeAgg = "sum" | "avg" | "per_acre";
 
-export const isMoneyMetric = (m: string): boolean =>
-  m.startsWith("npv") || m.startsWith("pv") || m.startsWith("box_pv");
+// Mirrors backend highgrade.METRICS. `econ` = Steven's columns (need a priced record run);
+// `lowIsBetter` flips the pad ramp so red always = better.
+export interface HgMetricInfo {
+  value: HighgradeMetric; label: string; econ?: boolean; lowIsBetter?: boolean;
+}
+export const HG_METRICS: HgMetricInfo[] = [
+  { value: "oil_eur_per_kft", label: "Oil EUR / ft" },
+  { value: "gas_eur_per_kft", label: "Gas EUR / ft" },
+  { value: "water_eur_per_kft", label: "Water EUR / ft" },
+  { value: "oil_eur", label: "Oil EUR" },
+  { value: "gas_eur", label: "Gas EUR" },
+  { value: "water_eur", label: "Water EUR" },
+  { value: "pv0", label: "PV0", econ: true },
+  { value: "pv10", label: "PV10", econ: true },
+  { value: "pv15", label: "PV15", econ: true },
+  { value: "pv20", label: "PV20", econ: true },
+  { value: "pv25", label: "PV25", econ: true },
+  { value: "pv30", label: "PV30", econ: true },
+  { value: "irr", label: "IRR", econ: true },
+  { value: "be_wti", label: "Breakeven WTI @ PV20", econ: true, lowIsBetter: true },
+  { value: "capex", label: "Capex", econ: true, lowIsBetter: true },
+  { value: "well_count", label: "Location count" },
+];
+export const hgMetricInfo = (m: string): HgMetricInfo | undefined => HG_METRICS.find((x) => x.value === m);
+export const hgMetricLabel = (m: string): string => hgMetricInfo(m)?.label ?? m;
+export const isMoneyMetric = (m: string): boolean => /^pv\d+$/.test(m) || m === "capex";
 export const isPerKftMetric = (m: string): boolean => m.endsWith("_per_kft");
+export const isMedianMetric = (m: string): boolean => m === "irr" || m === "be_wti";
+
+// The aggregation the backend applied (highgrade.resolve_agg) -> a short label.
+export function hgAggLabel(agg: string): string {
+  return agg === "lateral_weighted" ? "lateral-weighted / pad"
+    : agg === "median" ? "median / pad"
+    : agg === "per_acre" ? "per acre"
+    : agg === "avg" ? "avg / location"
+    : agg === "count" ? "per pad"
+    : "sum / pad";
+}
+
+// One formatter for a pad / location value (panel, legend, popup, gunbarrel). Money arrives
+// in $ (Steven's $MM x 1e6), IRR in %, breakeven in $/bbl WTI, EUR in bbl / mcf; per-1,000-ft
+// values are shown per FOOT (bbl/ft, mcf/ft), like the Map tab.
+export function fmtHgValue(v: number | null | undefined, metric: string, agg = "sum", short = false): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  if (metric === "well_count") return Math.round(v).toLocaleString();
+  if (isMoneyMetric(metric)) {
+    const sign = v < 0 ? "−" : "";
+    const a = Math.abs(v);
+    if (agg === "per_acre") return `${sign}$${Math.round(a).toLocaleString()}/ac`;
+    const mm = a / 1e6;
+    return `${sign}$${mm >= 100 || short ? Math.round(mm).toLocaleString() : mm.toFixed(1)}MM`;
+  }
+  if (metric === "irr") return `${v.toFixed(short ? 0 : 1)}%`;
+  if (metric === "be_wti") return `$${v.toFixed(short ? 0 : 1)}/bbl`;
+  if (isPerKftMetric(metric)) return `${(v / 1000).toFixed(1)} ${metric.startsWith("gas") ? "mcf" : "bbl"}/ft`;
+  const gas = metric.startsWith("gas");
+  if (Math.abs(v) >= 1e6) return `${(v / 1e6).toFixed(2)} ${gas ? "Bcf" : "MMbbl"}`;
+  return `${short && Math.abs(v) >= 1e3 ? `${Math.round(v / 1e3)}k` : Math.round(v).toLocaleString()} ${gas ? "mcf" : "bbl"}`;
+}
 
 // One priced case in box_econ.box_pud_econ (Steven's deck + assumption set).
 export interface EconDeck { deck_id: string; assumption_set_id: string }
 
 export interface HighgradeFilters {
   formation_blueox?: string[];
-  operator?: string[];
-  spacing_t?: string[];
-  deplet_t?: string[];
-  complet_t?: string[];
-  rqt?: string[];
-  // BOX PDP-proximity outcome groups (backend box.PROX_GROUPS); BOX source only
+  // PDP-proximity outcome groups (backend box_locations.PROX_GROUPS)
   prox?: ProxGroup[];
-  // whitelisted column -> [min, max], either side null = unbounded
+  // whitelisted column -> [min, max] in stored units, either side null = unbounded
   ranges?: Record<string, [number | null, number | null]>;
 }
 
-// Coverage classes, in display order (backend app/api/box.py COVERAGE_CLASSES).
+// Coverage classes, in display order (backend app/box_locations.py COVERAGE_CLASSES; the
+// Map / Highgrade class not_screened is added in api/boxMap.ts MAP_COVERAGE_LABELS).
 export const COVERAGE_LABELS: Record<string, string> = {
   covered: "covered — validated (BOX forecast)",
   covered_provisional: "covered — PROVISIONAL tier (BOX forecast, D105)",
@@ -242,12 +283,10 @@ export interface BoxPad {
   parents?: BoxPadParent[];
 }
 
-export async function fetchFacets(
-  basin: string,
-  includeRealized = false,
-  source: ForecastSource = "novi",
-): Promise<HighgradeFacets> {
-  const r = await fetch(`/api/highgrade/facets?basin=${basin}&include_realized=${includeRealized}&source=${source}`);
+export async function fetchFacets(basin: string, deck: string | null): Promise<HighgradeFacets> {
+  const q = new URLSearchParams({ basin });
+  if (deck) q.set("deck", deck);
+  const r = await fetch(`/api/highgrade/facets?${q.toString()}`);
   if (!r.ok) throw new Error(`facets failed: ${r.status}`);
   return r.json();
 }
@@ -257,9 +296,7 @@ export async function fetchHighgradePads(body: {
   filters: HighgradeFilters;
   metric: HighgradeMetric;
   agg: HighgradeAgg;
-  include_realized: boolean;
-  source: ForecastSource;
-  econ?: EconDeck | null;
+  deck: string | null; // Steven's deck id; null = default (WTI 70 / HH 3)
 }): Promise<HighgradeResult> {
   const r = await fetch("/api/highgrade/pads", {
     method: "POST",
@@ -270,16 +307,14 @@ export async function fetchHighgradePads(body: {
   return r.json();
 }
 
-// Per-DSU gunbarrel: all PUD+PDP wells in one pad, each tagged in_filter against
-// the (last-applied) screen so off-filter PUDs and all PDPs render muted.
+// Per-DSU gunbarrel: every screened location + PDP in one pad, each location tagged
+// in_filter against the (last-applied) screen so off-screen locations and all PDP render muted.
 export async function fetchHighgradeGunbarrel(body: {
   basin: string;
-  pad_key: string; // curated.intel_pad_geom key (Novi pad_name, split by space — sql/46)
+  pad_key: string; // curated.intel_pad_geom key (Novi 2026Q3 DSU, or a [k/n] stray split — sql/67)
   filters: HighgradeFilters;
   metric: HighgradeMetric;
-  include_realized: boolean;
-  source: ForecastSource;
-  econ?: EconDeck | null;
+  deck: string | null;
 }): Promise<GunbarrelPad> {
   const r = await fetch("/api/highgrade/gunbarrel", {
     method: "POST",

@@ -8,8 +8,9 @@
 | 1 Warehouse 3Q26 pads → `intel_pad_geom` v3 | **applied live 2026-10-21** (engineering_db #173 + data dictionary #174): 17,526 pads, all 42,475 BOX PUDs inside Novi polygons | engineering_db `sql/66`, `sql/67` |
 | 2 Remove export; Accuracy = Novi reference; pin pad vintage | merged (erebor #18) | erebor |
 | 3 Map tab BOX-first | merged (erebor #19); low-zoom tile cache + binary fetch merged (erebor #20) | erebor |
-| 4 Lasso selection on BOX | this PR | erebor |
-| 5–6 | not started | |
+| 4 Lasso selection on BOX | merged (erebor #22) | erebor |
+| 5 Highgrade BOX-only | this PR | erebor |
+| 6 | not started | |
 | BOX universe (D117, engineering_db) | step 1 decision (#175) + step 2 reconciliation of every Novi stick **applied live 2026-10-21** (#177, #178): realized RES now read `realized` on the map. **Step 3 PARKED (Michael 2026-10-21)** until the tops/tag and provisional-bench work settles. It resumes as an incremental run 15 (5,946 of 6,225 in-extent RES would forecast, read-only pre-measure); erebor stays on run 14 meanwhile | engineering_db `sql/68`, `docs/box/universe-2026-10-21/` |
 | 7 BOX hindcast | deferred | |
 
@@ -307,6 +308,47 @@ exists and how to verify it, then wait for Michael's go.
 - Fix the hardwired "The table is WCA's".
 - Pads come from v3 geometry automatically (step 1).
 - **Gate:** stop.
+
+**As built (2026-10-21):**
+- **Population:** every Novi stick location in the basin.
+  - Read from `curated.erebor_locations` with `category <> 'PDP'`. Novi's PUD / RES split is not read,
+    per the geometry-only rule.
+  - Minus the locations OUR reconciliation matched to production (`realized_drift` / `realized_phantom`;
+    sql/68 reconciles every stick, D117).
+  - Delaware: 166,850 locations (117,542 PUD + 49,308 RES sticks).
+  - The "Drillable only" / "All Novi BASE_CASE" toggle is gone: realized never enters the screen.
+- **Coverage classes** = the Map's (`box_locations.map_coverage_sql`) minus `realized`.
+  - Delaware: 17,806 validated + 24,646 PROVISIONAL forecast, plus the not-covered classes. In-BOX-bench
+    sticks the run never screened read `not_screened`: 49,313, mostly Novi-RES.
+  - 23 of run 14's 42,475 forecast PUDs are realized per reconciliation, so they are not screened.
+- **Metrics:**
+  - BOX oil / gas / water EUR (sum, avg) and EUR per ft (lateral-weighted on the stored per-kft's own lateral).
+  - Location count.
+  - Steven's PV0–30 and capex (sum, avg, per acre).
+  - IRR and breakeven WTI @ PV20 (pad median).
+  - Capex and breakeven flip the pad ramp, so red = better.
+- **Econ deck:**
+  - It is the Map tab's `mapDeck` (one deck choice app-wide). The backend resolves the assumption set
+    (`box_locations.econ_case`) and returns its provenance.
+  - Econ metrics and bounds appear only when the record run is priced. Run 14 is priced: 42,475 × WTI 70 / HH 3, of which 1,039 have no IRR; those drop out of the IRR median and are never zero.
+- **Filters:**
+  - Bench (`formation_blueox`) chips.
+  - PDP-proximity chips.
+  - Ranges: BOX EUR/ft per stream, oil EUR, proximity factor, BOX lateral, and PV10 / PV20 / IRR /
+    breakeven / capex.
+  - A bound never drops a location without a forecast (D67). A forecast location with no priced value fails
+    an econ bound.
+  - Removed: the Novi tier chips (rqt / spacing / depletion / completion), Novi operator, the
+    support / TVD-excess ranges and their defaults, and every Novi NPV / EUR metric.
+  - The run note now carries the D113 / D114 depletion statement, and the disclosure table is labelled
+    "WCA oil" instead of the hardwired sentence.
+- **Per-DSU window:**
+  - Opens on the BOX workup (unchanged, keeps its BOX÷Novi column).
+  - The gunbarrel tab shows screened locations (LOCATION, hollow) and PDP in the polygon (solid), with
+    coverage, EUR/ft and proximity per location. Novi depletion / support fields are gone.
+- **Pads:** the popup and summary say whether the outline is Novi's 2026Q3 DSU polygon or a stick hull
+  (4,598 Delaware pads are hulls: strays of a reused name, or names without a polygon).
+- **Timing** (live, read-only): facets 2.1 s; pads 1.0–5.3 s; gunbarrel 0.9 s.
 
 ### Step 6 — Cleanup + docs
 - Remove dead Novi code: the `npv*`/`pv*` paths, the depletion and support count endpoints if unused,

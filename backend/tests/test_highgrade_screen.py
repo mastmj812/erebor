@@ -144,3 +144,13 @@ def test_gunbarrel_sql_box_only_two_arms():
     loc_cols = hg.gb_columns("x", "true", True)
     assert [alias(c) for c in loc_cols] == [alias(c) for c in hg.gb_columns("x", "false", False)]
     assert {"coverage", "oil_eur_ft", "gas_eur_ft", "water_eur_ft", "prox_outcome", "metric_value"} <= {alias(c) for c in loc_cols}
+
+
+def test_pads_return_the_color_scale_percentiles_over_valued_drawn_pads():
+    sql = " ".join(hg.pads_sql("pv10", "sum", "", True).split())
+    for q, k in ((0.05, "p5"), (0.50, "p50"), (0.95, "p95")):
+        assert (f"'value_{k}', percentile_cont({q:.2f}) WITHIN GROUP (ORDER BY value) "
+                f"FILTER (WHERE {hg._VALUED_PAD})") in sql
+    assert hg._VALUED_PAD == "geom IS NOT NULL AND value IS NOT NULL AND n_valued > 0"
+    # the true range stays alongside (the legend states it)
+    assert "'value_min'" in sql and "'value_max'" in sql

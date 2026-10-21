@@ -22,13 +22,12 @@ import {
   tileUrl,
   valueProp,
 } from "./map/sticksLayers";
-import { EUR_UNIT, MAP_COVERAGE_LABELS, TIER_OF_COVERAGE, deckLabel, econMetricInfo } from "./api/boxMap";
+import { EUR_UNIT, MAP_COVERAGE_LABELS, MAP_COVERAGE_ORDER, TIER_OF_COVERAGE, deckLabel, econMetricInfo } from "./api/boxMap";
 import { DrawingController, bboxToPolygon, type GeoJsonPolygon } from "./map/drawing";
 import { choroplethFillColor } from "./map/highgradeColors";
 import { accuracyGridFill, accuracyLineColor } from "./map/accuracyColors";
 import { accErrProp, fetchAccSelection } from "./api/accuracy";
-import { COVERAGE_LABELS, isMoneyMetric } from "./api/highgrade";
-import { METRICS } from "./panels/HighgradePanel";
+import { fmtHgValue, hgAggLabel, hgMetricInfo, hgMetricLabel } from "./api/highgrade";
 import { selectByPolygon } from "./api/select";
 import { fetchWellProduction } from "./api/production";
 import { basinBbox, useMapStore, type DealFeature, type OverlayKey } from "./store";
@@ -308,7 +307,7 @@ export function MapView() {
         if (!f) return;
         map.getCanvas().style.cursor = "pointer";
         const hg = useMapStore.getState().highgrade;
-        popupRef.current!.setLngLat(e.lngLat).setHTML(padPopupHtml(f.properties, hg?.metric ?? "", hg?.agg ?? "", hg?.source ?? "novi")).addTo(map);
+        popupRef.current!.setLngLat(e.lngLat).setHTML(padPopupHtml(f.properties, hg?.metric ?? "", hg?.agg ?? "", hg?.econ != null)).addTo(map);
       };
       map.on("mousemove", HG_FILL, onPadMove);
       map.on("mouseleave", HG_FILL, () => { map.getCanvas().style.cursor = ""; popupRef.current?.remove(); });
@@ -621,15 +620,14 @@ export function MapView() {
     const src = map.getSource(HG_SOURCE) as maplibregl.GeoJSONSource | undefined;
     if (!src) return;
     if (highgrade) {
-      // Novi: drop pads with a null metric value (can't be placed on the color scale).
-      // BOX: keep them — a pad with no covered PUD is drawn grey, never omitted or zeroed.
-      const box = highgrade.source === "box";
-      const features = (highgrade.pads.features ?? []).filter((f) => box || f.properties?.value != null);
-      // Stacked-bench pads overlap: draw grey (no covered PUD) pads first so a
-      // covered pad is never hidden under a not-covered one.
-      if (box) features.sort((a, b) => Number((a.properties?.n_valued ?? 0) > 0) - Number((b.properties?.n_valued ?? 0) > 0));
+      // Keep every pad: one with no BOX-forecast (econ: priced) location is drawn grey, never
+      // omitted or zeroed. Stacked-bench pads overlap: draw grey pads first so a valued pad is
+      // never hidden under a grey one.
+      const features = [...(highgrade.pads.features ?? [])];
+      features.sort((a, b) => Number((a.properties?.n_valued ?? 0) > 0) - Number((b.properties?.n_valued ?? 0) > 0));
       src.setData({ type: "FeatureCollection", features });
-      map.setPaintProperty(HG_FILL, "fill-color", choroplethFillColor(highgrade.value_min, highgrade.value_max, box));
+      map.setPaintProperty(HG_FILL, "fill-color", choroplethFillColor(
+        highgrade.value_min, highgrade.value_max, true, hgMetricInfo(highgrade.metric)?.lowIsBetter ?? false));
     } else {
       src.setData(EMPTY_FC);
     }
@@ -703,10 +701,6 @@ function fmtInt(v: unknown): string {
   if (v == null || !Number.isFinite(Number(v))) return "—";
   return Math.round(Number(v)).toLocaleString();
 }
-function fmtMoney(v: unknown): string {
-  if (v == null || !Number.isFinite(Number(v))) return "—";
-  return `$${Math.round(Number(v)).toLocaleString()}`;
-}
 function esc(s: unknown): string {
   if (s == null) return "—";
   return String(s).replace(/[&<>"']/g, (c) =>
@@ -714,53 +708,47 @@ function esc(s: unknown): string {
   );
 }
 
-function padPopupHtml(p: Record<string, unknown>, metric: string, agg: string, source: string): string {
-  const money = isMoneyMetric(metric);
-  const perAcre = agg === "per_acre";
-  const box = source === "box";
-  const v = p.value;
+function padPopupHtml(p: Record<string, unknown>, metric: string, agg: string, econ: boolean): string {
   const nValued = Number(p.n_valued ?? 0);
-  const valStr = box && nValued === 0 && metric !== "well_count"
-    ? (metric.startsWith("box_pv") ? "no priced PUD" : "not covered by BOX")
-    : v == null ? "—" : money ? `${fmtMoney(v)}${perAcre ? "/ac" : ""}` : fmtInt(v);
-  const metricLabel = metric === "well_count" ? "Wells"
-    : `${box ? "BOX " : ""}${METRICS.find((m) => m.value === metric)?.label ?? metric}`;
-  // BOX: why each PUD in the pad is (not) forecast — one row per non-empty class
-  const covRows = box
-    ? Object.entries(COVERAGE_LABELS)
-      .filter(([k]) => Number(p[`nc_${k}`] ?? 0) > 0)
-      .map(([k, label]) => `<tr><td>${esc(label)}</td><td>${fmtInt(p[`nc_${k}`])}</td></tr>`)
-      .join("")
-    : "";
-  // BOX: the value's validated / provisional make-up (D105), stated whenever a provisional PUD is in it
+  const valStr = nValued === 0 && metric !== "well_count"
+    ? (econ ? "no priced location" : "no BOX forecast")
+    : fmtHgValue(p.value == null ? null : Number(p.value), metric, agg);
+  const metricLabel = metric === "well_count" ? "Locations" : `BOX ${hgMetricLabel(metric)} (${hgAggLabel(agg)})`;
+  // why each location in the pad is (not) forecast — one row per non-empty class
+  const covRows = MAP_COVERAGE_ORDER
+    .filter((k) => Number(p[`nc_${k}`] ?? 0) > 0)
+    .map((k) => `<tr><td>${esc(MAP_COVERAGE_LABELS[k] ?? k)}</td><td>${fmtInt(p[`nc_${k}`])}</td></tr>`)
+    .join("");
+  // the value's validated / provisional make-up (D105), stated whenever a provisional location is in it
   const nProv = Number(p.nv_provisional ?? 0);
-  const tierRow = box && nValued > 0 && nProv > 0
-    ? `<tr><td>valued PUDs</td><td>${fmtInt(p.nv_validated ?? 0)} validated · ${fmtInt(nProv)} PROVISIONAL</td></tr>`
+  const tierRow = nValued > 0 && nProv > 0
+    ? `<tr><td>valued locations</td><td>${fmtInt(p.nv_validated ?? 0)} validated · ${fmtInt(nProv)} PROVISIONAL</td></tr>`
     : "";
-  // BOX: the pad's PDP-proximity outcomes (D112–D116) and the oil factor range of its haircut PUDs
+  // the pad's PDP-proximity outcomes (D112–D116) and the oil factor range of its haircut locations
   const npAsIs = Number(p.np_as_is ?? 0), npHc = Number(p.np_haircut ?? 0), npNo = Number(p.np_no_precedent ?? 0);
   const hcRange = npHc > 0 && p.prox_min != null && p.prox_max != null
     ? ` ×${Number(p.prox_min).toFixed(2)}${Number(p.prox_max) !== Number(p.prox_min) ? `–${Number(p.prox_max).toFixed(2)}` : ""}` : "";
-  const proxRow = box && npAsIs + npHc + npNo > 0
+  const proxRow = npAsIs + npHc + npNo > 0
     ? `<tr><td>PDP proximity</td><td>${fmtInt(npAsIs)} as-is · ${fmtInt(npHc)} oil haircut${hcRange} · ${fmtInt(npNo)} no precedent</td></tr>`
     : "";
   const acresRow = p.acres == null ? "" : `<tr><td>Acres</td><td>${fmtInt(p.acres)}</td></tr>`;
   const nParts = Number(p.n_parts ?? 1);
-  const splitRow = nParts > 1
-    ? `<tr><td colspan="2">Novi name spans ${nParts} separate groups — split</td></tr>` : "";
+  const shapeRow = p.geom_source === "stick_hull_330ft"
+    ? `<tr><td colspan="2">outline = stick hull + 330 ft${nParts > 1 ? ` (Novi name spans ${nParts} separate groups — split)` : ""}</td></tr>`
+    : "";
   return `
     <div>
       <div class="mtt-name">${esc(p.pad_key)}</div>
       <table class="mtt-table">
-        <tr><td>${esc(metricLabel)}</td><td>${valStr}</td></tr>
+        <tr><td>${esc(metricLabel)}</td><td>${esc(valStr)}</td></tr>
         ${tierRow}
-        <tr><td>Wells</td><td>${fmtInt(p.n_wells)}</td></tr>
+        <tr><td>Locations</td><td>${fmtInt(p.n_wells)}</td></tr>
         ${acresRow}
-        ${splitRow}
+        ${shapeRow}
         ${covRows}
         ${proxRow}
       </table>
-      ${box ? `<div class="count" style="margin:2px 0 0">click for the BOX workup</div>` : ""}
+      <div class="count" style="margin:2px 0 0">click for the BOX workup + gunbarrel</div>
     </div>`;
 }
 

@@ -5,24 +5,27 @@ import type { ExpressionSpecification } from "maplibre-gl";
 export const HG_LOW = "#2563eb";
 export const HG_MID = "#fde68a";
 export const HG_HIGH = "#dc2626";
-// BOX source: a pad with no covered (or, for econ, priced) PUD — drawn, never zero.
+// A pad with no BOX-forecast (or, for econ, priced) location — drawn grey, never zero.
 export const HG_UNVALUED = "#cbd5e1";
 
 // Fill-color expression keyed on the per-pad `value` property, scaled to the
 // result's [min, max]. Degenerate range (single pad / uniform) -> flat mid color.
 // With `greyUnvalued`, pads whose `n_valued` is 0 render HG_UNVALUED instead
 // (keyed on the integer count: a null `value` property is not reliably present).
+// `lowIsBetter` (breakeven, capex) flips the ramp so red always = better.
 export function choroplethFillColor(
   min: number | null,
   max: number | null,
   greyUnvalued = false,
+  lowIsBetter = false,
 ): ExpressionSpecification | string {
   let ramp: ExpressionSpecification | string = HG_MID;
   if (min != null && max != null && max > min) {
     const mid = (min + max) / 2;
+    const [lo, hi] = lowIsBetter ? [HG_HIGH, HG_LOW] : [HG_LOW, HG_HIGH];
     ramp = [
       "interpolate", ["linear"], ["to-number", ["get", "value"]],
-      min, HG_LOW, mid, HG_MID, max, HG_HIGH,
+      min, lo, mid, HG_MID, max, hi,
     ] as unknown as ExpressionSpecification;
   }
   if (!greyUnvalued) return ramp;
@@ -31,8 +34,10 @@ export function choroplethFillColor(
   ] as unknown as ExpressionSpecification;
 }
 
-// CSS gradient for the legend bar (left = low, right = high).
+// CSS gradient for the legend bar (left = low value, right = high value; red = better).
 export const HG_GRADIENT_CSS = `linear-gradient(to right, ${HG_LOW}, ${HG_MID}, ${HG_HIGH})`;
+export const hgGradientCss = (lowIsBetter = false): string =>
+  lowIsBetter ? `linear-gradient(to right, ${HG_HIGH}, ${HG_MID}, ${HG_LOW})` : HG_GRADIENT_CSS;
 
 // Same blue -> amber -> red ramp as a plain color for SVG charts (the gunbarrel): v at
 // lo..hi, mid = the amber stop; `lowIsBetter` flips it so red always = better.

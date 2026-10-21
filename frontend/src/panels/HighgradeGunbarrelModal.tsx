@@ -1,34 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { fetchHighgradeGunbarrel, type HighgradeMetric } from "../api/highgrade";
+import { fetchHighgradeGunbarrel, fmtHgValue, hgMetricLabel, type HighgradeMetric } from "../api/highgrade";
 import { useMapStore } from "../store";
 import { BoxWorkup } from "./BoxWorkup";
 import { PadChart } from "./GunbarrelView";
-import { METRICS } from "./HighgradePanel";
 
 const NO_EXFORM = new Set<string>();
 
-// Label + per-well formatter for the selected screen metric (well_count has no
-// per-well value, so no metric row is shown for it).
-function metricMeta(metric: string | undefined, box: boolean): { label: string; fmt: (v: number) => string } | undefined {
+// Label + per-location formatter for the selected screen metric (well_count has no
+// per-location value, so no metric row is shown for it).
+function metricMeta(metric: string | undefined): { label: string; fmt: (v: number) => string } | undefined {
   if (!metric || metric === "well_count") return undefined;
-  const label = `${box ? "BOX " : ""}${METRICS.find((m) => m.value === metric)?.label ?? metric}`;
-  if (metric.startsWith("box_pv")) return { label, fmt: (v) => `$${Math.round(v).toLocaleString()}` };
-  if (metric.endsWith("_per_kft")) {
-    const unit = metric.startsWith("gas") ? "mcf" : "bbl";
-    return { label, fmt: (v) => `${Math.round(v).toLocaleString()} ${unit}/kft` };
-  }
-  if (box && metric === "oil_eur") return { label, fmt: (v) => `${Math.round(v).toLocaleString()} bbl` };
-  if (box && metric === "gas_eur") return { label, fmt: (v) => `${Math.round(v).toLocaleString()} mcf` };
-  if (box && metric === "water_eur") return { label, fmt: (v) => `${Math.round(v).toLocaleString()} bbl` };
-  if (metric.startsWith("npv") || metric.startsWith("pv")) {
-    const rate = metric.replace(/^(npv|pv)/, "");
-    const label = `${metric.startsWith("npv") ? "NPV" : "PV"} @ ${rate}%`;
-    return { label, fmt: (v) => `$${Math.round(v).toLocaleString()}` };
-  }
-  if (metric === "oil_eur") return { label: "Oil EUR", fmt: (v) => `${Math.round(v).toLocaleString()} bbl` };
-  if (metric === "gas_eur") return { label: "Gas EUR", fmt: (v) => `${Math.round(v).toLocaleString()} mcf` };
-  return undefined;
+  return { label: `BOX ${hgMetricLabel(metric)}`, fmt: (v) => fmtHgValue(v, metric) };
 }
 
 // Measure the body (ResizeObserver) so the chart fills the window as it's resized.
@@ -48,20 +31,19 @@ function useElementSize() {
   return [ref, size] as const;
 }
 
-// Click a DSU on the Highgrade map -> this draggable window shows that single
-// unit's gunbarrel (offset vs TVD): every PUD + PDP in the pad. PUDs that pass
-// the active screen render in formation color; off-filter PUDs and all PDPs
-// render muted (grey, dashed). Nothing is hidden. Drag the header to move it.
+// Click a DSU on the Highgrade map -> this draggable window opens on the pad's BOX workup,
+// with a tab for the unit's gunbarrel (offset vs TVD): every screened location + PDP in the
+// pad. Locations that pass the active screen render in bench color; off-screen locations and
+// all PDP render muted (grey, dashed). Nothing is hidden. Drag the header to move it.
 export function HighgradeGunbarrelModal() {
   const pad = useMapStore((s) => s.hgGunbarrelPad);
   const data = useMapStore((s) => s.hgGunbarrel);
   const loading = useMapStore((s) => s.hgGunbarrelLoading);
   const close = useMapStore((s) => s.closeHgGunbarrel);
   const metric = useMapStore((s) => s.highgrade?.metric);
-  const box = useMapStore((s) => s.highgrade?.source === "box");
   const basin = useMapStore((s) => s.basin);
-  const mm = metricMeta(metric, box);
-  const [tab, setTab] = useState<"gunbarrel" | "workup">("gunbarrel");
+  const mm = metricMeta(metric);
+  const [tab, setTab] = useState<"gunbarrel" | "workup">("workup");
 
   const [pos, setPos] = useState(() => ({
     x: Math.max(20, Math.round(window.innerWidth * 0.5 - 360)),
@@ -75,14 +57,12 @@ export function HighgradeGunbarrelModal() {
   useEffect(() => {
     if (!pad) return;
     let live = true;
-    const { basin, highgradeFilters, highgrade, hgIncludeRealized } = useMapStore.getState();
-    const m = (highgrade?.metric ?? "npv25") as HighgradeMetric;
-    // the drawn result's own source / econ case, so the window matches the map
-    const source = highgrade?.source ?? "novi";
-    setTab(source === "box" ? "workup" : "gunbarrel");
+    const { basin, highgradeFilters, highgrade, mapDeck } = useMapStore.getState();
+    const m = (highgrade?.metric ?? "oil_eur_per_kft") as HighgradeMetric;
+    setTab("workup");
+    // the drawn result's own econ deck, so the window matches the map
     fetchHighgradeGunbarrel({
-      basin, pad_key: pad, filters: highgradeFilters ?? {}, metric: m, include_realized: hgIncludeRealized,
-      source, econ: highgrade?.econ ?? null,
+      basin, pad_key: pad, filters: highgradeFilters ?? {}, metric: m, deck: highgrade?.econ?.deck_id ?? mapDeck,
     })
       .then((d) => { if (live) useMapStore.getState().setHgGunbarrel(d); })
       .catch((e) => {
@@ -133,19 +113,19 @@ export function HighgradeGunbarrelModal() {
         <button className="hg-gb-close" aria-label="Close"
           onMouseDown={(e) => e.stopPropagation()} onClick={close}>×</button>
       </div>
-      {box && (
+      {(
         <div className="seg sm" style={{ padding: "6px 12px 0" }}>
           <button className={tab === "workup" ? "active" : ""} onClick={() => setTab("workup")}>BOX workup</button>
           <button className={tab === "gunbarrel" ? "active" : ""} onClick={() => setTab("gunbarrel")}>Gunbarrel</button>
         </div>
       )}
-      {box && tab === "workup" && (
+      {tab === "workup" && (
         <div className="win-body"><BoxWorkup basin={basin} padKey={pad} /></div>
       )}
-      <div className="win-body" ref={bodyRef} style={box && tab === "workup" ? { display: "none" } : undefined}>
+      <div className="win-body" ref={bodyRef} style={tab === "workup" ? { display: "none" } : undefined}>
         {loading && <div className="count">Loading gunbarrel…</div>}
         {!loading && data && data.wells.length === 0 && (
-          <div className="count">No BASE_CASE or PDP wells found in this unit.</div>
+          <div className="count">No screened location or PDP found in this unit.</div>
         )}
         {!loading && data && data.wells.length > 0 && (
           <PadChart pad={data} exForm={NO_EXFORM} isMuted={(w) => !w.in_filter}
@@ -154,8 +134,8 @@ export function HighgradeGunbarrelModal() {
         )}
       </div>
       <div className="hg-gb-foot">
-        ○ PUD &nbsp; ● PDP &nbsp; color = formation &nbsp;·&nbsp; grey/dashed = PDP or off current screen
-        {box && <> &nbsp;·&nbsp; BOX value blank = PUD not covered by BOX</>}
+        ○ location &nbsp; ● PDP &nbsp; color = bench &nbsp;·&nbsp; grey/dashed = PDP or off the current screen
+        &nbsp;·&nbsp; BOX value blank = no BOX forecast (never zero)
         {data && data.wells.length > 0 && (
           <> &nbsp;·&nbsp; {colored} of {data.well_count} match the screen</>
         )}

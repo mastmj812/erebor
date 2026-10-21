@@ -11,7 +11,7 @@ import type {
   AccWellDetail,
 } from "./api/accuracy";
 import type { BoxLegend, EconMetric, EurStream, Tier } from "./api/boxMap";
-import type { BoxMeta, EconDeck, ForecastSource, HighgradeFilters, ProxGroup } from "./api/highgrade";
+import type { BoxMeta, HighgradeFilters, ProxGroup } from "./api/highgrade";
 import type { ColorMode } from "./map/sticksLayers";
 
 export interface BasinMeta {
@@ -80,14 +80,9 @@ export interface GunbarrelWell {
   oil_eur_ft?: number | null; gas_eur_ft?: number | null; water_eur_ft?: number | null;
   prox_outcome?: string | null;
   econ?: number | null;                   // Steven's econ for the requested metric + deck (display only)
-  // Highgrade per-DSU gunbarrel still sends these (overhaul step 5 retires them)
-  recon_status?: string | null;
-  deplet_t?: string | null;
-  pdp_count_3mi?: number | null;
   tvd: number; ll_ft: number | null; offset_ft: number;
   in_filter?: boolean;          // set only by the Highgrade per-DSU gunbarrel
   metric_value?: number | null; // value of the selected screen metric (Highgrade)
-  box_coverage?: string | null; // Highgrade BOX source: the PUD's BOX coverage class
 }
 export interface GunbarrelPad {
   pad_name: string; well_count: number;
@@ -138,37 +133,35 @@ export interface SelectionResult {
   sticks: SelectionStick[];
 }
 
-// Highgrade tab: per-pad screening result (choropleth) from POST /highgrade/pads.
+// Highgrade tab: per-pad screening result (choropleth) from POST /highgrade/pads (BOX only).
 export interface HighgradeResult {
   basin: string;
   metric: string;
-  agg: string;
+  agg: string;               // applied: sum | avg | per_acre | median | lateral_weighted | count
   pad_count: number;
   pads_missing_geom: number;
-  names_split: number;       // Novi pad names spanning >1 separate stick group, drawn as [k/n] pads (sql/46)
-  well_count: number;
-  wells_without_pad: number; // screened PUDs with no Novi pad assignment (not drawable)
+  names_split: number;       // Novi pad names spanning >1 separate stick group, drawn as [k/n] pads (sql/67)
+  pads_hull: number;         // drawn pads on a stick hull + 330 ft (stray / no Novi polygon), not Novi's DSU
+  well_count: number;        // screened locations on a pad
+  wells_without_pad: number; // screened locations with no pad assignment (not drawable)
   value_min: number | null;
   value_max: number | null;
   pads: GeoJSON.FeatureCollection;
-  source?: ForecastSource;
-  valued_count?: number;    // wells carrying a value (BOX: covered + provisional; BOX econ: priced)
-  valued_by_tier?: { validated: number; provisional: number } | null; // BOX: valued_count split by tier (D105)
-  pads_unvalued?: number;   // drawn pads with no valued well (BOX: grey "not covered")
-  coverage_counts?: Record<string, number> | null; // BOX: screened PUDs per coverage class
-  // BOX: screened PUDs per PDP-proximity outcome group + the haircut factor range (D112–D116)
-  proximity_counts?: { as_is: number; haircut: number; no_precedent: number; factor_min: number | null; factor_max: number | null } | null;
-  box_run?: { run_id: number; report_version: string; data_through: string; code_sha: string };
-  econ?: EconDeck;
+  valued_count: number;      // locations carrying a value (BOX forecast; econ: priced)
+  valued_by_tier: { validated: number; provisional: number }; // valued_count split by tier (D105)
+  pads_unvalued: number;     // drawn pads with no valued location (grey, never zero)
+  coverage_counts: Record<string, number>; // screened locations per coverage class
+  // screened locations per PDP-proximity outcome group + the haircut factor range (D112–D116)
+  proximity_counts: { as_is: number; haircut: number; no_precedent: number; factor_min: number | null; factor_max: number | null };
+  box_run: { run_id: number; report_version: string; data_through: string; code_sha: string };
+  econ: EconProvenance | null; // the econ case joined (D13 provenance); null = no econ in this screen
+  econ_priced: boolean;        // the record run is priced at all
 }
 
 interface MapState {
   appMode: AppMode;
   highgrade: HighgradeResult | null;
   highgradeFilters: HighgradeFilters | null; // last-applied screen, drives the per-DSU gunbarrel
-  hgIncludeRealized: boolean; // Highgrade: false = drillable inventory only (drop §6 realized/phantom PUDs)
-  hgSource: ForecastSource;   // Highgrade forecast source: Novi Intelligence | BOX record run
-  hgEconDeck: EconDeck | null; // BOX econ case (Steven's deck + assumption set) for box_pv* metrics
   boxMeta: BoxMeta | null;    // BOX record run + provenance + priced decks (per basin)
   hgGunbarrelPad: string | null;             // clicked DSU's pad_key (modal open when non-null)
   hgGunbarrel: GunbarrelPad | null;          // loaded per-DSU wells
@@ -232,9 +225,6 @@ interface MapState {
   setAppMode: (m: AppMode) => void;
   setHighgrade: (h: HighgradeResult | null) => void;
   setHighgradeFilters: (f: HighgradeFilters | null) => void;
-  setHgIncludeRealized: (b: boolean) => void;
-  setHgSource: (s: ForecastSource) => void;
-  setHgEconDeck: (d: EconDeck | null) => void;
   setBoxMeta: (m: BoxMeta | null) => void;
   openHgGunbarrel: (padKey: string) => void;
   setHgGunbarrel: (g: GunbarrelPad | null) => void;
@@ -300,9 +290,6 @@ export const useMapStore = create<MapState>((set, get) => ({
   appMode: "map",
   highgrade: null,
   highgradeFilters: null,
-  hgIncludeRealized: false,
-  hgSource: "novi",
-  hgEconDeck: null,
   boxMeta: null,
   hgGunbarrelPad: null,
   hgGunbarrel: null,
@@ -362,10 +349,6 @@ export const useMapStore = create<MapState>((set, get) => ({
   setAppMode: (m) => set({ appMode: m, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWellApi10: null, accWell: null, accWellLoading: false }),
   setHighgrade: (h) => set({ highgrade: h }),
   setHighgradeFilters: (f) => set({ highgradeFilters: f }),
-  setHgIncludeRealized: (b) => set({ hgIncludeRealized: b }),
-  // a source switch invalidates the drawn result (its numbers belong to the old source)
-  setHgSource: (src) => set({ hgSource: src, highgrade: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false }),
-  setHgEconDeck: (d) => set({ hgEconDeck: d }),
   setBoxMeta: (m) => set({ boxMeta: m }),
   openHgGunbarrel: (padKey) => set({ hgGunbarrelPad: padKey, hgGunbarrel: null, hgGunbarrelLoading: true }),
   setHgGunbarrel: (g) => set({ hgGunbarrel: g, hgGunbarrelLoading: false }),
@@ -414,7 +397,7 @@ export const useMapStore = create<MapState>((set, get) => ({
     }),
   setAccVintages: (v) => set({ accVintages: v }),
   setBasin: (b) =>
-    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgEconDeck: null, boxMeta: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWells: null, accSummary: null, accSummaryLoading: false, accTier: "all", accBench: [], accOperator: [], accWellApi10: null, accWell: null, accWellLoading: false, accSelection: null, accSelectionLoading: false, accMapView: "wells", accGrid: null, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], formationFilter: [], excludedSticks: [], unitFilter: [], mapLegend: null, valueRange: [null, null], production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+    set({ basin: b, highgrade: null, highgradeFilters: null, boxMeta: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWells: null, accSummary: null, accSummaryLoading: false, accTier: "all", accBench: [], accOperator: [], accWellApi10: null, accWell: null, accWellLoading: false, accSelection: null, accSelectionLoading: false, accMapView: "wells", accGrid: null, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], formationFilter: [], excludedSticks: [], unitFilter: [], mapLegend: null, valueRange: [null, null], production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleOverlay: (k) =>
     set((s) => ({ overlays: { ...s.overlays, [k]: !s.overlays[k] } })),
   loadBasins: async () => {

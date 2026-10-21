@@ -102,19 +102,6 @@ function GbTooltip({ w, x, y, muted, interactive, metricLabel, formatMetric }: {
           {w.gas_eur_ft != null && <tr><td>Gas EUR</td><td>{w.gas_eur_ft.toFixed(1)} {EUR_UNIT.gas}</td></tr>}
           {w.water_eur_ft != null && <tr><td>Water EUR</td><td>{w.water_eur_ft.toFixed(1)} {EUR_UNIT.water}</td></tr>}
           {w.prox_outcome && <tr><td>Proximity</td><td>{w.prox_outcome.replaceAll("_", " ")}</td></tr>}
-          {w.deplet_t && (
-            <tr><td>Depletion</td><td style={w.deplet_t === "Tier-4" ? { color: "#dc2626", fontWeight: 600 } : undefined}>
-              {w.deplet_t}{w.deplet_t === "Tier-4" ? " — depleted" : ""}
-            </td></tr>
-          )}
-          {w.pdp_count_3mi != null && (
-            <tr><td>PDP support</td><td style={w.pdp_count_3mi === 0 ? { color: "#dc2626", fontWeight: 600 } : undefined}>
-              {w.pdp_count_3mi} offset{w.pdp_count_3mi === 1 ? "" : "s"} @3mi{w.pdp_count_3mi === 0 ? " — unsupported" : ""}
-            </td></tr>
-          )}
-          <tr><td>TVD</td><td>{Math.round(w.tvd).toLocaleString()} ft</td></tr>
-          <tr><td>Offset</td><td>{Math.round(w.offset_ft).toLocaleString()} ft</td></tr>
-          {w.ll_ft != null && <tr><td>Lateral</td><td>{Math.round(w.ll_ft).toLocaleString()} ft</td></tr>}
           {metricLabel && <tr><td>{metricLabel}</td><td>{metricCell}</td></tr>}
           {!metricLabel && w.econ != null && <tr><td>Econ</td><td>{w.econ.toFixed(2)} (Steven, display only)</td></tr>}
         </tbody>

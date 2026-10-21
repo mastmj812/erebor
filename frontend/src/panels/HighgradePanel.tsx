@@ -1,17 +1,19 @@
 import { useEffect, useState } from "react";
 
+import { MAP_COVERAGE_LABELS, MAP_COVERAGE_ORDER, deckLabel } from "../api/boxMap";
 import {
-  COVERAGE_LABELS,
+  HG_METRICS,
   PROX_GROUP_LABELS,
   fetchBoxMeta,
   fetchFacets,
   fetchHighgradePads,
+  fmtHgValue,
+  hgAggLabel,
+  hgMetricLabel,
   isMoneyMetric,
+  isMedianMetric,
   isPerKftMetric,
   type BoxMeta,
-  type CategoricalField,
-  type EconDeck,
-  type ForecastSource,
   type HighgradeAgg,
   type HighgradeFacets,
   type HighgradeFilters,
@@ -23,44 +25,8 @@ import { useMapStore, type HighgradeResult, type OverlayKey } from "../store";
 import { BoxProximityNote } from "./BoxWorkup";
 import { ChipGroup } from "./ChipGroup";
 
-// Exported: the legend and the gunbarrel label from the same table.
-export const METRICS: { value: HighgradeMetric; label: string; sources: ForecastSource[] }[] = [
-  { value: "npv5", label: "NPV @ 5%", sources: ["novi"] },
-  { value: "npv10", label: "NPV @ 10%", sources: ["novi"] },
-  { value: "npv15", label: "NPV @ 15%", sources: ["novi"] },
-  { value: "npv20", label: "NPV @ 20%", sources: ["novi"] },
-  { value: "npv25", label: "NPV @ 25%", sources: ["novi"] },
-  { value: "pv5", label: "PV @ 5%", sources: ["novi"] },
-  { value: "pv10", label: "PV @ 10%", sources: ["novi"] },
-  { value: "pv15", label: "PV @ 15%", sources: ["novi"] },
-  { value: "pv20", label: "PV @ 20%", sources: ["novi"] },
-  { value: "pv25", label: "PV @ 25%", sources: ["novi"] },
-  { value: "oil_eur", label: "Oil EUR", sources: ["novi", "box"] },
-  { value: "gas_eur", label: "Gas EUR", sources: ["novi", "box"] },
-  { value: "oil_eur_per_kft", label: "Oil EUR / 1,000 ft", sources: ["novi", "box"] },
-  { value: "gas_eur_per_kft", label: "Gas EUR / 1,000 ft", sources: ["novi", "box"] },
-  // BOX water (sql/62): WOR vs cum oil on measured-water analogs; validated on WCA / BS2_S, provisional elsewhere
-  { value: "water_eur", label: "Water EUR", sources: ["box"] },
-  { value: "water_eur_per_kft", label: "Water EUR / 1,000 ft", sources: ["box"] },
-  // Steven's box_econ values on BOX volumes, one named deck (display-only, D13)
-  { value: "box_pv0", label: "Steven PV0", sources: ["box"] },
-  { value: "box_pv10", label: "Steven PV10", sources: ["box"] },
-  { value: "box_pv15", label: "Steven PV15", sources: ["box"] },
-  { value: "box_pv20", label: "Steven PV20", sources: ["box"] },
-  { value: "box_pv25", label: "Steven PV25", sources: ["box"] },
-  { value: "box_pv30", label: "Steven PV30", sources: ["box"] },
-  { value: "well_count", label: "Well count", sources: ["novi", "box"] },
-];
-const DEFAULT_METRIC: Record<ForecastSource, HighgradeMetric> = { novi: "npv25", box: "oil_eur_per_kft" };
-const DECK_SEP = "\u001f"; // deck_id / assumption_set_id separator in the deck <select> value
-
-// tier multi-selects (4 chips each, Tier-1..4)
-const TIER_FIELDS: { field: CategoricalField; label: string; hint?: string }[] = [
-  { field: "rqt", label: "Rock quality tier" },
-  { field: "spacing_t", label: "Spacing tier" },
-  { field: "deplet_t", label: "Depletion tier" },
-  { field: "complet_t", label: "Completion tier" },
-];
+// Highgrade on BOX (overhaul step 5). Novi supplies the stick geometry and the DSU polygons
+// only (Michael, 2026-10-21): no Novi tag, tier, forecast or NPV is screened or shown here.
 
 // map overlays surfaced on the Highgrade tab (same toggle mechanism as the Map tab's
 // Controls panel; the layers are mode-agnostic so they render in Highgrade mode too).
@@ -69,71 +35,34 @@ const HG_OVERLAYS: { key: OverlayKey; label: string }[] = [
   { key: "sections", label: "Sections (numbered, z≥11)" },
 ];
 
-// numeric range sliders (min/max entry, seeded with the facet bounds)
-// `sources` limits a row to one forecast source (default: both — Novi screen attributes).
-const BOX_RANGE_HINT = "BOX bounds apply to forecast PUDs only (validated + provisional); a PUD without a BOX forecast stays in the screen, counted under its not-covered class.";
-const RANGE_FIELDS: { col: string; label: string; money?: boolean; hint?: string; sources?: ForecastSource[] }[] = [
-  { col: "rqs", label: "Rock-quality score" },
-  { col: "spacing_s", label: "Spacing score" },
-  { col: "deplet_s", label: "Depletion score" },
-  { col: "complet_s", label: "Completion score" },
-  { col: "npv25", label: "NPV @ 25% ($)", money: true, sources: ["novi"] },
-  { col: "oil_eur", label: "Oil EUR (bbl)", sources: ["novi"] },
-  { col: "box_oil_eur", label: "BOX oil EUR (bbl)", sources: ["box"], hint: BOX_RANGE_HINT },
-  { col: "box_oil_eur_per_kft", label: "BOX oil EUR / 1,000 ft (bbl)", sources: ["box"], hint: BOX_RANGE_HINT },
-  { col: "box_water_eur_per_kft", label: "BOX water EUR / 1,000 ft (bbl)", sources: ["box"], hint: BOX_RANGE_HINT },
-  { col: "box_prox_factor", label: "BOX PDP-proximity oil factor (×)", sources: ["box"],
-    hint: `D113 oil factor: 1 = as-is (unexposed / single parent), 0.75–0.94 = multi-parent haircut. ${BOX_RANGE_HINT}` },
-  { col: "ll_ft", label: "Lateral length (ft)" },
-  // offset-PDP support (curated.intel_pdp_support, sql/30) — verifiability screen
-  { col: "pdp_count_3mi", label: "PDP offsets (3 mi)" },
-  { col: "dist_nearest_ft", label: "Nearest PDP (ft)" },
-  { col: "inflation_ratio", label: "EUR/ft vs offsets (×)" },
-  // depth-plausibility screens (sql/30, 2026-09 WCB_2 deep-TVD audit). Any bound
-  // also drops blank-valued sticks (no same-bench / no WCA PDP within 3 mi).
-  { col: "tvd_excess_3mi_ft", label: "TVD vs deepest offset (ft)",
-    hint: "Stick TVD minus the deepest same-bench producer within 3 mi. > 200 ft = deeper than anything developed locally (suspect Novi landing) — max 200 on by default; clearing it also readmits sticks with no in-bench PDP within 3 mi." },
-  { col: "wca_delta_ft", label: "TVD below WCA PDP (ft)",
-    hint: "Stick TVD minus the local WCA producer median (3 mi). Real WCB_2 lands 400–700 ft below WCA — set that band when screening WCB_2." },
+// Range filters, keyed by the backend whitelist (highgrade.BOX_RANGES / ECON_RANGES). The
+// backend takes STORED units; `scale` converts the entry (per-ft EUR is stored per 1,000 ft).
+// A bound acts on forecast locations only: one without a BOX forecast stays in the screen,
+// counted under its class — never dropped, never a zero (D67).
+const KEEP_HINT = "Bounds act on BOX-forecast locations only; a location without a forecast stays in the screen, counted under its class.";
+const RANGE_FIELDS: { col: string; label: string; scale?: number; econ?: boolean; hint?: string }[] = [
+  { col: "oil_eur_per_kft", label: "Oil EUR (bbl/ft)", scale: 1000 },
+  { col: "gas_eur_per_kft", label: "Gas EUR (mcf/ft)", scale: 1000 },
+  { col: "water_eur_per_kft", label: "Water EUR (bbl/ft)", scale: 1000 },
+  { col: "oil_eur", label: "Oil EUR (bbl)" },
+  { col: "prox_factor", label: "PDP-proximity oil factor (×)",
+    hint: "D113 oil factor: 1 = as-is (unexposed / single parent), 0.75–0.94 = multi-parent haircut." },
+  { col: "lateral_ft", label: "BOX lateral (ft)" },
+  { col: "econ_pv10", label: "PV10 ($MM)", econ: true },
+  { col: "econ_pv20", label: "PV20 ($MM)", econ: true },
+  { col: "econ_irr", label: "IRR (%)", econ: true },
+  { col: "econ_be_wti", label: "Breakeven WTI @ PV20 ($/bbl)", econ: true },
+  { col: "econ_capex", label: "Capex ($MM)", econ: true },
 ];
-
-const EMPTY_CATS: Record<CategoricalField, string[]> = {
-  formation_blueox: [], operator: [], spacing_t: [], deplet_t: [], complet_t: [], rqt: [],
-};
-
-// Highgrade default screens TRUE drillable inventory: not-already-drilled (the
-// reconciliation gate, server-side) AND not offset-depleted. Novi's deplet_t
-// Tier-4 = drained rock (frac grows into the depleted offset; produces water) —
-// technically drillable, worthless — so on Novi the depletion-tier filter defaults to
-// Tier-1/2/3 (Tier-4 off). The user can click Tier-4 back in to see it.
-// BOX (gate 8, Michael 2026-10-15): no depletion-tier default. A BOX workup already
-// carries offset depletion through its named analogs, so Novi's Tier-4 cut would
-// double-count it — and it removed 1,307 of the 1,907 covered PUDs.
-const DEFAULT_CATS: Record<ForecastSource, Record<CategoricalField, string[]>> = {
-  novi: { ...EMPTY_CATS, deplet_t: ["Tier-1", "Tier-2", "Tier-3"] },
-  box: { ...EMPTY_CATS },
-};
-const DEPLET_HINT: Record<ForecastSource, string> = {
-  novi: "Tier-4 (offset-depleted) off by default — drained rock; click to include.",
-  box: "No default on BOX: all tiers, Tier-4 included (see the BOX note above). Click tiers to screen anyway.",
-};
+const ECON_RANGE_HINT = "A forecast location without a priced value fails an econ bound; not-covered locations stay, counted.";
 
 type RangeMap = Record<string, [number | null, number | null]>;
 
-// PDP-proximity screen (BOX only, D112–D116): empty = all. Unlike a BOX range bound this is an
-// explicit outcome screen, so it drops every PUD outside the selection — including the classes
-// BOX never measured for proximity (outside the extent, emerging, bench not in BOX, …).
+// PDP-proximity screen (D112–D116): empty = all. An explicit outcome screen, so it drops every
+// location outside the selection — including those BOX never measured (outside the extent, …).
 const PROX_OPTIONS: ProxGroup[] = ["as_is", "haircut", "no_precedent"];
 const PROX_SHORT: Record<ProxGroup, string> = { as_is: "as-is", haircut: "haircut", no_precedent: "no precedent" };
-const PROX_HINT = "as-is = unexposed or single parent (BOX unchanged) · haircut = 2+ depleted parents with drilled precedent, oil × 0.75–0.94 (D113) · no precedent = no forecast (D114). Selecting any drops the PUDs BOX never measured (outside the extent, emerging, …).";
-
-// Depth-anomaly default (2026-09 WCB_2 deep-TVD audit): sticks landed > 200 ft
-// deeper than any same-bench producer within 3 mi are suspect Novi landings —
-// visible on the map, excluded from the default screen. The <= 200 bound also
-// drops NULL rows (no same-bench PDP within 3 mi / unscored bench) — those are
-// unverifiable, the same class the pdp_count_3mi floor targets. Clear the range
-// to screen the full set.
-const DEFAULT_RANGES: RangeMap = { tvd_excess_3mi_ft: [null, 200] };
+const PROX_HINT = "as-is = unexposed or single parent (BOX unchanged) · haircut = 2+ depleted parents with drilled precedent, oil × 0.75–0.94 (D113) · no precedent = no forecast (D114). Selecting any drops the locations BOX never measured (outside the extent, emerging, …).";
 
 export function HighgradePanel() {
   const basin = useMapStore((s) => s.basin);
@@ -141,107 +70,73 @@ export function HighgradePanel() {
   const highgrade = useMapStore((s) => s.highgrade);
   const setHighgrade = useMapStore((s) => s.setHighgrade);
   const setHighgradeFilters = useMapStore((s) => s.setHighgradeFilters);
-  const includeRealized = useMapStore((s) => s.hgIncludeRealized);
-  const setIncludeRealized = useMapStore((s) => s.setHgIncludeRealized);
   const closeHgGunbarrel = useMapStore((s) => s.closeHgGunbarrel);
   const overlays = useMapStore((s) => s.overlays);
   const toggleOverlay = useMapStore((s) => s.toggleOverlay);
-  const source = useMapStore((s) => s.hgSource);
-  const setSource = useMapStore((s) => s.setHgSource);
-  const econDeck = useMapStore((s) => s.hgEconDeck);
-  const setEconDeck = useMapStore((s) => s.setHgEconDeck);
   const boxMeta = useMapStore((s) => s.boxMeta);
   const setBoxMeta = useMapStore((s) => s.setBoxMeta);
+  // the econ deck is shared with the Map tab (one deck choice across the app)
+  const mapDeck = useMapStore((s) => s.mapDeck);
+  const setMapDeck = useMapStore((s) => s.setMapDeck);
 
   const [facets, setFacets] = useState<HighgradeFacets | null>(null);
-  const [cats, setCats] = useState<Record<CategoricalField, string[]>>({ ...EMPTY_CATS });
-  const [ranges, setRanges] = useState<RangeMap>({ ...DEFAULT_RANGES });
+  const [benches, setBenches] = useState<string[]>([]);
+  const [ranges, setRanges] = useState<RangeMap>({});
   const [prox, setProx] = useState<ProxGroup[]>([]);
-  const [metric, setMetric] = useState<HighgradeMetric>("npv25");
+  const [metric, setMetric] = useState<HighgradeMetric>("oil_eur_per_kft");
   const [agg, setAgg] = useState<HighgradeAgg>("sum");
-  const [opSearch, setOpSearch] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Reset the form on basin change (filters are basin-specific). Not on the
-  // realized toggle — those selections stay valid across the wider/narrower set.
+  const meta = boxMeta?.basin === basin ? boxMeta : null;
+  const deck = mapDeck ?? meta?.default_deck ?? null;
+  const decks = [...new Map((meta?.decks ?? []).map((d) => [d.deck_id, d])).values()];
+  const priced = meta != null && meta.econ_status !== "not_yet_priced" && decks.length > 0;
+  const noForecast = meta != null && (meta.forecast_count ?? 0) === 0;
+
+  // Reset the form on basin change (filters are basin-specific).
   useEffect(() => {
-    setCats({ ...DEFAULT_CATS[useMapStore.getState().hgSource] });
-    setRanges({ ...DEFAULT_RANGES });
+    setBenches([]);
+    setRanges({});
     setProx([]);
-    setOpSearch("");
   }, [basin]);
 
-  // (Re)load facets on basin / realized-toggle / source change so the filter bounds /
-  // distinct values reflect exactly the PUD population being screened.
+  // BOX record run + provenance + Steven's priced decks, once per basin (the Map tab may
+  // have loaded it already).
+  useEffect(() => {
+    if (boxMeta?.basin === basin) return;
+    let live = true;
+    fetchBoxMeta(basin)
+      .then((m) => { if (live) setBoxMeta(m); })
+      .catch((e) => { if (live) setError(String(e)); });
+    return () => { live = false; };
+  }, [basin, boxMeta, setBoxMeta]);
+
+  // (Re)load facets on basin / deck change: bench list + the range placeholders.
   useEffect(() => {
     let live = true;
     setFacets(null);
-    fetchFacets(basin, includeRealized, source)
+    fetchFacets(basin, deck)
       .then((f) => { if (live) setFacets(f); })
       .catch((e) => { if (live) setError(String(e)); });
     return () => { live = false; };
-  }, [basin, includeRealized, source]);
+  }, [basin, deck]);
 
-  // BOX record run + provenance + Steven's priced decks, once per basin. The Map tab
-  // may have loaded boxMeta already, so the default econ case is set from whichever
-  // load got there first: the meta's default deck (WTI 70 / HH 3), else the first.
+  // An econ metric without a priced run falls back to the default; per acre is $-only.
   useEffect(() => {
-    if (source !== "box") return;
-    const pickDeck = (m: NonNullable<typeof boxMeta>) => {
-      const d = m.decks.find((x) => x.deck_id === m.default_deck) ?? m.decks[0];
-      setEconDeck(d ? { deck_id: d.deck_id, assumption_set_id: d.assumption_set_id } : null);
-    };
-    if (boxMeta?.basin === basin) {
-      if (!econDeck) pickDeck(boxMeta);
-      return;
-    }
-    let live = true;
-    fetchBoxMeta(basin)
-      .then((m) => {
-        if (!live) return;
-        setBoxMeta(m);
-        pickDeck(m);
-      })
-      .catch((e) => { if (live) setError(String(e)); });
-    return () => { live = false; };
-  }, [source, basin, boxMeta, econDeck, setBoxMeta, setEconDeck]);
-
-  // A metric the new source does not carry falls back to that source's default;
-  // source-only range bounds are dropped so they never leak into the other source.
-  const switchSource = (src: ForecastSource) => {
-    if (src === source) return;
-    setSource(src);
-    // the depletion-tier default differs by source (see DEFAULT_CATS)
-    setCats((c) => ({ ...c, deplet_t: [...DEFAULT_CATS[src].deplet_t] }));
-    setMetric((m) => (METRICS.find((x) => x.value === m)?.sources.includes(src) ? m : DEFAULT_METRIC[src]));
-    setRanges((r) => {
-      const out = { ...r };
-      RANGE_FIELDS.forEach((f) => { if (f.sources && !f.sources.includes(src)) delete out[f.col]; });
-      return out;
-    });
-    if (src !== "box") setProx([]);
-  };
-
-  // per_acre is only offered for the $-metrics; drop it if the metric changes away.
+    if (meta && !priced && HG_METRICS.find((m) => m.value === metric)?.econ) setMetric("oil_eur_per_kft");
+  }, [meta, priced, metric]);
   useEffect(() => {
     if (!isMoneyMetric(metric)) setAgg((a) => (a === "per_acre" ? "sum" : a));
   }, [metric]);
 
-  const toggleCat = (field: CategoricalField, value: string) =>
-    setCats((c) => {
-      const has = c[field].includes(value);
-      return { ...c, [field]: has ? c[field].filter((v) => v !== value) : [...c[field], value] };
-    });
-
-  const setRange = (col: string, idx: 0 | 1, raw: string) =>
+  const setRange = (col: string, idx: 0 | 1, raw: string, scale = 1) =>
     setRanges((r) => {
       const cur = r[col] ?? [null, null];
       const next: [number | null, number | null] = [...cur] as [number | null, number | null];
-      next[idx] = raw === "" ? null : Number(raw);
-      const cleared = next[0] == null && next[1] == null;
+      next[idx] = raw === "" ? null : Number(raw) * scale;
       const out = { ...r };
-      if (cleared) delete out[col];
+      if (next[0] == null && next[1] == null) delete out[col];
       else out[col] = next;
       return out;
     });
@@ -251,18 +146,14 @@ export function HighgradePanel() {
     setError(null);
     try {
       const filters: HighgradeFilters = {};
-      (Object.keys(cats) as CategoricalField[]).forEach((f) => {
-        if (cats[f].length) filters[f] = cats[f];
-      });
-      if (source === "box" && prox.length) filters.prox = prox;
-      const rangeEntries = Object.entries(ranges).filter(([, [lo, hi]]) => lo != null || hi != null);
+      if (benches.length) filters.formation_blueox = benches;
+      if (prox.length) filters.prox = prox;
+      const rangeEntries = Object.entries(ranges)
+        .filter(([col, [lo, hi]]) => (lo != null || hi != null) && (priced || !col.startsWith("econ_")));
       if (rangeEntries.length) filters.ranges = Object.fromEntries(rangeEntries);
-      const res = await fetchHighgradePads({
-        basin, filters, metric, agg, include_realized: includeRealized, source,
-        econ: metric.startsWith("box_pv") ? econDeck : null,
-      });
+      const res = await fetchHighgradePads({ basin, filters, metric, agg, deck });
       setHighgrade(res);
-      // Record the applied screen so a per-DSU gunbarrel can grey off-filter wells.
+      // Record the applied screen so a per-DSU gunbarrel can grey off-screen locations.
       setHighgradeFilters(filters);
     } catch (e) {
       setError(String(e));
@@ -272,20 +163,17 @@ export function HighgradePanel() {
   };
 
   const reset = () => {
-    setCats({ ...DEFAULT_CATS[source] });
-    setRanges({ ...DEFAULT_RANGES });
+    setBenches([]);
+    setRanges({});
     setProx([]);
     setHighgrade(null);
     setHighgradeFilters(null);
     closeHgGunbarrel();
   };
 
-  const isWellCount = metric === "well_count";
-  const money = isMoneyMetric(metric);
-  const perKft = isPerKftMetric(metric);
-  const noEcon = source === "box" && (boxMeta?.decks.length ?? 0) === 0;
-  const metricOptions = METRICS.filter((m) => m.sources.includes(source) && !(noEcon && m.value.startsWith("box_pv")));
-  const rangeFields = RANGE_FIELDS.filter((f) => !f.sources || f.sources.includes(source));
+  const showAgg = !isPerKftMetric(metric) && !isMedianMetric(metric) && metric !== "well_count";
+  const metricOptions = HG_METRICS.filter((m) => priced || !m.econ);
+  const econMetric = HG_METRICS.find((m) => m.value === metric)?.econ ?? false;
 
   return (
     <div className="panel highgrade">
@@ -293,69 +181,45 @@ export function HighgradePanel() {
         <button className={basin === "delaware" ? "active" : ""} onClick={() => setBasin("delaware")}>Delaware</button>
         <button className={basin === "midland" ? "active" : ""} onClick={() => setBasin("midland")}>Midland</button>
       </div>
-      <div className="count">Screen undeveloped (BASE_CASE) inventory → highlight target pads.</div>
-
-      <h3>Forecast source</h3>
-      <div className="seg sm">
-        <button className={source === "novi" ? "active" : ""} onClick={() => switchSource("novi")}>Novi</button>
-        <button className={source === "box" ? "active" : ""} onClick={() => switchSource("box")}>BOX</button>
+      <div className="count">
+        Screen the remaining stick locations on BOX → highlight target DSUs. Locations = every Novi stick (geometry
+        only; Novi's PUD / RES tags are not used) that our reconciliation did not match to a producing well.
       </div>
-      {source === "novi" && (
-        <div className="count" style={{ margin: "2px 0 10px" }}>
-          Novi Intelligence forecasts; NPV/PV = Novi's pre-computed screen on one flat deck, not an authoritative value.
-        </div>
-      )}
-      {source === "box" && <BoxRunNote meta={boxMeta} />}
-      {source === "box" && (
-        <div className="count" style={{ margin: "0 0 10px" }}>
-          Depletion tier: no default on BOX — Tier-4 (offset-depleted) PUDs are included, because each BOX workup
-          already reflects offset depletion through its analogs. Click tiers to screen anyway.
+      {noForecast && (
+        <div className="caveat">
+          BOX does not forecast {basin === "midland" ? "Midland" : "this basin"} yet: no location here carries a BOX
+          forecast, so every pad is drawn grey and counted by class. This lights up when a BOX record run covers the basin.
         </div>
       )}
 
-      <h3>Inventory</h3>
-      <div className="seg sm">
-        <button className={!includeRealized ? "active" : ""} onClick={() => setIncludeRealized(false)}>Drillable only</button>
-        <button className={includeRealized ? "active" : ""} onClick={() => setIncludeRealized(true)}>All Novi BASE_CASE</button>
-      </div>
-      <div className="count" style={{ margin: "2px 0 10px" }}>
-        {includeRealized
-          ? "Every Novi BASE_CASE location, including those §6 reconciliation flags as already drilled."
-          : "Remaining + conflict only; excludes BASE_CASE locations reconciliation matched to existing production (realized / phantom)."}
-      </div>
+      <BoxRunNote meta={meta} />
 
       <h3>Metric (per pad)</h3>
       <div className="row" style={{ marginBottom: 6 }}>
         <select value={metric} onChange={(e) => setMetric(e.target.value as HighgradeMetric)} style={{ flex: 1, fontSize: 12 }}>
-          {metricOptions.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+          {metricOptions.map((m) => <option key={m.value} value={m.value}>{m.label}{m.econ ? " (Steven)" : ""}</option>)}
         </select>
       </div>
-      {source === "box" && boxMeta && boxMeta.decks.length > 0 && metric.startsWith("box_pv") && (
+      {priced && (
         <div className="row" style={{ marginBottom: 6 }}>
-          <select
-            value={econDeck ? `${econDeck.deck_id}${DECK_SEP}${econDeck.assumption_set_id}` : ""}
-            onChange={(e) => {
-              const [deck_id, assumption_set_id] = e.target.value.split(DECK_SEP);
-              setEconDeck({ deck_id, assumption_set_id });
-            }}
-            style={{ flex: 1, fontSize: 12 }}>
-            {boxMeta.decks.map((d) => (
-              <option key={`${d.deck_id}${DECK_SEP}${d.assumption_set_id}`} value={`${d.deck_id}${DECK_SEP}${d.assumption_set_id}`}>
-                {d.deck_id} · {d.assumption_set_id} · {d.n_priced.toLocaleString()} priced
-              </option>
-            ))}
+          <select value={deck ?? ""} onChange={(e) => setMapDeck(e.target.value || null)} style={{ flex: 1, fontSize: 12 }}
+            title="Steven's price deck — shared with the Map tab; applies to econ metrics and econ bounds">
+            {decks.map((d) => <option key={d.deck_id} value={d.deck_id}>{deckLabel(d.deck_id, d.wti, d.hh)}</option>)}
           </select>
         </div>
       )}
-      {source === "box" && <BoxEconNote meta={boxMeta} deck={econDeck} metric={metric} />}
-      {perKft && (
-        <div className="count" style={{ margin: "0 0 10px" }}>Pad value = lateral-weighted: Σ EUR ÷ Σ lateral (kft).</div>
+      <EconNote meta={meta} priced={priced} deck={deck} econMetric={econMetric} />
+      {isPerKftMetric(metric) && (
+        <div className="count" style={{ margin: "0 0 10px" }}>Pad value = lateral-weighted: Σ EUR ÷ Σ lateral (the lateral BOX used).</div>
       )}
-      {!isWellCount && !perKft && (
+      {isMedianMetric(metric) && (
+        <div className="count" style={{ margin: "0 0 10px" }}>Pad value = median over its priced locations (a rate does not add up).</div>
+      )}
+      {showAgg && (
         <div className="seg sm" style={{ marginBottom: 10 }}>
           <button className={agg === "sum" ? "active" : ""} onClick={() => setAgg("sum")}>Sum</button>
-          <button className={agg === "avg" ? "active" : ""} onClick={() => setAgg("avg")}>Avg / well</button>
-          {money && (
+          <button className={agg === "avg" ? "active" : ""} onClick={() => setAgg("avg")}>Avg / location</button>
+          {isMoneyMetric(metric) && (
             <button className={agg === "per_acre" ? "active" : ""} onClick={() => setAgg("per_acre")}>Per acre</button>
           )}
         </div>
@@ -373,64 +237,34 @@ export function HighgradePanel() {
 
       {facets && (
         <>
-          {TIER_FIELDS.map(({ field, label, hint }) => (
-            <ChipGroup
-              key={field}
-              label={label}
-              hint={field === "deplet_t" ? DEPLET_HINT[source] : hint}
-              options={facets.categorical[field]}
-              selected={cats[field]}
-              onToggle={(v) => toggleCat(field, v)}
-            />
-          ))}
-
-          {source === "box" && (
-            <ChipGroup
-              label="BOX PDP proximity"
-              hint={PROX_HINT}
-              options={PROX_OPTIONS}
-              selected={prox}
-              onToggle={(v) => setProx((p) => (p.includes(v as ProxGroup) ? p.filter((x) => x !== v) : [...p, v as ProxGroup]))}
-              labelOf={(v) => PROX_SHORT[v as ProxGroup] ?? v}
-            />
-          )}
-
           <ChipGroup
-            label="Formation (Blue Ox)"
+            label="Bench (Blue Ox)"
             options={facets.categorical.formation_blueox}
-            selected={cats.formation_blueox}
-            onToggle={(v) => toggleCat("formation_blueox", v)}
+            selected={benches}
+            onToggle={(v) => setBenches((b) => (b.includes(v) ? b.filter((x) => x !== v) : [...b, v]))}
             swatch={(code) => colorForBlueox(basin, code)}
           />
 
-          <h3>Operator {cats.operator.length > 0 && <span className="hg-n">({cats.operator.length})</span>}</h3>
-          <input
-            placeholder="Search operators…"
-            value={opSearch}
-            onChange={(e) => setOpSearch(e.target.value)}
-            style={{ width: "100%", fontSize: 12, marginBottom: 4 }}
+          <ChipGroup
+            label="BOX PDP proximity"
+            hint={PROX_HINT}
+            options={PROX_OPTIONS}
+            selected={prox}
+            onToggle={(v) => setProx((p) => (p.includes(v as ProxGroup) ? p.filter((x) => x !== v) : [...p, v as ProxGroup]))}
+            labelOf={(v) => PROX_SHORT[v as ProxGroup] ?? v}
           />
-          <div className="hg-oplist">
-            {facets.categorical.operator
-              .filter((o) => o.toLowerCase().includes(opSearch.toLowerCase()))
-              .map((o) => (
-                <label key={o} className="hg-oprow">
-                  <input type="checkbox" checked={cats.operator.includes(o)} onChange={() => toggleCat("operator", o)} />
-                  <span>{o}</span>
-                </label>
-              ))}
-          </div>
 
           <h3 style={{ marginTop: 10 }}>Ranges</h3>
-          {rangeFields.map(({ col, label, money: m, hint }) => (
+          <div className="count" style={{ margin: "0 0 4px" }}>{KEEP_HINT}</div>
+          {RANGE_FIELDS.filter((f) => !f.econ || priced).map(({ col, label, scale, econ, hint }) => (
             <RangeRow
               key={col}
               label={label}
-              hint={hint}
+              hint={econ ? ECON_RANGE_HINT : hint}
               bounds={facets.numeric[col]}
+              scale={scale ?? 1}
               value={ranges[col] ?? [null, null]}
-              money={m}
-              onChange={(idx, raw) => setRange(col, idx, raw)}
+              onChange={(idx, raw) => setRange(col, idx, raw, scale ?? 1)}
             />
           ))}
 
@@ -445,44 +279,42 @@ export function HighgradePanel() {
 
       {error && <div className="caveat" style={{ color: "#991b1b", background: "#fef2f2", borderColor: "#fecaca" }}>{error}</div>}
 
-      {highgrade && (
-        <div className="hg-summary">
-          <div><strong>{highgrade.pad_count.toLocaleString()}</strong> pads · <strong>{highgrade.well_count.toLocaleString()}</strong> wells</div>
-          <div className="count" style={{ margin: "2px 0 0" }}>
-            {highgrade.source === "box" ? "BOX " : ""}{METRICS.find((m) => m.value === highgrade.metric)?.label}
-            {highgrade.metric === "well_count" ? ""
-              : isPerKftMetric(highgrade.metric) ? " · lateral-weighted / pad"
-              : ` · ${aggLabel(highgrade.agg)}`}: {fmt(highgrade.value_min, isMoneyMetric(highgrade.metric))} … {fmt(highgrade.value_max, isMoneyMetric(highgrade.metric))}
-          </div>
-          {highgrade.source === "box" && highgrade.coverage_counts && (
-            <CoverageSummary counts={highgrade.coverage_counts} valued={highgrade.valued_count ?? 0}
-              valuedByTier={highgrade.valued_by_tier ?? null}
-              total={highgrade.well_count + highgrade.wells_without_pad} metric={highgrade.metric}
-              padsUnvalued={highgrade.pads_unvalued ?? 0} />
-          )}
-          {highgrade.source === "box" && highgrade.proximity_counts && <ProximitySummary pc={highgrade.proximity_counts} />}
-          {highgrade.pads_missing_geom > 0 && (
-            <div className="count" style={{ margin: "2px 0 0", color: "#92400e" }}>
-              {highgrade.pads_missing_geom.toLocaleString()} matching pads have no polygon (not drawn)
-            </div>
-          )}
-          {highgrade.wells_without_pad > 0 && (
-            <div className="count" style={{ margin: "2px 0 0", color: "#92400e" }}>
-              {highgrade.wells_without_pad.toLocaleString()} screened PUDs have no Novi pad assignment this
-              vintage (not drawn){highgrade.pad_count === 0 ? " — Novi shipped no pads for this basin" : ""}
-            </div>
-          )}
-          {highgrade.names_split > 0 && (
-            <div className="count" style={{ margin: "2px 0 0", color: "#92400e" }}>
-              {highgrade.names_split.toLocaleString()} Novi pad names span separate stick groups
-              (&gt;1 mi apart) — split into separate pads labelled [k/n]
-            </div>
-          )}
-          {highgrade.pad_count > 0 && (
-            <div className="count" style={{ margin: "2px 0 0" }}>
-              Pad outlines = member-stick hull + 330 ft (Novi ships no pad polygons); stacked-bench pads overlap.
-            </div>
-          )}
+      {highgrade && <ResultSummary hg={highgrade} />}
+    </div>
+  );
+}
+
+function ResultSummary({ hg }: { hg: HighgradeResult }) {
+  return (
+    <div className="hg-summary">
+      <div><strong>{hg.pad_count.toLocaleString()}</strong> pads · <strong>{hg.well_count.toLocaleString()}</strong> locations</div>
+      <div className="count" style={{ margin: "2px 0 0" }}>
+        BOX run {hg.box_run.run_id} · {hgMetricLabel(hg.metric)} ({hgAggLabel(hg.agg)}):{" "}
+        {fmtHgValue(hg.value_min, hg.metric, hg.agg)} … {fmtHgValue(hg.value_max, hg.metric, hg.agg)}
+      </div>
+      {hg.econ && (
+        <div className="count" style={{ margin: "2px 0 0" }}>
+          Steven's econ, {deckLabel(hg.econ.deck_id, hg.econ.wti, hg.econ.hh)} · {hg.econ.assumption_set_id} — display only (D13).
+        </div>
+      )}
+      <CoverageSummary hg={hg} />
+      <ProximitySummary pc={hg.proximity_counts} />
+      {hg.pads_missing_geom > 0 && (
+        <div className="count" style={{ margin: "2px 0 0", color: "#92400e" }}>
+          {hg.pads_missing_geom.toLocaleString()} matching pads have no polygon (not drawn)
+        </div>
+      )}
+      {hg.wells_without_pad > 0 && (
+        <div className="count" style={{ margin: "2px 0 0", color: "#92400e" }}>
+          {hg.wells_without_pad.toLocaleString()} screened locations have no pad assignment (not drawn)
+          {hg.pad_count === 0 ? " — no pads for this basin" : ""}
+        </div>
+      )}
+      {hg.pad_count > 0 && (
+        <div className="count" style={{ margin: "2px 0 0" }}>
+          Pad outlines = Novi 2026Q3 DSU polygons
+          {hg.pads_hull > 0 ? `; ${hg.pads_hull.toLocaleString()} pads (strays of a reused name, or no polygon) are the member-stick hull + 330 ft` : ""}
+          {hg.names_split > 0 ? `; ${hg.names_split.toLocaleString()} names split into [k/n] parts` : ""}. Stacked-bench DSUs overlap.
         </div>
       )}
     </div>
@@ -490,36 +322,33 @@ export function HighgradePanel() {
 }
 
 function RangeRow({
-  label, hint, bounds, value, money, onChange,
+  label, hint, bounds, scale, value, onChange,
 }: {
   label: string;
   hint?: string;
   bounds: { min: number | null; max: number | null } | undefined;
+  scale: number;
   value: [number | null, number | null];
-  money?: boolean;
   onChange: (idx: 0 | 1, raw: string) => void;
 }) {
-  const ph = (v: number | null) => (v == null ? "" : money ? Math.round(v).toString() : trim(v));
+  const ph = (v: number | null) => (v == null ? "" : trim(v / scale));
+  const show = (v: number | null) => (v == null ? "" : String(+(v / scale).toPrecision(6)));
   return (
     <div className="hg-range">
       <div className="hg-range-label" title={hint}>{label}{hint ? " ⓘ" : ""}</div>
       <div className="hg-range-inputs">
         <input
           type="number" inputMode="decimal" placeholder={`min ${ph(bounds?.min ?? null)}`}
-          value={value[0] ?? ""} onChange={(e) => onChange(0, e.target.value)}
+          value={show(value[0])} onChange={(e) => onChange(0, e.target.value)}
         />
         <span>–</span>
         <input
           type="number" inputMode="decimal" placeholder={`max ${ph(bounds?.max ?? null)}`}
-          value={value[1] ?? ""} onChange={(e) => onChange(1, e.target.value)}
+          value={show(value[1])} onChange={(e) => onChange(1, e.target.value)}
         />
       </div>
     </div>
   );
-}
-
-function aggLabel(agg: string): string {
-  return agg === "per_acre" ? "$/acre" : agg === "avg" ? "avg / well" : agg;
 }
 
 function pct(v: number | null | undefined, digits = 1): string {
@@ -528,19 +357,20 @@ function pct(v: number | null | undefined, digits = 1): string {
 }
 
 // BOX provenance + the method statement every BOX number carries (D59 condition 3,
-// D62/D63; water D107-D110). Sibling of the Novi caveat line.
+// D62/D63; water D107-D110; proximity D112-D116).
 function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
   if (!meta) return <div className="count">Loading BOX record run…</div>;
   const r = meta.run;
   const oil = meta.disclosure.filter((d) => d.stream === "oil");
   const d92 = meta.haircut_method.method != null;
   const tail = meta.haircut_method.tail?.oil;
-  const others = (meta.groups ?? []).filter((g) => g.group !== "WCA");
+  const groups = meta.groups ?? [];
+  const others = groups.filter((g) => g.group !== "WCA");
   const forms = (gs: typeof others) => gs.map((g) => g.formations.join(" / ")).join(", ");
-  const validated = (meta.groups ?? []).filter((g) => g.tier !== "provisional");
-  const provisional = (meta.groups ?? []).filter((g) => g.tier === "provisional");
-  const waterOk = (meta.groups ?? []).filter((g) => g.water?.tier === "validated").map((g) => g.formations.join(" / "));
-  const hasWater = (meta.groups ?? []).some((g) => g.water);
+  const validated = groups.filter((g) => g.tier !== "provisional");
+  const provisional = groups.filter((g) => g.tier === "provisional");
+  const waterOk = groups.filter((g) => g.water?.tier === "validated").map((g) => g.formations.join(" / "));
+  const hasWater = groups.some((g) => g.water);
   return (
     <div className="caveat" style={{ margin: "4px 0 10px" }}>
       <div>
@@ -558,13 +388,14 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
         (validated)
         {provisional.length > 0 && <>, plus <span className="box-prov-badge">PROVISIONAL</span> {forms(provisional)} (D105: raw
           box_v2, never out-of-time validated or failed its one-time holdout — counted apart from validated)</>}{" "}
-        inside their extents; every other PUD is shown as not covered, never zero. The table is WCA's; each pad workup
-        shows its own group's.
-        {meta.proximity && <> Then the PDP-proximity layer (D112–D116): multi-parent PUDs with drilled precedent carry an
-          oil factor, those without get no forecast — below.</>}
+        inside their extents; every other location is shown as not covered, never zero.
+      </div>
+      <div style={{ marginTop: 4 }}>
+        Offset depletion enters BOX two ways: through the named analogs, and for multi-parent PUDs as an explicit oil
+        haircut (D113). Unprecedented configurations get no forecast (D114).
       </div>
       <table className="hg-box-tbl">
-        <thead><tr><th>oil</th><th>measured bias</th><th>{d92 ? "D62 target" : "haircut"}</th>{d92 && <th>realised (D92)</th>}<th>held-out after</th></tr></thead>
+        <thead><tr><th>WCA oil</th><th>measured bias</th><th>{d92 ? "D62 target" : "haircut"}</th>{d92 && <th>realised (D92)</th>}<th>held-out after</th></tr></thead>
         <tbody>
           {oil.map((d) => (
             <tr key={d.horizon}>
@@ -579,7 +410,8 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
         Bias = actual ÷ forecast − 1 (negative = method forecast high).{" "}
         {d92
           ? `D92: the D62 targets are applied to the rate as a smooth factor (a + b·ln k, fitted per PUD), so a rate never rises after its peak; realised = median cumulative factor across covered PUDs. The rate factor holds at ×${tail?.toFixed(3) ?? "—"} after month 48 (50-yr EUR).`
-          : "The cum-48 factor holds for the 50-yr EUR (D62)."}
+          : "The cum-48 factor holds for the 50-yr EUR (D62)."}{" "}
+        Each pad workup shows its own bench group's figures.
       </div>
       {others.length > 0 && (
         <table className="hg-box-tbl">
@@ -612,79 +444,80 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
       {meta.stale && (
         <div style={{ color: "#991b1b", marginTop: 4 }}>
           The warehouse holds Novi {meta.intel_report_versions.join(", ")}; this run keys on {r.report_version} sticks —
-          BOX coverage reads as "no BOX row" until the quarterly BOX refresh.
+          locations read "not screened" until the quarterly BOX refresh.
         </div>
       )}
     </div>
   );
 }
 
-// BOX econ sibling of the Novi NPV caveat: Steven's box_econ screen with provenance.
-function BoxEconNote({ meta, deck, metric }: { meta: BoxMeta | null; deck: EconDeck | null; metric: string }) {
+// Steven's econ on the record run: provenance, or "not yet priced" (overhaul decision 2).
+function EconNote({ meta, priced, deck, econMetric }: {
+  meta: BoxMeta | null; priced: boolean; deck: string | null; econMetric: boolean;
+}) {
   if (!meta) return null;
-  if (meta.decks.length === 0) {
+  if (!priced) {
     return (
       <div className="count" style={{ margin: "0 0 8px" }}>
-        BOX econ: none yet — Steven has not priced run {meta.run.run_id} (box_econ.box_pud_econ is empty for it).
-        $ metrics appear here once he loads a deck.
+        Econ: not yet priced on BOX run {meta.run.run_id} — PV / IRR / breakeven metrics and bounds appear when Steven pushes it.
       </div>
     );
   }
-  if (!metric.startsWith("box_pv") || !deck) return null;
-  const d = meta.decks.find((x) => x.deck_id === deck.deck_id && x.assumption_set_id === deck.assumption_set_id);
+  const d = meta.decks.find((x) => x.deck_id === deck);
   return (
     <div className="count" style={{ margin: "0 0 8px" }}>
-      Steven's economics on BOX run {meta.run.run_id} volumes — a display-only screen, not computed here (D13).
-      Deck {deck.deck_id} / {deck.assumption_set_id}
-      {d ? ` · WTI ${d.wti ?? "—"} · HH ${d.hh ?? "—"} · downtime: ${d.downtime_basis} · built ${d.built_at?.slice(0, 10) ?? "—"}` : ""}.
-      Unpriced covered PUDs are counted, not zeroed.
+      {econMetric ? "" : "Econ bounds use this deck. "}
+      Steven's economics on BOX run {meta.run.run_id} volumes — display only, erebor computes no economics (D13).
+      {d ? ` ${deckLabel(d.deck_id, d.wti, d.hh)} · ${d.assumption_set_id} · downtime: ${d.downtime_basis} · built ${d.built_at?.slice(0, 10) ?? "—"}${d.pushed_at ? ` · pushed ${d.pushed_at.slice(0, 10)}` : ""}.` : ""}
+      {" "}Unpriced forecast locations are counted, not zeroed.
     </div>
   );
 }
 
-function CoverageSummary({ counts, valued, valuedByTier, total, metric, padsUnvalued }: {
-  counts: Record<string, number>; valued: number; valuedByTier: { validated: number; provisional: number } | null;
-  total: number; metric: string; padsUnvalued: number;
-}) {
-  const rows = Object.entries(COVERAGE_LABELS).filter(([k]) => (counts[k] ?? 0) > 0);
+function CoverageSummary({ hg }: { hg: HighgradeResult }) {
+  const counts = hg.coverage_counts;
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  const rows = MAP_COVERAGE_ORDER.filter((k) => (counts[k] ?? 0) > 0);
+  const vt = hg.valued_by_tier;
   // validated and provisional (D105) stay separate: the value carries both, so say how many of each
-  const split = valuedByTier
-    ? ` (${valuedByTier.validated.toLocaleString()} validated · ${valuedByTier.provisional.toLocaleString()} PROVISIONAL)`
-    : "";
+  const split = ` (${vt.validated.toLocaleString()} validated · ${vt.provisional.toLocaleString()} PROVISIONAL)`;
   const valueNote =
-    metric === "well_count" ? "Well count includes every screened PUD."
-    : metric.startsWith("box_pv") ? `${valued.toLocaleString()} priced PUDs${split} carry the value; the rest are excluded, not zeroed.`
-    : `${valued.toLocaleString()} forecast PUDs${split} carry the value; the rest are excluded, not zeroed.`;
+    hg.metric === "well_count" ? "The count includes every screened location."
+    : hg.econ ? `${hg.valued_count.toLocaleString()} priced locations${split} carry the value; the rest are excluded, not zeroed.`
+    : `${hg.valued_count.toLocaleString()} BOX-forecast locations${split} carry the value; the rest are excluded, not zeroed.`;
   return (
     <div style={{ margin: "6px 0 0" }}>
-      <div className="count" style={{ margin: 0 }}>BOX coverage of the {total.toLocaleString()} screened PUDs:</div>
+      <div className="count" style={{ margin: 0 }}>BOX coverage of the {total.toLocaleString()} screened locations:</div>
       <table className="hg-box-tbl">
         <tbody>
-          {rows.map(([k, label]) => (
+          {rows.map((k) => (
             <tr key={k} className={k === "covered" || k === "covered_provisional" ? "" : "nc"}>
-              <td>{k === "covered_provisional" ? <><span className="box-prov-badge">PROVISIONAL</span> {label}</> : label}</td>
+              <td>{k === "covered_provisional"
+                ? <><span className="box-prov-badge">PROVISIONAL</span> {MAP_COVERAGE_LABELS[k]}</>
+                : MAP_COVERAGE_LABELS[k] ?? k}</td>
               <td style={{ textAlign: "right" }}>{(counts[k] ?? 0).toLocaleString()}</td>
             </tr>
           ))}
         </tbody>
       </table>
       <div className="count" style={{ margin: "2px 0 0" }}>{valueNote}</div>
-      {padsUnvalued > 0 && (
+      {hg.pads_unvalued > 0 && (
         <div className="count" style={{ margin: "2px 0 0" }}>
-          {padsUnvalued.toLocaleString()} pads have no {metric.startsWith("box_pv") ? "priced" : "forecast"} PUD — drawn grey.
+          {hg.pads_unvalued.toLocaleString()} pads have no {hg.econ ? "priced" : "BOX-forecast"} location — drawn grey.
         </div>
       )}
     </div>
   );
 }
+
 // Screen-wide PDP-proximity outcomes (D112–D116): BOX's EUR already carries the oil factor.
-function ProximitySummary({ pc }: { pc: NonNullable<HighgradeResult["proximity_counts"]> }) {
+function ProximitySummary({ pc }: { pc: HighgradeResult["proximity_counts"] }) {
   const n = pc.as_is + pc.haircut + pc.no_precedent;
   if (n === 0) return null;
   const range = pc.factor_min != null && pc.factor_max != null ? ` (oil ×${pc.factor_min.toFixed(3)}–×${pc.factor_max.toFixed(3)})` : "";
   return (
     <div style={{ margin: "6px 0 0" }}>
-      <div className="count" style={{ margin: 0 }}>PDP proximity of the {n.toLocaleString()} PUDs BOX measured:</div>
+      <div className="count" style={{ margin: 0 }}>PDP proximity of the {n.toLocaleString()} locations BOX measured:</div>
       <table className="hg-box-tbl">
         <tbody>
           <tr><td>{PROX_GROUP_LABELS.as_is}</td><td style={{ textAlign: "right" }}>{pc.as_is.toLocaleString()}</td></tr>
@@ -694,17 +527,12 @@ function ProximitySummary({ pc }: { pc: NonNullable<HighgradeResult["proximity_c
       </table>
       <div className="count" style={{ margin: "2px 0 0" }}>
         BOX EUR already carries the oil factor (gas / water untouched). The haircut is validated with exception and,
-        measured on operator-selected infills, an upper bound for undrilled PUDs — see the BOX note above.
+        measured on operator-selected infills, an upper bound for undrilled locations — see the BOX note above.
       </div>
     </div>
   );
 }
 
-function fmt(v: number | null, money: boolean): string {
-  if (v == null || !Number.isFinite(v)) return "—";
-  if (money) return `$${Math.round(v).toLocaleString()}`;
-  return Math.round(v).toLocaleString();
-}
 function trim(v: number): string {
   return Math.abs(v) >= 1000 ? Math.round(v).toLocaleString() : v.toPrecision(3);
 }

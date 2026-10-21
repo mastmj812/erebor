@@ -1,9 +1,8 @@
-"""Highgrade forecast-source toggle (BOX plan step 8) — DB-free.
+"""BOX record-run module + pad workup (app.api.box) — DB-free.
 
-Pins the rules the BOX source must keep: a not-covered PUD is never a zero (its value
-is NULL and BOX range bounds never drop it), metrics are validated per source, per-ft
-pad values are lateral-weighted, and the workup's analog band follows the in-house
-percentile convention (P10 = HIGH).
+Pins the coverage classes, the disclosure / water / proximity blocks the workup shows,
+and the in-house percentile convention of the analog band (P10 = HIGH). The Highgrade
+screen itself (BOX-only since overhaul step 5) is pinned in test_highgrade_screen.py.
 """
 
 import datetime as dt
@@ -11,68 +10,8 @@ import re
 
 import numpy as np
 import pytest
-from fastapi import HTTPException
 
-from app.api import box, highgrade
-from app.api.highgrade import EconDeck, HighgradeFilters
-
-
-def test_novi_values_unchanged():
-    assert highgrade.row_value_sql("npv25", "novi", "il") == "il.npv25"
-    assert highgrade.row_value_sql("oil_eur", "novi", "w") == "w.oil_eur"
-    assert highgrade.value_expr("npv25", "sum", "novi") == "sum(il.npv25)"
-    assert highgrade.value_expr("well_count", "sum", "novi") == "count(*)"
-
-
-def test_box_values_come_from_box_streams():
-    assert highgrade.row_value_sql("oil_eur", "box", "il") == "bso.eur"
-    assert highgrade.row_value_sql("gas_eur", "box", "il") == "bsg.eur"
-    # Steven's $MM -> $, from the named-deck join only
-    assert highgrade.row_value_sql("box_pv10", "box", "il") == "(be.pv10_mm * 1e6)"
-
-
-@pytest.mark.parametrize("source,metric", [("box", "npv25"), ("box", "pv10"), ("novi", "box_pv10")])
-def test_metric_validated_per_source(source, metric):
-    with pytest.raises(HTTPException) as e:
-        highgrade.check_metric(source, metric, None)
-    assert e.value.status_code == 422
-    with pytest.raises(ValueError):
-        highgrade.row_value_sql(metric, source, "il")
-
-
-def test_box_econ_needs_a_named_deck():
-    with pytest.raises(HTTPException):
-        highgrade.check_metric("box", "box_pv10", None)
-    highgrade.check_metric("box", "box_pv10", EconDeck(deck_id="wti70", assumption_set_id="base"))
-
-
-def test_per_kft_is_lateral_weighted():
-    # pad value = sum(EUR) / sum(kft) over wells carrying both — not an avg of ratios
-    e = highgrade.value_expr("oil_eur_per_kft", "avg", "novi")
-    assert e.startswith("(sum(il.oil_eur) FILTER") and "/ NULLIF(sum((il.ll_ft / 1000.0)) FILTER" in e
-    # BOX recovers the lateral its stored eur_per_kft used, so a 1-well pad == stored value
-    eb = highgrade.value_expr("oil_eur_per_kft", "avg", "box")
-    assert "sum(bso.eur)" in eb and "(bso.eur / NULLIF(bso.eur_per_kft, 0))" in eb
-
-
-def test_n_valued_counts_only_wells_with_a_value():
-    assert highgrade.n_valued_expr("oil_eur", "box") == "count(bso.eur)"
-    assert highgrade.n_valued_expr("well_count", "box") == "count(*)"
-
-
-def test_box_range_never_drops_a_not_covered_pud():
-    f = HighgradeFilters(ranges={"box_oil_eur_per_kft": (60000.0, None), "rqs": (None, 0.5)})
-    clauses, params, _ = highgrade._build_filters(f, box=True)
-    assert ("(bp.coverage IS NULL OR bp.coverage NOT IN ('covered', 'covered_provisional') OR "
-            "bso.eur_per_kft >= :box_oil_eur_per_kft_lo)") in clauses
-    assert "(rqs <= :rqs_hi)" in clauses  # Novi attribute bounds keep their NULL-drop semantics
-    assert params == {"box_oil_eur_per_kft_lo": 60000.0, "rqs_hi": 0.5}
-
-
-def test_box_range_ignored_without_box_joins():
-    f = HighgradeFilters(ranges={"box_oil_eur": (1.0, 2.0)})
-    clauses, params, _ = highgrade._build_filters(f, box=False)
-    assert clauses == [] and params == {}
+from app.api import box
 
 
 def test_coverage_classes_cover_the_sql_60_values():
@@ -185,14 +124,6 @@ def test_group_of_and_pre_9c_runs_have_one_wca_group():
     assert [b["group"] for b in blocks] == ["WCA"] and blocks[0]["disclosure"][0]["haircut"] == 0.9
 
 
-def test_n_valued_splits_by_tier():
-    assert highgrade.n_valued_expr("oil_eur", "box", coverage="covered") == "count(bso.eur) FILTER (WHERE bp.coverage = 'covered')"
-    assert highgrade.n_valued_expr("well_count", "box", coverage="covered_provisional") ==         "count(*) FILTER (WHERE bp.coverage = 'covered_provisional')"
-    assert "AND bp.coverage = 'covered'" in highgrade.n_valued_expr("oil_eur_per_kft", "box", coverage="covered")
-    assert box.TIER_OF == {"covered": "validated", "covered_provisional": "provisional"}
-    assert set(box.FORECAST_CLASSES) <= set(box.COVERAGE_CLASSES)
-
-
 def _step15_disc(tier, holdout, lead_scope, scopes):
     lines = [{"label": "BS3_S", "scope": sc, "stream": s, "horizon": h, "packages": 100, "bias": -0.03,
               "range_95": [-0.07, 0.01], "cutoffs": 6} for sc in scopes for s in box.STREAMS for h in (12, 24, 36)]
@@ -236,14 +167,8 @@ def test_step15_groups_are_keyed_by_bench_and_carry_their_tier():
     assert ava["latest_vintage_text"].startswith("latest vintage")
 
 
-def test_water_metrics_are_box_only_and_read_the_water_stream():
-    assert highgrade.row_value_sql("water_eur", "box", "il") == "bsw.eur"
-    assert "bsw.eur" in highgrade.row_value_sql("water_eur_per_kft", "box", "il")
-    for m in ("water_eur", "water_eur_per_kft"):
-        assert m in highgrade.METRICS_BY_SOURCE["box"]
-        assert m not in highgrade.METRICS_BY_SOURCE["novi"]  # Novi TX water is a fixed gas allocation
+def test_box_joins_read_the_water_stream():
     assert "bsw" in box.box_joins("il") and "stream = 'water'" in box.box_joins("il")
-    assert highgrade.BOX_NUMERIC["box_water_eur_per_kft"] == "bsw.eur_per_kft"
 
 
 def test_water_block_shows_every_line_and_the_caveat():
@@ -279,25 +204,6 @@ def test_no_precedent_is_a_searched_class_without_a_forecast():
 def test_box_joins_read_the_proximity_record_without_multiplying_rows():
     j = box.box_joins("il")
     assert "LEFT JOIN box.pud_proximity bpp ON bpp.run_id = bp.run_id AND bpp.location_id = bp.location_id" in j
-
-
-def test_prox_filter_is_an_explicit_box_screen():
-    f = HighgradeFilters(prox=["haircut", "no_precedent"])
-    clauses, params, expanding = highgrade._build_filters(f, box=True)
-    assert clauses == ["bpp.outcome IN :prox"]
-    assert params == {"prox": ["haircut", "no_forecast_precedent", "no_forecast_package"]}
-    assert [b.key for b in expanding] == ["prox"]
-    assert highgrade._build_filters(f, box=False) == ([], {}, [])  # needs the BOX joins
-    with pytest.raises(ValueError):
-        HighgradeFilters(prox=["bogus"])
-
-
-def test_prox_factor_bound_keeps_not_covered_puds():
-    f = HighgradeFilters(ranges={"box_prox_factor": (None, 0.9)})
-    clauses, params, _ = highgrade._build_filters(f, box=True)
-    assert clauses == ["(bp.coverage IS NULL OR bp.coverage NOT IN ('covered', 'covered_provisional') OR "
-                       "bso.prox_factor <= :box_prox_factor_hi)"]
-    assert params == {"box_prox_factor_hi": 0.9}
 
 
 def _prox_jsonb():

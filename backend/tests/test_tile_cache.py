@@ -143,7 +143,9 @@ def test_endpoint_serves_gzip_from_cache(monkeypatch):
         assert r1.headers["content-encoding"] == "gzip" and r1.content == raw   # httpx decodes it
         r2 = client.get("/api/tiles/7/27/52.mvt?basin=delaware", headers={"Accept-Encoding": "identity"})
         assert r2.headers["x-tile-cache"] == "hit" and "content-encoding" not in r2.headers
-        assert r2.content == raw and r2.headers["vary"] == "Accept-Encoding"
+        # newer Starlette's CORS middleware appends ", Origin" to Vary — only ours is pinned
+        vary = [v.strip() for v in r2.headers["vary"].split(",")]
+        assert r2.content == raw and "Accept-Encoding" in vary
         assert len(calls) == 1 and calls[0]["box_run"] == 14 and calls[0]["econ_deck"] is None
         r3 = client.get("/api/tiles/7/26/52.mvt?basin=delaware")
         assert r3.status_code == 204 and r3.content == b""

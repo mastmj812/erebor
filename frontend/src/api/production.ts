@@ -1,17 +1,22 @@
-import type { ProductionAggregate, SelectionRule, WellProduction } from "../store";
+import type { BoxProfile, SelectionRule, WellProduction } from "../store";
 
-export async function fetchProductionAggregate(
+// BOX AOI profile: per bench, the record run's monthly volumes of the forecast-carrying
+// locations in the AOI (field sum + cohort mean per 1,000 ft). Culls by stick_id; the bench
+// include filter and the tier toggles mirror the map.
+export async function fetchBoxProfile(
   aoi: GeoJSON.Geometry,
   basin: string,
   rule: SelectionRule,
-  exclude: string[] = [],
-): Promise<ProductionAggregate> {
-  const r = await fetch("/api/production/aggregate", {
+  excludeSticks: number[] = [],
+  formations: string[] = [],
+  tiers: ("validated" | "provisional")[] = ["validated", "provisional"],
+): Promise<BoxProfile> {
+  const r = await fetch("/api/production/box_profile", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ aoi, basin, rule, exclude }),
+    body: JSON.stringify({ aoi, basin, rule, exclude_sticks: excludeSticks, formations, tiers }),
   });
-  if (!r.ok) throw new Error(`aggregate failed: ${r.status}`);
+  if (!r.ok) throw new Error(`BOX profile failed: ${r.status}`);
   return r.json();
 }
 

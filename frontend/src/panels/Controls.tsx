@@ -115,7 +115,7 @@ export function Controls() {
     if (!aoi) return;
     try {
       setBusy("Re-selecting…");
-      const result = await selectByPolygon(aoi, basin, r);
+      const result = await selectByPolygon(aoi, basin, r, useMapStore.getState().mapDeck);
       setSelection(result, aoi);
     } catch (e) {
       console.error(e);

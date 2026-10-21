@@ -184,6 +184,55 @@ def tile_columns(a: str, econ_metric: str | None) -> str:
     return ", ".join(cols)
 
 
+def kind_sql(a: str) -> str:
+    """PDP vs a Novi stick location. Novi's own PUD / RES tag is never shipped to the
+    client (Michael 2026-10-21: only the stick geometry comes from Novi)."""
+    return f"CASE WHEN {a}.category = 'PDP' THEN 'PDP' ELSE 'LOCATION' END"
+
+
+def selection_columns(a: str, with_econ: bool) -> str:
+    """Per-stick BOX values for an AOI selection / gunbarrel (select-list fragment over
+    the box_joins / econ_join aliases). Units as stored: EUR bbl / mcf (raw 50-yr technical
+    integral incl. the bench haircut and the D113 proximity factor), eur_per_kft per
+    1,000 ft, `lat_basis_kft` = the lateral the stored per-kft used (eur / eur_per_kft), so
+    a bench's per-ft is lateral-weighted: sum(eur) / sum(lat_basis). Econ = Steven's
+    columns for the record run's case, $MM / % / $ per bbl, display only (D13). A location
+    without a BOX forecast carries NULLs — never a zero."""
+    cols = [
+        f"{kind_sql(a)} AS kind",
+        f"{map_coverage_sql(a)} AS coverage",
+        "bsw.tier AS water_tier",
+        *(f"bs{s[0]}.eur AS {s}_eur" for s in EUR_STREAMS),
+        *(f"bs{s[0]}.eur_per_kft AS {s}_eur_per_kft" for s in EUR_STREAMS),
+        "bso.eur / NULLIF(bso.eur_per_kft, 0) AS lat_basis_kft",
+        "bpp.outcome AS prox_outcome",
+        "CASE WHEN bso.prox_factor < 1 THEN bso.prox_factor END AS prox_factor",
+    ]
+    if with_econ:
+        cols += [f"be.{m['col']} AS econ_{k}" for k, m in ECON_METRICS.items()]
+        cols.append("be.unpriced_reason AS econ_unpriced_reason")
+    return ", ".join(cols)
+
+
+def econ_provenance(session: Session, run_id: int, case: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Provenance of the econ case shown (D13: displayed with provenance): deck, assumption
+    set, prices, downtime basis, built / pushed. Cached with the cases."""
+    if case is None:
+        return None
+
+    def q() -> dict[str, Any]:
+        r = session.execute(text(
+            "SELECT min(wti) AS wti, min(hh) AS hh, min(downtime_basis) AS downtime_basis, "
+            "max(built_at) AS built_at, max(pushed_at) AS pushed_at, max(pushed_by) AS pushed_by, count(*) AS n_priced "
+            "FROM box_econ.box_pud_econ WHERE run_id = :r AND deck_id = :d AND assumption_set_id = :a"),
+            {"r": run_id, "d": case["deck_id"], "a": case["assumption_set_id"]}).mappings().one()
+        out = {"deck_id": case["deck_id"], "assumption_set_id": case["assumption_set_id"], **dict(r)}
+        for k in ("built_at", "pushed_at"):
+            out[k] = out[k].isoformat() if out[k] is not None else None
+        return out
+    return _cached(("econ_prov", run_id, case["deck_id"], case["assumption_set_id"]), q)
+
+
 def record_run(session: Session) -> dict[str, Any]:
     """The one BOX run marked is_record (sql/60 allows at most one)."""
     row = session.execute(

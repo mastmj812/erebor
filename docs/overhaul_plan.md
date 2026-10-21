@@ -8,8 +8,9 @@
 | 1 Warehouse 3Q26 pads → `intel_pad_geom` v3 | **applied live 2026-10-21** (engineering_db #173 + data dictionary #174): 17,526 pads, all 42,475 BOX PUDs inside Novi polygons | engineering_db `sql/66`, `sql/67` |
 | 2 Remove export; Accuracy = Novi reference; pin pad vintage | merged (erebor #18) | erebor |
 | 3 Map tab BOX-first | merged (erebor #19); low-zoom tile cache + binary fetch merged (erebor #20) | erebor |
-| 4–6 | not started | |
-| BOX universe (D117, engineering_db) | step 1 decision (#175) + step 2 reconciliation of every Novi stick **applied live 2026-10-21** (#177, #178): realized RES now read `realized` on the map. BOX step 3 (rehearsal adding ~6,200 in-extent RES locations) waits on Michael's go | engineering_db `sql/68`, `docs/box/universe-2026-10-21/` |
+| 4 Lasso selection on BOX | this PR | erebor |
+| 5–6 | not started | |
+| BOX universe (D117, engineering_db) | step 1 decision (#175) + step 2 reconciliation of every Novi stick **applied live 2026-10-21** (#177, #178): realized RES now read `realized` on the map. **Step 3 PARKED (Michael 2026-10-21)** until the tops/tag and provisional-bench work settles. It resumes as an incremental run 15 (5,946 of 6,225 in-extent RES would forecast, read-only pre-measure); erebor stays on run 14 meanwhile | engineering_db `sql/68`, `docs/box/universe-2026-10-21/` |
 | 7 BOX hindcast | deferred | |
 
 
@@ -259,6 +260,35 @@ exists and how to verify it, then wait for Michael's go.
   - The mean `pud_forecast_month` volume per 1,000 ft, by bench, from covered + provisional PUDs.
   - Provisional is drawn dashed and the profile is labeled "mean", never P50.
 - **Gate:** stop.
+
+**As built (2026-10-21):**
+- **`/api/select`** returns BOX values per stick, read through `box_locations.selection_columns`:
+  - `kind` PDP | LOCATION and `coverage`;
+  - per-stream EUR and per-kft, plus `lat_basis_kft`;
+  - proximity;
+  - all nine econ columns for ONE deck (`deck`, default WTI 70 / HH 3), with `econ` provenance.
+  - No Novi tag, forecast or NPV is read.
+  - A deck change re-fetches the same AOI (`replaceSelectionData` keeps the culls).
+- **ResultsPanel:**
+  - forecast locations, validated vs PROVISIONAL, and PDP counts;
+  - locations with no BOX forecast, counted by class and never valued;
+  - a per-bench table: locs, oil MMbbl, lateral-weighted bbl/ft, gas Bcf, and econ (PV / capex summed,
+    IRR / breakeven as the median);
+  - the econ metric and deck pickers shared with the map, plus the provenance line.
+  - The rollup mirrors the map's bench, tier and proximity filters.
+- **`/production/box_profile`** replaces `/aggregate`:
+  - the field sum and the cohort mean per 1,000 ft, per bench and stream, over 600 months;
+  - the months sum to the stored EUR exactly (ratio 1.00000 on every bench in the smoke AOI);
+  - 6.8 s for a 523-location AOI.
+- **The single-well Novi forecast stays** as the BOX-vs-Novi comparison curve. This is Novi's one remaining
+  forecast role.
+- **Gunbarrel:**
+  - BOX coverage, per-ft EUR and an optional econ value per location;
+  - colors: BOX EUR/ft, econ, coverage, bench, bench source (the econ / EUR ramp is scaled to the AOI's
+    P5–P95);
+  - same visibility as the map;
+  - Novi recon / depletion / support screens and colors removed.
+- **Store:** `discountRate`, `valueMetric`, `remainingOnly`, `excludeDepleted` and their setters are retired.
 
 ### Step 5 — Highgrade, BOX-only
 - Remove the source toggle (`hgSource`), the Novi metrics, the Novi NPV header caveat, the tier chips, the

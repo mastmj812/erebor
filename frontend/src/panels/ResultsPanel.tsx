@@ -1,159 +1,214 @@
+import { useEffect } from "react";
+
+import {
+  ECON_METRICS,
+  MAP_COVERAGE_LABELS,
+  TIER_OF_COVERAGE,
+  deckLabel,
+  econMetricInfo,
+  type EconMetric,
+} from "../api/boxMap";
+import { PROX_OUTCOME_GROUP } from "../api/highgrade";
+import { selectByPolygon } from "../api/select";
 import { colorForBlueox } from "../map/formations";
-import { useMapStore, type DiscountRate, type SelectionStick } from "../store";
+import { useMapStore, type SelectionStick } from "../store";
 
-const CAT_ORDER = ["PDP", "PUD", "RES"] as const;
-const CAT_LABEL: Record<string, string> = { PDP: "PDP", PUD: "BASE_CASE", RES: "EMERGING" };
-const RATES: DiscountRate[] = [5, 10, 15, 20, 25];
+// AOI rollup on the BOX record run (overhaul step 4). Per bench: forecast-carrying
+// locations (validated / PROVISIONAL), EUR totals, lateral-weighted EUR per ft, and
+// Steven's econ for the chosen deck — summed (PV, capex) or as a median (IRR, breakeven),
+// display only (D13): erebor computes no economics. Locations without a BOX forecast are
+// counted by class, never valued. Novi supplies only geometry: no Novi tags or values here.
 
-function fmtUSD(v: number): string {
-  const a = Math.abs(v);
-  if (a >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
-  if (a >= 1e6) return `$${(v / 1e6).toFixed(1)}MM`;
-  if (a >= 1e3) return `$${(v / 1e3).toFixed(0)}K`;
-  return `$${v.toFixed(0)}`;
-}
-const fmtInt = (v: number) => Math.round(v).toLocaleString();
+type BenchRow = {
+  bench: string; n: number; nV: number; nP: number;
+  oil: number; gas: number; water: number; latKft: number; oilForFt: number;
+  econ: number[]; unpriced: number;
+};
+
+const fmt = (v: number, d = 0) => v.toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d });
+const median = (xs: number[]) => {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+const isSummed = (m: EconMetric) => m.startsWith("pv") || m === "capex";
 
 export function ResultsPanel() {
   const sel = useMapStore((s) => s.selection);
+  const aoi = useMapStore((s) => s.aoi);
+  const rule = useMapStore((s) => s.selectionRule);
+  const basin = useMapStore((s) => s.basin);
   const excluded = useMapStore((s) => s.excludedFormations);
   const formationFilter = useMapStore((s) => s.formationFilter);
   const toggleFormation = useMapStore((s) => s.toggleFormation);
   const excludedSticks = useMapStore((s) => s.excludedSticks);
   const clearCulls = useMapStore((s) => s.clearCulls);
-  const remainingOnly = useMapStore((s) => s.remainingOnly);
-  const excludeDepleted = useMapStore((s) => s.excludeDepleted);
-  const rate = useMapStore((s) => s.discountRate);
-  const setDiscountRate = useMapStore((s) => s.setDiscountRate);
-  const metric = useMapStore((s) => s.valueMetric);
-  const setValueMetric = useMapStore((s) => s.setValueMetric);
-  const basin = useMapStore((s) => s.basin);
+  const tierFilter = useMapStore((s) => s.tierFilter);
+  const proxFilter = useMapStore((s) => s.proxFilter);
+  const econMetric = useMapStore((s) => s.econMetric);
+  const setEconMetric = useMapStore((s) => s.setEconMetric);
+  const mapDeck = useMapStore((s) => s.mapDeck);
+  const setMapDeck = useMapStore((s) => s.setMapDeck);
+  const boxMeta = useMapStore((s) => s.boxMeta);
+  const replaceSelectionData = useMapStore((s) => s.replaceSelectionData);
+
+  // The selection carries econ for ONE deck; a deck change re-fetches the same AOI (culls kept).
+  const wantDeck = mapDeck ?? boxMeta?.default_deck ?? null;
+  useEffect(() => {
+    if (!sel || !aoi || !sel.econ || !wantDeck || sel.econ.deck_id === wantDeck) return;
+    let alive = true;
+    selectByPolygon(aoi, basin, rule, wantDeck)
+      .then((r) => { if (alive) replaceSelectionData(r); })
+      .catch((e) => console.error("re-select for deck failed", e));
+    return () => { alive = false; };
+  }, [sel, aoi, basin, rule, wantDeck, replaceSelectionData]);
+
   if (!sel) return null;
 
-  const valKey = `${metric}${rate}` as keyof SelectionStick;
   const exForm = new Set(excluded);
   const exStick = new Set(excludedSticks);
-  const formInc = new Set(formationFilter); // Controls formation picker; empty = all
+  const formInc = new Set(formationFilter);
+  const econKey = `econ_${econMetric}` as keyof SelectionStick;
+  const info = econMetricInfo(econMetric);
+  const priced = sel.econ != null;
 
-  const cats: Record<string, { count: number; value: number }> = {
-    PDP: { count: 0, value: 0 }, PUD: { count: 0, value: 0 }, RES: { count: 0, value: 0 },
-  };
-  const catForms: Record<string, Map<string, { count: number; value: number }>> = {
-    PDP: new Map(), PUD: new Map(), RES: new Map(),
-  };
-  // Mirror the map's display filters so the value rollup never counts wells you
-  // can't see: "Remaining PUDs only" drops anything reconciliation flagged as
-  // already realized (keep remaining PUDs + producers/RES with null recon);
-  // "Exclude depleted" drops Tier-4 PUDs.
-  const passesMapFilter = (s: SelectionStick) =>
-    (!remainingOnly || s.recon_status == null || s.recon_status === "remaining_pud") &&
-    (!excludeDepleted || s.deplet_t !== "Tier-4");
-
-  let culled = 0;
-  let filtered = 0;
-  const pads = new Set<string>();
+  let culled = 0, pdp = 0, filtered = 0;
+  const notCovered: Record<string, number> = {};
+  const rows = new Map<string, BenchRow>();
   for (const s of sel.sticks) {
-    if (exStick.has(s.stick_id)) { culled++; continue; } // culled -> contributes to nothing
-    if (formInc.size && !formInc.has(s.formation_blueox ?? "(unmapped)")) { filtered++; continue; } // formation picker
-    if (!passesMapFilter(s)) { filtered++; continue; }   // hidden by a map filter
-    const v = Number(s[valKey]);
-    const fkey = s.formation_blueox ?? "(unmapped)"; // Blue Ox code is the rollup dimension
-    const fm = catForms[s.category].get(fkey) ?? { count: 0, value: 0 };
-    fm.count++; fm.value += v;
-    catForms[s.category].set(fkey, fm);
-    if (!exForm.has(fkey)) {
-      cats[s.category].count++;
-      cats[s.category].value += v;
-      if (s.pad_name) pads.add(`${s.category}|${s.pad_name}`);
+    if (exStick.has(s.stick_id)) { culled++; continue; }
+    const bench = s.formation_blueox ?? "(unmapped)";
+    if (formInc.size && !formInc.has(bench)) { filtered++; continue; }
+    if (s.kind === "PDP") { pdp++; continue; }
+    const tier = s.coverage ? TIER_OF_COVERAGE[s.coverage] : undefined;
+    if (!tier) {
+      const k = s.coverage ?? "not_screened";
+      notCovered[k] = (notCovered[k] ?? 0) + 1;
+      continue;
     }
+    if (!tierFilter.includes(tier)) { filtered++; continue; }
+    if (proxFilter.length && !(s.prox_outcome && proxFilter.includes(PROX_OUTCOME_GROUP[s.prox_outcome]))) { filtered++; continue; }
+    const r = rows.get(bench) ?? { bench, n: 0, nV: 0, nP: 0, oil: 0, gas: 0, water: 0, latKft: 0, oilForFt: 0, econ: [], unpriced: 0 };
+    r.n++;
+    if (tier === "validated") r.nV++; else r.nP++;
+    r.oil += s.oil_eur ?? 0;
+    r.gas += s.gas_eur ?? 0;
+    r.water += s.water_eur ?? 0;
+    if (s.lat_basis_kft && s.oil_eur != null) { r.latKft += s.lat_basis_kft; r.oilForFt += s.oil_eur; }
+    const ev = s[econKey];
+    if (typeof ev === "number") r.econ.push(ev); else if (priced) r.unpriced++;
+    rows.set(bench, r);
   }
-  const total = cats.PDP.value + cats.PUD.value + cats.RES.value;
-  const futureLoc = cats.PUD.count + cats.RES.count;
-  const includedCount = cats.PDP.count + cats.PUD.count + cats.RES.count;
-  const deck = sel.price_deck;
-  const metricLabel = metric.toUpperCase();
+  const list = [...rows.values()].sort((a, b) => b.n - a.n);
+  const inc = list.filter((r) => !exForm.has(r.bench));
+  const tot = inc.reduce((t, r) => ({
+    n: t.n + r.n, nV: t.nV + r.nV, nP: t.nP + r.nP, oil: t.oil + r.oil, gas: t.gas + r.gas, water: t.water + r.water,
+    latKft: t.latKft + r.latKft, oilForFt: t.oilForFt + r.oilForFt, econ: t.econ.concat(r.econ), unpriced: t.unpriced + r.unpriced,
+  }), { n: 0, nV: 0, nP: 0, oil: 0, gas: 0, water: 0, latKft: 0, oilForFt: 0, econ: [] as number[], unpriced: 0 });
+  const econCell = (xs: number[]) => {
+    if (!priced || !xs.length) return "—";
+    return fmt(isSummed(econMetric) ? xs.reduce((a, b) => a + b, 0) : median(xs)!, 1);
+  };
+  const perFt = (oil: number, lat: number) => (lat > 0 ? fmt(oil / (lat * 1000), 1) : "—");
+  const ncTotal = Object.values(notCovered).reduce((a, b) => a + b, 0);
+  const decks = [...new Map((boxMeta?.decks ?? []).map((d) => [d.deck_id, d])).values()];
 
   return (
     <div className="panel results">
-      <h3>Selection ({sel.rule})</h3>
+      <h3>Selection ({sel.rule}) · BOX run {sel.box_run.run_id}</h3>
       <div className="count">
-        {includedCount.toLocaleString()} of {sel.count.toLocaleString()} sticks in rollup
-        {excluded.length ? ` · ${excluded.length} formation${excluded.length > 1 ? "s" : ""} off` : ""}
-        {filtered > 0 ? ` · ${filtered.toLocaleString()} filtered (formation/remaining/depletion)` : ""}
+        {fmt(tot.n)} BOX forecast locations ({fmt(tot.nV)} validated · {fmt(tot.nP)} PROVISIONAL) · {fmt(pdp)} PDP
+        {filtered > 0 ? ` · ${fmt(filtered)} filtered (bench / tier / proximity)` : ""}
         {sel.truncated ? " · capped 20k" : ""}
       </div>
       {culled > 0 && (
         <div className="count cull-line">
-          ✂ {culled} well{culled > 1 ? "s" : ""} culled
+          ✂ {culled} culled
           <button className="link" onClick={() => clearCulls()}>clear culls</button>
         </div>
       )}
+      {ncTotal > 0 && (
+        <div className="count">
+          No BOX forecast (counted, never valued): {fmt(ncTotal)} —{" "}
+          {Object.entries(notCovered).sort((a, b) => b[1] - a[1])
+            .map(([k, n]) => `${fmt(n)} ${MAP_COVERAGE_LABELS[k] ?? k}`).join(" · ")}
+        </div>
+      )}
 
-      <h3 style={{ marginTop: 8 }}>Value basis</h3>
-      <div className="seg">
-        <button className={metric === "npv" ? "active" : ""} onClick={() => setValueMetric("npv")}>NPV</button>
-        <button className={metric === "pv" ? "active" : ""} onClick={() => setValueMetric("pv")}>PV</button>
-      </div>
-      <div className="seg">
-        {RATES.map((r) => (
-          <button key={r} className={rate === r ? "active" : ""} onClick={() => setDiscountRate(r)}>{r}%</button>
-        ))}
-      </div>
-
-      <h3 style={{ marginTop: 8 }}>{metricLabel}{rate} rollup</h3>
-      <table className="val-table">
+      <h3 style={{ marginTop: 8 }}>By bench (include / exclude)</h3>
+      <table className="val-table bench-table">
+        <thead>
+          <tr>
+            <th />
+            <th>Bench</th>
+            <th className="num">Locs</th>
+            <th className="num" title="oil EUR, MMbbl (raw 50-yr technical)">Oil MMbbl</th>
+            <th className="num" title="lateral-weighted oil EUR per foot">bbl/ft</th>
+            <th className="num" title="gas EUR, Bcf">Gas Bcf</th>
+            <th className="num" title={`${info.label} — ${isSummed(econMetric) ? "sum" : "median"}, ${info.unit}`}>
+              {info.label.split(" ")[0]}{isSummed(econMetric) ? "" : " P50"}
+            </th>
+          </tr>
+        </thead>
         <tbody>
-          {CAT_ORDER.map((c) => (
-            <tr key={c}>
-              <td>{CAT_LABEL[c]}</td>
-              <td className="num">{fmtInt(cats[c].count)}</td>
-              <td className="num">{fmtUSD(cats[c].value)}</td>
-            </tr>
-          ))}
+          {list.map((r) => {
+            const on = !exForm.has(r.bench);
+            return (
+              <tr key={r.bench} style={{ opacity: on ? 1 : 0.4 }}>
+                <td><input type="checkbox" checked={on} onChange={() => toggleFormation(r.bench)} /></td>
+                <td>
+                  <span className="swatch" style={{ background: colorForBlueox(basin, r.bench), width: 8, height: 8, marginRight: 4 }} />
+                  {r.bench}{r.nP > 0 && r.nV === 0 ? <span className="prov-mark" title="PROVISIONAL tier (D105)"> P</span> : null}
+                </td>
+                <td className="num" title={`${r.nV} validated · ${r.nP} provisional`}>{fmt(r.n)}</td>
+                <td className="num">{fmt(r.oil / 1e6, 2)}</td>
+                <td className="num">{perFt(r.oilForFt, r.latKft)}</td>
+                <td className="num">{fmt(r.gas / 1e6, 2)}</td>
+                <td className="num">{econCell(r.econ)}</td>
+              </tr>
+            );
+          })}
           <tr className="total">
+            <td />
             <td>Total</td>
-            <td className="num">{fmtInt(includedCount)}</td>
-            <td className="num">{fmtUSD(total)}</td>
+            <td className="num">{fmt(tot.n)}</td>
+            <td className="num">{fmt(tot.oil / 1e6, 2)}</td>
+            <td className="num">{perFt(tot.oilForFt, tot.latKft)}</td>
+            <td className="num">{fmt(tot.gas / 1e6, 2)}</td>
+            <td className="num">{econCell(tot.econ)}</td>
           </tr>
         </tbody>
       </table>
-      <div className="count">{fmtInt(futureLoc)} future locations (BASE_CASE + EMERGING) · {pads.size} pads</div>
-
-      <h3 style={{ marginTop: 10 }}>Formations (include / exclude)</h3>
-      {CAT_ORDER.map((c) => {
-        const rows = [...catForms[c].entries()].sort((a, b) => b[1].count - a[1].count);
-        if (!rows.length) return null;
-        return (
-          <div key={c} className="fcat-block">
-            <div className="fcat">{CAT_LABEL[c]}</div>
-            <div className="byform">
-              {rows.map(([f, v]) => {
-                const on = !exForm.has(f);
-                return (
-                  <label className="item ffilter" key={f} style={{ opacity: on ? 1 : 0.4 }}>
-                    <input type="checkbox" checked={on} onChange={() => toggleFormation(f)} />
-                    <span className="swatch" style={{ background: colorForBlueox(basin, f) }} />
-                    <span className="bf-name">{f}</span>
-                    <span className="bf-n">{fmtInt(v.count)}</span>
-                    <span className="bf-npv">{fmtUSD(v.value)}</span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })}
-      <div className="count">Cull individual wells by clicking markers in the Gunbarrel tab.</div>
-
-      <h3 style={{ marginTop: 10 }}>Assumptions</h3>
       <div className="count">
-        Novi flat deck: WTI ${deck.wti_price} (−${deck.wti_diff}) · HH ${deck.hh_price} (−${deck.hh_diff}) · NGL ${deck.ngl_price}
-        {deck.distinct_decks > 1 ? ` · ${deck.distinct_decks} decks` : ""}
+        Water {fmt(tot.water / 1e6, 2)} MMbbl. P = PROVISIONAL bench (D105). EUR = raw 50-yr technical integral incl. the
+        bench haircut and the multi-parent oil factor (D113); per-ft is lateral-weighted.
       </div>
+
+      <h3 style={{ marginTop: 8 }}>Econ (Steven, display only)</h3>
+      <div className="row">
+        <select value={econMetric} onChange={(e) => setEconMetric(e.target.value as EconMetric)} style={{ flex: 1, fontSize: 12 }}>
+          {ECON_METRICS.map((m) => <option key={m.value} value={m.value}>{m.label} ({m.unit})</option>)}
+        </select>
+        <select value={wantDeck ?? ""} onChange={(e) => setMapDeck(e.target.value || null)} disabled={!priced}
+          style={{ flex: 1, fontSize: 12 }}>
+          {decks.map((d) => <option key={d.deck_id} value={d.deck_id}>{deckLabel(d.deck_id, d.wti, d.hh)}</option>)}
+        </select>
+      </div>
+      {priced ? (
+        <div className="count">
+          {info.label}: {isSummed(econMetric) ? "sum" : "median"} over priced locations, {info.unit}
+          {tot.unpriced > 0 ? ` · ${fmt(tot.unpriced)} forecast locations unpriced` : ""}.
+          {" "}{deckLabel(sel.econ!.deck_id, sel.econ!.wti, sel.econ!.hh)} · assumption set {sel.econ!.assumption_set_id}
+          {sel.econ!.downtime_basis ? ` · downtime ${sel.econ!.downtime_basis}` : ""}
+          {sel.econ!.pushed_at ? ` · pushed ${sel.econ!.pushed_at.slice(0, 10)}${sel.econ!.pushed_by ? ` by ${sel.econ!.pushed_by}` : ""}` : ""}.
+        </div>
+      ) : (
+        <div className="caveat">Not yet priced on BOX run {sel.box_run.run_id} — econ appears when Steven pushes it.</div>
+      )}
       <div className="caveat">
-        Screening number from Novi’s economics on one flat deck — not the authoritative valuation.
-        Convention: value PDP at <b>PV</b> (capex sunk), BASE_CASE/EMERGING at <b>NPV</b> (net of drilling
-        cost).
+        Econ is Steven&rsquo;s (box_econ), shown as a screen with its provenance — erebor computes no economics (D13).
+        BOX run {sel.box_run.run_id}, production through {sel.box_run.data_through}.
       </div>
     </div>
   );

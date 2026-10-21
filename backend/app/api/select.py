@@ -1,9 +1,16 @@
-"""AOI selection: return every stick inside a drawn polygon, grouped by
-category / formation / pad.
+"""AOI selection: every stick inside a drawn polygon with its BOX record-run values.
 
 Reads curated.erebor_locations — the SAME spine the map tiles render — so the
-selection matches what's on screen: PUD/RES are Novi inventory, PDP is producing
-curated horizontals (stick_id = -(api10), Novi econ columns NULL).
+selection matches what's on screen, with the BOX projection joined through
+app.box_locations (the one module that reads BOX attributes). Novi supplies only
+the stick geometry (Michael 2026-10-21): `kind` is PDP | LOCATION, never Novi's
+PUD / RES tag, and no Novi forecast or econ value is returned. A location without a
+BOX forecast carries its coverage class and NULL values — never a zero.
+
+Econ = Steven's box_econ.box_pud_econ for the RECORD run's case (`deck`, default
+WTI 70 / HH 3), display only with provenance (D13); NULL everywhere when the record
+run is not priced. erebor computes no economics: the panel sums / medians what
+Steven pushed.
 
 Selection rule (toggleable — materially changes counts on depth-limited deals):
   * intersects : the lateral LINESTRING intersects the AOI  (ST_Intersects)
@@ -26,12 +33,22 @@ from typing import Any, Literal
 
 import shapefile  # pyshp
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pyproj import CRS, Transformer
 from shapely.geometry import mapping as shapely_mapping
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.box_locations import (
+    ECON_METRICS,
+    EUR_STREAMS,
+    box_joins,
+    econ_case,
+    econ_join,
+    econ_provenance,
+    record_run,
+    selection_columns,
+)
 from app.db import get_session
 from app.gpkg_reader import pick_label, read_gpkg, sniff_format, split_roles
 
@@ -45,65 +62,59 @@ _RULE_PREDICATE = {
     "midpoint": "ST_Contains(aoi.g, ST_LineInterpolatePoint(w.wellstick_geom, 0.5))",
 }
 
+# Per-stick keys returned (the frontend rolls up from these so culls / bench filters are
+# instant). Econ keys only when the record run is priced.
+STICK_KEYS: tuple[str, ...] = (
+    "stick_id", "unique_id", "kind", "formation_blueox", "pad_name", "ll_ft",
+    "coverage", "water_tier",
+    *(f"{s}_eur" for s in EUR_STREAMS), *(f"{s}_eur_per_kft" for s in EUR_STREAMS),
+    "lat_basis_kft", "prox_outcome", "prox_factor",
+)
+ECON_KEYS: tuple[str, ...] = (*(f"econ_{k}" for k in ECON_METRICS), "econ_unpriced_reason")
+
+
+def selection_sql(rule: Rule, with_econ: bool) -> str:
+    pred = _RULE_PREDICATE[rule]
+    return f"""
+        WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g)
+        SELECT w.stick_id, w.unique_id, w.formation_blueox, w.pad_name, w.ll_ft,
+               {selection_columns("w", with_econ)}
+        FROM curated.erebor_locations w
+        CROSS JOIN aoi
+        {box_joins("w", bench="w.formation_blueox")}
+        {econ_join() if with_econ else ""}
+        WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL AND {pred}
+        ORDER BY w.stick_id
+    """
+
+
+def _num(v: Any) -> Any:
+    return float(v) if v is not None and not isinstance(v, (str, bool, int)) else v
+
 
 def select_in_aoi(
-    session: Session, aoi_geom: dict, basin: str, rule: Rule
+    session: Session, aoi_geom: dict, basin: str, rule: Rule, deck: str | None = None
 ) -> dict[str, Any]:
-    pred = _RULE_PREDICATE[rule]
-    # formation_blueox / recon_status are baked into the matview — no joins.
-    sql = text(f"""
-        WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g)
-        SELECT w.stick_id, w.unique_id, w.category, UPPER(w.formation) AS formation,
-               w.formation_blueox,
-               w.recon_status, w.deplet_t,
-               w.pad_name, w.ll_ft,
-               w.npv5, w.npv10, w.npv15, w.npv20, w.npv25,
-               w.pv5, w.pv10, w.pv15, w.pv20, w.pv25,
-               w.oil_eur, w.gas_eur,
-               w.wti_price, w.hh_price, w.ngl_price, w.wti_diff, w.hh_diff
-        FROM curated.erebor_locations w, aoi
-        WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL AND {pred}
-    """)
-    rows = session.execute(
-        sql, {"aoi": json.dumps(aoi_geom), "basin": basin}
-    ).mappings().all()
+    run = record_run(session)
+    case = econ_case(session, run["run_id"], deck)
+    params: dict[str, Any] = {"aoi": json.dumps(aoi_geom), "basin": basin, "box_run": run["run_id"]}
+    if case is not None:
+        params |= {"econ_deck": case["deck_id"], "econ_aset": case["assumption_set_id"]}
+    rows = session.execute(text(selection_sql(rule, case is not None)), params).mappings().all()
 
     truncated = len(rows) > MAX_STICKS
     use = rows[:MAX_STICKS]
-
-    # Per-stick rows: the frontend computes the value rollup from these, applying
-    # the formation filter AND the manual well-cull set, so both are instant.
-    _COLS = (
-        "stick_id", "unique_id", "category", "formation", "formation_blueox",
-        "recon_status", "deplet_t", "pad_name", "ll_ft",
-        "npv5", "npv10", "npv15", "npv20", "npv25",
-        "pv5", "pv10", "pv15", "pv20", "pv25", "oil_eur", "gas_eur",
-    )
-    sticks = [{c: r[c] for c in _COLS} for r in use]
-
-    # PDP rows (curated producers) carry a NULL deck — derive the deck from the
-    # Novi PUD/RES rows only so an AOI whose first row is a producer still
-    # reports the screen's price assumptions.
-    decked = [r for r in use if r["wti_price"] is not None]
-    deck = decked[0] if decked else {}
-    distinct_decks = len({
-        (r["wti_price"], r["hh_price"], r["ngl_price"], r["wti_diff"], r["hh_diff"])
-        for r in decked
-    })
-
+    keys = STICK_KEYS + (ECON_KEYS if case is not None else ())
+    sticks = [{k: _num(r[k]) for k in keys} for r in use]
     return {
         "basin": basin,
         "rule": rule,
         "count": len(use),
         "truncated": truncated,
-        "price_deck": {
-            "wti_price": deck.get("wti_price"),
-            "hh_price": deck.get("hh_price"),
-            "ngl_price": deck.get("ngl_price"),
-            "wti_diff": deck.get("wti_diff"),
-            "hh_diff": deck.get("hh_diff"),
-            "distinct_decks": distinct_decks,
-        },
+        "box_run": {"run_id": run["run_id"], "data_through": run["data_through"],
+                    "report_version": run["report_version"]},
+        # overhaul decision 2: econ only for the record run; None = not yet priced
+        "econ": econ_provenance(session, run["run_id"], case),
         "sticks": sticks,
     }
 
@@ -112,11 +123,12 @@ class SelectBody(BaseModel):
     aoi: dict  # GeoJSON geometry (Polygon/MultiPolygon), EPSG:4326
     basin: Literal["delaware", "midland"]
     rule: Rule = "intersects"
+    deck: str | None = Field(None, max_length=64)  # Steven's deck id; None = default (WTI 70 / HH 3)
 
 
 @router.post("")
 def select(body: SelectBody, session: Session = Depends(get_session)) -> dict:
-    return select_in_aoi(session, body.aoi, body.basin, body.rule)
+    return select_in_aoi(session, body.aoi, body.basin, body.rule, body.deck)
 
 
 # ---------------------------------------------------------------------------

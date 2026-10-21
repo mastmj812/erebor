@@ -24,20 +24,24 @@ export type AppMode = "map" | "highgrade" | "accuracy";
 export type OverlayKey = "pads" | "grid" | "outline" | "blocks" | "sections";
 export type DrawMode = "off" | "lasso" | "box";
 export type SelectionRule = "intersects" | "midpoint";
-export type DiscountRate = 5 | 10 | 15 | 20 | 25;
-export type ValueMetric = "npv" | "pv"; // NPV = net of well cost; PV = before cost
 export type Phase = "oil" | "gas" | "water";
 export type ChartMode = "rate" | "cum";
-export type AggMode = "sum" | "avg"; // total field vs per-well type curve
+export type AggMode = "sum" | "avg"; // field total vs cohort MEAN per 1,000 ft (never P50, rule 18)
 
-export interface FormationStream {
+// BOX AOI profile (POST /production/box_profile): per bench, the record run's exact
+// monthly volumes (D39, uptime-free) of the forecast-carrying locations in the AOI.
+type StreamMonths = { oil: number[]; gas: number[]; water: number[] };
+export interface BoxProfileBench {
   formation: string;
-  oil: number[]; gas: number[]; water: number[];
-  well_count: number;
+  n: number; n_validated: number; n_provisional: number; n_lateral: number; n_water_provisional: number;
+  tier: "validated" | "provisional" | "mixed";
+  sum: StreamMonths;          // field total, bbl or mcf per month
+  per_kft_mean: StreamMonths; // cohort MEAN per 1,000 ft per month
 }
-export interface ProductionAggregate {
-  ip_days: number[];
-  formations: FormationStream[];
+export interface BoxProfile {
+  box_run: { run_id: number; data_through: string };
+  months: number;
+  benches: BoxProfileBench[];
 }
 export interface WellProduction {
   name: string;
@@ -65,13 +69,21 @@ export interface WellBoxForecast {
 export type WellSource = "novi" | "box" | "both";
 export type BottomTab = "production" | "gunbarrel";
 export interface GunbarrelWell {
-  stick_id: number; unique_id: string; category: string; formation: string;
+  stick_id: number; unique_id: string;
+  category: string;                       // Map-tab gunbarrel: PDP | LOCATION (Novi's own tag is not shipped)
+  formation: string;
   formation_blueox: string | null;        // Blue Ox bench code (intel_formation_blueox)
   basin_blueox: string | null;            // delaware | midland
   formation_blueox_source: string | null; // pdp_join | inferred | crosswalk | null
-  recon_status: string | null;            // realized_pud_to_pdp | remaining_pud | conflict | net_new_pdp | null
-  deplet_t: string | null;                // Novi depletion tier (Tier-1..4; Tier-4 = drained); null for PDP/RES
-  pdp_count_3mi: number | null;           // offset-PDP support (3 mi, in-bench); null for PDP / unscorable
+  // Map-tab gunbarrel (overhaul step 4): BOX record-run values; NULL = no BOX forecast, never zero
+  coverage?: string | null;
+  oil_eur_ft?: number | null; gas_eur_ft?: number | null; water_eur_ft?: number | null;
+  prox_outcome?: string | null;
+  econ?: number | null;                   // Steven's econ for the requested metric + deck (display only)
+  // Highgrade per-DSU gunbarrel still sends these (overhaul step 5 retires them)
+  recon_status?: string | null;
+  deplet_t?: string | null;
+  pdp_count_3mi?: number | null;
   tvd: number; ll_ft: number | null; offset_ft: number;
   in_filter?: boolean;          // set only by the Highgrade per-DSU gunbarrel
   metric_value?: number | null; // value of the selected screen metric (Highgrade)
@@ -86,35 +98,43 @@ export interface GunbarrelPad {
 }
 export interface GunbarrelData { pad_count: number; pads: GunbarrelPad[] }
 
+// One stick of an AOI selection (POST /select): BOX record-run values, Novi geometry only.
+// NULL values = no BOX forecast (or unpriced) — never a zero. Econ = Steven's, display only (D13).
 export interface SelectionStick {
   stick_id: number;
   unique_id: string;
-  category: string;
-  formation: string;
+  kind: "PDP" | "LOCATION";
   formation_blueox: string | null;
-  recon_status: string | null;  // §6 reconciliation tag, every Novi stick incl. RES (engineering_db sql/68, D117); null for producers
-  deplet_t: string | null;      // Novi depletion tier (Tier-4 = drained); null for PDP/RES
   pad_name: string | null;
   ll_ft: number | null;
-  // Novi econ — NULL on PDP rows (curated producers carry no Novi screen value).
-  npv5: number | null; npv10: number | null; npv15: number | null; npv20: number | null; npv25: number | null;
-  pv5: number | null; pv10: number | null; pv15: number | null; pv20: number | null; pv25: number | null;
-  oil_eur: number | null; gas_eur: number | null;
+  coverage: string | null;              // BOX class (NULL on PDP)
+  water_tier: "validated" | "provisional" | null;
+  oil_eur: number | null; gas_eur: number | null; water_eur: number | null;                       // bbl / mcf / bbl
+  oil_eur_per_kft: number | null; gas_eur_per_kft: number | null; water_eur_per_kft: number | null;
+  lat_basis_kft: number | null;         // lateral behind the stored per-kft (lateral-weighted rollups)
+  prox_outcome: string | null;
+  prox_factor: number | null;
+  econ_pv0?: number | null; econ_pv10?: number | null; econ_pv15?: number | null; econ_pv20?: number | null;
+  econ_pv25?: number | null; econ_pv30?: number | null; econ_irr?: number | null; econ_be_wti?: number | null;
+  econ_capex?: number | null; econ_unpriced_reason?: string | null;
 }
 export interface DealFeature {
   index: number;
   label: string;
   geometry: GeoJSON.Geometry;
 }
-export interface PriceDeck {
-  wti_price: number | null; hh_price: number | null; ngl_price: number | null;
-  wti_diff: number | null; hh_diff: number | null; distinct_decks: number;
+// Provenance of the econ case shown (D13).
+export interface EconProvenance {
+  deck_id: string; assumption_set_id: string; wti: number | null; hh: number | null;
+  downtime_basis: string | null; built_at: string | null; pushed_at: string | null; pushed_by: string | null;
+  n_priced: number;
 }
 export interface SelectionResult {
   count: number;
   truncated: boolean;
   rule: SelectionRule;
-  price_deck: PriceDeck;
+  box_run: { run_id: number; data_through: string; report_version: string };
+  econ: EconProvenance | null; // null = the record run is not priced yet
   sticks: SelectionStick[];
 }
 
@@ -198,11 +218,7 @@ interface MapState {
   tierFilter: Tier[];           // map: forecast tiers shown
   proxFilter: ProxGroup[];      // map: PDP-proximity outcome groups (empty = all)
   valueRange: [number | null, number | null]; // map: range on the active value (EUR or econ)
-  remainingOnly: boolean;       // map filter: among PUDs show only remaining (drillable)
-  excludeDepleted: boolean;     // map filter: drop offset-depleted (Tier-4) PUDs
-  discountRate: DiscountRate;
-  valueMetric: ValueMetric;
-  production: ProductionAggregate | null;
+  production: BoxProfile | null;
   productionLoading: boolean;
   productionStale: boolean;     // culls changed since production was loaded
   productionPhase: Phase;
@@ -249,6 +265,7 @@ interface MapState {
   setDrawMode: (m: DrawMode) => void;
   setSelectionRule: (r: SelectionRule) => void;
   setSelection: (s: SelectionResult | null, aoi: GeoJSON.Geometry | null) => void;
+  replaceSelectionData: (s: SelectionResult) => void; // same AOI, new econ deck: keeps culls
   setDeals: (d: DealFeature[] | null) => void;
   setDealZoom: (g: GeoJSON.Geometry | null) => void;
   toggleFormation: (f: string) => void;
@@ -265,13 +282,9 @@ interface MapState {
   toggleTier: (t: Tier) => void;
   toggleProx: (g: ProxGroup) => void;
   setValueRange: (r: [number | null, number | null]) => void;
-  toggleRemainingOnly: () => void;
-  toggleExcludeDepleted: () => void;
   toggleStick: (id: number) => void;
   clearCulls: () => void;
-  setDiscountRate: (r: DiscountRate) => void;
-  setValueMetric: (m: ValueMetric) => void;
-  setProduction: (p: ProductionAggregate | null) => void;
+  setProduction: (p: BoxProfile | null) => void;
   setProductionLoading: (b: boolean) => void;
   setProductionPhase: (p: Phase) => void;
   setWellSource: (s: WellSource) => void;
@@ -335,10 +348,6 @@ export const useMapStore = create<MapState>((set, get) => ({
   tierFilter: ["validated", "provisional"],
   proxFilter: [],
   valueRange: [null, null],
-  remainingOnly: false,
-  excludeDepleted: false,
-  discountRate: 10,
-  valueMetric: "npv",
   production: null,
   productionLoading: false,
   productionStale: false,
@@ -405,7 +414,7 @@ export const useMapStore = create<MapState>((set, get) => ({
     }),
   setAccVintages: (v) => set({ accVintages: v }),
   setBasin: (b) =>
-    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgEconDeck: null, boxMeta: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWells: null, accSummary: null, accSummaryLoading: false, accTier: "all", accBench: [], accOperator: [], accWellApi10: null, accWell: null, accWellLoading: false, accSelection: null, accSelectionLoading: false, accMapView: "wells", accGrid: null, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], formationFilter: [], excludedSticks: [], unitFilter: [], mapLegend: null, valueRange: [null, null], remainingOnly: false, excludeDepleted: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgEconDeck: null, boxMeta: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWells: null, accSummary: null, accSummaryLoading: false, accTier: "all", accBench: [], accOperator: [], accWellApi10: null, accWell: null, accWellLoading: false, accSelection: null, accSelectionLoading: false, accMapView: "wells", accGrid: null, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], formationFilter: [], excludedSticks: [], unitFilter: [], mapLegend: null, valueRange: [null, null], production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleOverlay: (k) =>
     set((s) => ({ overlays: { ...s.overlays, [k]: !s.overlays[k] } })),
   loadBasins: async () => {
@@ -422,6 +431,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   // A new selection starts with all formations included, no culls, clears derived data.
   setSelection: (s, aoi) =>
     set({ selection: s, aoi, excludedFormations: [], excludedSticks: [], production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+  replaceSelectionData: (s) => set({ selection: s }),
   setDeals: (d) => set({ deals: d, dealZoom: null }),
   setDealZoom: (g) => set({ dealZoom: g ? { geometry: g } : null }),
   toggleFormation: (f) =>
@@ -453,10 +463,6 @@ export const useMapStore = create<MapState>((set, get) => ({
   toggleProx: (g) =>
     set((s) => ({ proxFilter: s.proxFilter.includes(g) ? s.proxFilter.filter((x) => x !== g) : [...s.proxFilter, g] })),
   setValueRange: (r) => set({ valueRange: r }),
-  // Both filters also drive the gun-barrel server query; clear the loaded
-  // gun-barrel so it reloads with the new filter (mirrors setSelection).
-  toggleRemainingOnly: () => set((s) => ({ remainingOnly: !s.remainingOnly, gunbarrel: null })),
-  toggleExcludeDepleted: () => set((s) => ({ excludeDepleted: !s.excludeDepleted, gunbarrel: null })),
   toggleStick: (id) =>
     set((s) => ({
       excludedSticks: s.excludedSticks.includes(id)
@@ -466,8 +472,6 @@ export const useMapStore = create<MapState>((set, get) => ({
     })),
   clearCulls: () =>
     set((s) => ({ excludedSticks: [], productionStale: s.production ? true : s.productionStale })),
-  setDiscountRate: (r) => set({ discountRate: r }),
-  setValueMetric: (m) => set({ valueMetric: m }),
   setProduction: (p) => set({ production: p, productionStale: false }),
   setProductionLoading: (b) => set({ productionLoading: b }),
   setProductionPhase: (p) => set({ productionPhase: p }),

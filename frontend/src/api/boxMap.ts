@@ -79,14 +79,23 @@ export interface BoxLegend {
   label?: string;
   priced?: boolean;
   case?: { deck_id: string; assumption_set_id: string; built_at: string | null } | null;
+  scope?: { benches: string[]; exclude: string[]; tiers: Tier[] };
 }
 
+// The ramp is scoped like the map: the bench include filter, the rollup's bench excludes and
+// the tiers shown — so it spans what is on screen, not the whole basin.
+export interface LegendScope { benches: string[]; exclude: string[]; tiers: Tier[] }
+
 export async function fetchBoxLegend(
-  basin: string, metric: string, econ?: EconMetric, deck?: string | null,
+  basin: string, metric: string, econ: EconMetric | undefined, deck: string | null | undefined, scope: LegendScope,
 ): Promise<BoxLegend> {
   const q = new URLSearchParams({ basin, metric });
   if (econ) q.set("econ", econ);
   if (deck) q.set("deck", deck);
+  for (const b of scope.benches) q.append("bench", b);
+  for (const b of scope.exclude) q.append("exclude", b);
+  for (const t of scope.tiers) q.append("tier", t);
+  if (!scope.tiers.length) q.append("tier", "none"); // nothing shown: an empty scope, not the default
   const r = await fetch(`/api/box/legend?${q.toString()}`);
   if (!r.ok) throw new Error(`BOX legend failed: ${r.status}`);
   return r.json();

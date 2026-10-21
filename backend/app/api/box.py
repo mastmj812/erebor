@@ -371,17 +371,24 @@ def legend(
     metric: str = Query(..., pattern="^(oil_eur_ft|gas_eur_ft|water_eur_ft|econ)$"),
     econ: str | None = Query(None, pattern="^(" + "|".join(ECON_METRICS) + ")$"),
     deck: str | None = Query(None, max_length=64),
+    bench: list[str] = Query([]),
+    exclude: list[str] = Query([]),
+    tier: list[str] = Query(["validated", "provisional"]),
     session: Session = Depends(get_session),
 ) -> dict:
-    """Color-ramp breaks for a Map metric over the basin's forecast-carrying PUDs of the
-    record run (covered + covered_provisional): P5 / P25 / P50 / P75 / P95, with the
-    count per tier. EUR per FOOT = eur_per_kft / 1000. Econ = Steven's case for the
-    record run only (display, D13); `priced: false` when that run is not priced."""
+    """Color-ramp breaks for a Map metric over the basin's forecast-carrying locations of
+    the record run (covered + covered_provisional): P5 / P25 / P50 / P75 / P95, with the
+    count per tier. Scoped like the map: `bench` = the include filter (empty = every
+    bench), `exclude` = benches dropped, `tier` = the tiers shown — so the ramp spans what
+    is on screen, not the whole basin. EUR per FOOT = eur_per_kft / 1000. Econ = Steven's
+    case for the record run only (display, D13); `priced: false` when it is not priced."""
     run_id = record_run_id(session)
     if run_id is None:
         raise HTTPException(503, "no BOX forecast run is marked as the record")
-    params: dict[str, Any] = {"r": run_id, "b": basin}
-    out: dict[str, Any] = {"basin": basin, "metric": metric, "run_id": run_id}
+    coverages = legend_coverages(tier)
+    params: dict[str, Any] = {"r": run_id, "b": basin, "cov": coverages, "inc": bench, "exc": exclude}
+    out: dict[str, Any] = {"basin": basin, "metric": metric, "run_id": run_id,
+                           "scope": {"benches": bench, "exclude": exclude, "tiers": [TIER_OF[c] for c in coverages]}}
     if metric == "econ":
         m = ECON_METRICS[econ or DEFAULT_ECON_METRIC]
         case = econ_case(session, run_id, deck)
@@ -401,19 +408,42 @@ def legend(
         value = "s.eur_per_kft / 1000.0"
         join = "JOIN box.pud_forecast_stream s ON s.run_id = bp.run_id AND s.location_id = bp.location_id AND s.stream = :s"
         params["s"] = stream
-    qcols = ", ".join(f"percentile_cont({q}) WITHIN GROUP (ORDER BY v)" for q in LEGEND_QUANTILES)
-    row = session.execute(text(f"""
-        SELECT count(v), count(v) FILTER (WHERE coverage = 'covered'),
-               count(v) FILTER (WHERE coverage = 'covered_provisional'), {qcols}
-        FROM (SELECT bp.coverage, {value} AS v FROM box.pud_forecast bp {join}
-              WHERE bp.run_id = :r AND bp.basin = :b AND bp.coverage IN {FORECAST_IN_SQL}) t
-    """), params).one()
+    if not coverages:
+        return {**out, "n": 0, "breaks": None, "tier_counts": {"validated": 0, "provisional": 0}}
+    row = session.execute(legend_sql(value, join, bool(bench), bool(exclude)), params).one()
     n = int(row[0])
     out.update({"n": n,
                 "tier_counts": {"validated": int(row[1]), "provisional": int(row[2])},
                 "breaks": None if n == 0 else dict(zip(("p5", "p25", "p50", "p75", "p95"),
                                                        (float(v) for v in row[3:]), strict=True))})
     return out
+
+
+def legend_coverages(tiers: list[str]) -> list[str]:
+    """The forecast coverage classes of the tiers shown (unknown tier names ignored)."""
+    want = set(tiers)
+    return [c for c in FORECAST_CLASSES if TIER_OF[c] in want]
+
+
+def legend_sql(value: str, join: str, has_inc: bool, has_exc: bool):  # noqa: ANN201 — a TextClause
+    """The ramp quantiles over the record run's forecast locations of the basin, limited to the
+    coverage classes shown (:cov) and the bench include (:inc) / exclude (:exc) lists. `value`
+    and `join` are built from whitelisted pieces only; every value is bound."""
+    qcols = ", ".join(f"percentile_cont({q}) WITHIN GROUP (ORDER BY v)" for q in LEGEND_QUANTILES)
+    where = ["bp.run_id = :r", "bp.basin = :b", "bp.coverage IN :cov"]
+    binds = [bindparam("cov", expanding=True)]
+    if has_inc:
+        where.append("bp.formation_blueox IN :inc")
+        binds.append(bindparam("inc", expanding=True))
+    if has_exc:
+        where.append("bp.formation_blueox NOT IN :exc")
+        binds.append(bindparam("exc", expanding=True))
+    return text(f"""
+        SELECT count(v), count(v) FILTER (WHERE coverage = 'covered'),
+               count(v) FILTER (WHERE coverage = 'covered_provisional'), {qcols}
+        FROM (SELECT bp.coverage, {value} AS v FROM box.pud_forecast bp {join}
+              WHERE {" AND ".join(where)}) t
+    """).bindparams(*binds)
 
 
 # ---------------------------------------------------------------------------

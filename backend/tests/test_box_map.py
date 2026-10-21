@@ -41,7 +41,7 @@ def test_map_coverage_classes_use_our_facts_only():
 
 
 def test_tile_columns_per_foot_and_no_econ_by_default():
-    cols = bl.tile_columns("w", None)
+    cols = bl.tile_columns("w")
     for s, a in (("oil", "bso"), ("gas", "bsg"), ("water", "bsw")):
         assert f"round(({a}.eur_per_kft / 1000.0)::numeric, 1)::float8 AS {s}_eur_ft" in cols
     assert " AS econ" not in cols and "be." not in cols
@@ -50,14 +50,15 @@ def test_tile_columns_per_foot_and_no_econ_by_default():
 
 
 def test_tile_econ_is_whitelisted():
-    assert "round(be.pv10_mm::numeric, 2)::float8 AS econ" in bl.tile_columns("w", "pv10")
-    assert "be.breakeven_wti_pv20" in bl.tile_columns("w", "be_wti")
+    assert "round(be.pv10_mm::numeric, 2)::float8 AS econ_pv10" in bl.tile_columns("w", ("pv10",))
+    both = bl.tile_columns("w", ("irr", "be_wti"))
+    assert "be.irr_pct" in both and "be.breakeven_wti_pv20" in both and "AS econ_be_wti" in both
     with pytest.raises(KeyError):
-        bl.tile_columns("w", "pv10_mm; DROP TABLE x")
+        bl.tile_columns("w", ("pv10_mm; DROP TABLE x",))
 
 
 def test_tile_ships_pdp_or_location_not_novi_tags():
-    sql = tiles._mvt_sql("lines", None)
+    sql = tiles._mvt_sql("lines", ())
     assert "CASE WHEN w.category = 'PDP' THEN 'PDP' ELSE 'LOCATION' END AS category" in sql
     select = sql.split("FROM curated.erebor_locations")[0]
     for novi in ("w.deplet_t", "w.rqt", "w.npv", "w.pv", "w.oil_eur", "w.gas_eur", "w.pdp_count", "w.inflation_ratio"):
@@ -65,9 +66,9 @@ def test_tile_ships_pdp_or_location_not_novi_tags():
 
 
 def test_tile_sql_only_joins_econ_when_asked():
-    plain = tiles._mvt_sql("lines", None)
+    plain = tiles._mvt_sql("lines", ())
     assert "box_econ" not in plain and "intel_lines" in plain
-    priced = tiles._mvt_sql("points", "pv10")
+    priced = tiles._mvt_sql("points", ("pv10",))
     assert "box_econ.box_pud_econ be" in priced and ":econ_deck" in priced and "intel_points" in priced
 
 
@@ -99,3 +100,15 @@ def test_workup_and_well_lookup_never_gate_on_novi_pud_tag():
     for fn in (box.pad, box.well_forecast):
         src = inspect.getsource(fn)
         assert "category = 'PUD'" not in src and "category <> 'PDP'" in src
+
+
+def test_legend_scopes_to_the_benches_and_tiers_on_screen():
+    # the ramp spans what the map shows: tiers -> coverage classes, bench include / exclude bound
+    assert box.legend_coverages(["validated", "provisional"]) == ["covered", "covered_provisional"]
+    assert box.legend_coverages(["provisional"]) == ["covered_provisional"]
+    assert box.legend_coverages([]) == [] and box.legend_coverages(["bogus"]) == []
+    plain = str(box.legend_sql("s.eur_per_kft / 1000.0", "", False, False))
+    assert "bp.coverage IN" in plain and ":inc" not in plain and ":exc" not in plain
+    scoped = str(box.legend_sql("s.eur_per_kft / 1000.0", "", True, True))
+    assert "bp.formation_blueox IN" in scoped and "bp.formation_blueox NOT IN" in scoped
+    assert "BS1_S" not in scoped   # bench names are bound, never interpolated

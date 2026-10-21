@@ -20,9 +20,9 @@ import {
   pointsLayer,
   stickFilter,
   tileUrl,
-  valueProp,
 } from "./map/sticksLayers";
-import { EUR_UNIT, MAP_COVERAGE_LABELS, MAP_COVERAGE_ORDER, TIER_OF_COVERAGE, deckLabel, econMetricInfo } from "./api/boxMap";
+import { tileEconMetrics } from "./map/screen";
+import { ECON_METRICS, EUR_UNIT, MAP_COVERAGE_LABELS, MAP_COVERAGE_ORDER, TIER_OF_COVERAGE, deckLabel, type EconMetric } from "./api/boxMap";
 import { DrawingController, bboxToPolygon, type GeoJsonPolygon } from "./map/drawing";
 import { choroplethFillColor, padScale } from "./map/highgradeColors";
 import { accuracyGridFill, accuracyLineColor } from "./map/accuracyColors";
@@ -43,6 +43,10 @@ const ACC_HIT = "acc-wells-hit";
 const ACC_GRID_SOURCE = "acc-grid";
 const ACC_GRID_FILL = "acc-grid-fill";
 const ACC_GRID_LINE = "acc-grid-line";
+// Map-tab BOX workup: the clicked location, its named analogs and the same-bench producers
+// nearby that are NOT analogs (api/workup.ts -> geo).
+const WK_SOURCE = "workup";
+const WK_LAYERS = ["wk-casing", "wk-nearby", "wk-analog", "wk-location", "wk-label"];
 const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
 
 let pmtilesRegistered = false;
@@ -188,10 +192,10 @@ export function MapView() {
   const mapDeck = useMapStore((s) => s.mapDeck);
   const mapLegend = useMapStore((s) => s.mapLegend);
   const showPdp = useMapStore((s) => s.showPdp);
-  const showNotCovered = useMapStore((s) => s.showNotCovered);
+  const notCoveredShown = useMapStore((s) => s.notCoveredShown);
   const tierFilter = useMapStore((s) => s.tierFilter);
   const proxFilter = useMapStore((s) => s.proxFilter);
-  const valueRange = useMapStore((s) => s.valueRange);
+  const mapRanges = useMapStore((s) => s.mapRanges);
   const appMode = useMapStore((s) => s.appMode);
   const highgrade = useMapStore((s) => s.highgrade);
   const accWells = useMapStore((s) => s.accWells);
@@ -203,6 +207,9 @@ export function MapView() {
   const accOperator = useMapStore((s) => s.accOperator);
   const accMapView = useMapStore((s) => s.accMapView);
   const accGrid = useMapStore((s) => s.accGrid);
+  const workup = useMapStore((s) => s.workup);
+  const workupOnMap = useMapStore((s) => s.workupOnMap);
+  const workupZoom = useMapStore((s) => s.workupZoom);
 
   // -------- init map (once) --------
   useEffect(() => {
@@ -391,6 +398,35 @@ export function MapView() {
           });
       });
 
+      // BOX workup cohort (on top of the sticks): analogs orange, nearby non-analogs violet
+      // dashed, the location itself cyan; analog ranks labelled along their laterals.
+      map.addSource(WK_SOURCE, { type: "geojson", data: EMPTY_FC });
+      // a white casing so the cohort reads apart from ramp-colored sticks underneath
+      map.addLayer({
+        id: "wk-casing", type: "line", source: WK_SOURCE,
+        paint: { "line-color": "#ffffff", "line-width": ["case", ["==", ["get", "role"], "location"], 10, 8], "line-opacity": 0.95 },
+      });
+      map.addLayer({
+        id: "wk-nearby", type: "line", source: WK_SOURCE, filter: ["==", ["get", "role"], "nearby"],
+        paint: { "line-color": "#7c3aed", "line-width": 3, "line-dasharray": [2, 1.5], "line-opacity": 0.9 },
+      });
+      map.addLayer({
+        id: "wk-analog", type: "line", source: WK_SOURCE, filter: ["==", ["get", "role"], "analog"],
+        paint: { "line-color": "#ea580c", "line-width": 4, "line-opacity": 0.95 },
+      });
+      map.addLayer({
+        id: "wk-location", type: "line", source: WK_SOURCE, filter: ["==", ["get", "role"], "location"],
+        paint: { "line-color": "#06b6d4", "line-width": 6, "line-opacity": 0.9 },
+      });
+      map.addLayer({
+        id: "wk-label", type: "symbol", source: WK_SOURCE, filter: ["==", ["get", "role"], "analog"],
+        layout: {
+          "symbol-placement": "line-center", "text-field": ["concat", "#", ["to-string", ["get", "rank"]]],
+          "text-size": 12, "text-font": ["Noto Sans Regular"], "text-allow-overlap": true,
+        },
+        paint: { "text-color": "#7c2d12", "text-halo-color": "rgba(255,255,255,0.95)", "text-halo-width": 1.5 },
+      });
+
       // Draw controller: lasso / box -> run selection.
       const drawer = new DrawingController(map, {
         onPolygon: (poly) => void runSelect(poly),
@@ -429,6 +465,9 @@ export function MapView() {
         );
         const name = feats[0]?.properties?.unique_id as string | undefined;
         if (!name) return;
+        // A Novi stick location (stick_id > 0) opens its BOX workup; PDP (-(api10)) has none.
+        const sid = Number(feats[0]?.properties?.stick_id);
+        useMapStore.getState().openWorkup(sid > 0 ? sid : null);
         try {
           const w = await fetchWellProduction(name, useMapStore.getState().basin);
           useMapStore.getState().setWellOverlay(w);
@@ -547,17 +586,19 @@ export function MapView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [basin, styleLoaded, basinsMeta]);
 
-  // -------- tiles: basin, plus ONE econ metric for ONE deck in econ mode --------
-  // Non-econ modes share the plain URL, so switching EUR / coverage / bench reuses tiles.
+  // -------- tiles: basin, plus the econ metrics in use (color + ranges) for ONE deck --------
+  // With no econ in use every mode shares the plain URL, so switching EUR / coverage / bench
+  // reuses tiles. Keyed on the metric SET, so typing a range bound never refetches.
+  const econKey = tileEconMetrics(colorMode === "econ" ? econMetric : null, mapRanges).join(",");
   useEffect(() => {
     if (!styleLoaded) return;
     const map = mapRef.current;
     if (!map) return;
     const src = map.getSource(INTEL_SOURCE) as maplibregl.VectorTileSource | undefined;
-    const econ = colorMode === "econ" ? econMetric : null;
+    const econ = econKey ? (econKey.split(",") as EconMetric[]) : [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (src as any)?.setTiles?.([tileUrl(basin, econ, econ ? mapDeck : null)]);
-  }, [basin, colorMode, econMetric, mapDeck, styleLoaded]);
+    (src as any)?.setTiles?.([tileUrl(basin, econ, econ.length ? mapDeck : null)]);
+  }, [basin, econKey, mapDeck, styleLoaded]);
 
   // -------- BOX visibility filters on both layers --------
   useEffect(() => {
@@ -565,14 +606,13 @@ export function MapView() {
     const map = mapRef.current;
     if (!map) return;
     const filt = stickFilter({
-      showPdp, showNotCovered, tiers: tierFilter, prox: proxFilter,
-      valueProp: valueProp(colorMode, eurStream), range: valueRange,
+      showPdp, notCovered: notCoveredShown, tiers: tierFilter, prox: proxFilter, ranges: mapRanges,
       excludedFormations, units: unitFilter, formationFilter,
     });
     for (const id of [POINTS_LAYER, LINES_LAYER]) {
       if (map.getLayer(id)) map.setFilter(id, filt);
     }
-  }, [showPdp, showNotCovered, tierFilter, proxFilter, colorMode, eurStream, valueRange,
+  }, [showPdp, notCoveredShown, tierFilter, proxFilter, mapRanges,
       excludedFormations, formationFilter, unitFilter, styleLoaded]);
 
   // -------- color mode: BOX EUR/ft, econ, coverage, or Blue Ox bench --------
@@ -580,10 +620,10 @@ export function MapView() {
     if (!styleLoaded) return;
     const map = mapRef.current;
     if (!map) return;
-    const expr = colorExpr(colorMode, { stream: eurStream, legend: mapLegend });
+    const expr = colorExpr(colorMode, { stream: eurStream, econ: econMetric, legend: mapLegend });
     if (map.getLayer(POINTS_LAYER)) map.setPaintProperty(POINTS_LAYER, "circle-color", expr);
     if (map.getLayer(LINES_LAYER)) map.setPaintProperty(LINES_LAYER, "line-color", expr);
-  }, [colorMode, eurStream, mapLegend, styleLoaded]);
+  }, [colorMode, eurStream, econMetric, mapLegend, styleLoaded]);
 
   // -------- overlay toggles --------
   useEffect(() => {
@@ -632,6 +672,29 @@ export function MapView() {
       src.setData(EMPTY_FC);
     }
   }, [highgrade, styleLoaded]);
+
+  // -------- BOX workup cohort -> layer data (Map tab only, when shown) --------
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const src = map.getSource(WK_SOURCE) as maplibregl.GeoJSONSource | undefined;
+    if (!src) return;
+    src.setData(workup?.geo ?? EMPTY_FC);
+    const vis = workup && workupOnMap && appMode === "map" ? "visible" : "none";
+    for (const id of WK_LAYERS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis);
+  }, [workup, workupOnMap, appMode, styleLoaded]);
+
+  // -------- zoom to the workup cohort (button in the Workup tab) --------
+  useEffect(() => {
+    if (!styleLoaded || !workupZoom) return;
+    const map = mapRef.current;
+    const geo = useMapStore.getState().workup?.geo;
+    if (!map || !geo) return;
+    const bb = geomsBbox(geo.features.map((f) => f.geometry));
+    // left padding clears the control panel; the workup window floats and can be dragged
+    if (bb) map.fitBounds(bb, { padding: { left: 280, right: 60, top: 80, bottom: 60 }, duration: 600, maxZoom: 13 });
+  }, [workupZoom, styleLoaded]);
 
   // -------- accuracy wells -> layer data --------
   useEffect(() => {
@@ -787,10 +850,11 @@ function accPopupHtml(p: Record<string, unknown>, horizon: number, stream: strin
 }
 
 // Stick hover: BOX record-run view of one location (app.box_locations tile props).
-// Not covered reads "Not covered: <reason>" with no EUR rows — never a zero.
+// Not covered reads "Not covered: <reason>" with no EUR rows — never a zero. Econ rows:
+// every one of Steven's metrics the tile carries (the color metric + econ ranges).
 function popupHtml(
   p: Record<string, unknown>,
-  st: { colorMode: string; econMetric: Parameters<typeof econMetricInfo>[0]; mapLegend: { case?: { deck_id: string } | null } | null },
+  st: { mapLegend: { case?: { deck_id: string } | null } | null; mapDeck: string | null },
 ): string {
   const cov = p.coverage as string | undefined;
   const tier = cov ? TIER_OF_COVERAGE[cov] : undefined;
@@ -806,11 +870,11 @@ function popupHtml(
     ? `<tr><td>Proximity</td><td>${esc(String(p.prox_outcome).replaceAll("_", " "))}${p.prox_factor != null ? ` · oil × ${Number(p.prox_factor).toFixed(3)}` : ""}</td></tr>`
     : "";
   let econ = "";
-  if (st.colorMode === "econ" && tier) {
-    const info = econMetricInfo(st.econMetric);
-    const deck = st.mapLegend?.case?.deck_id;
-    econ = `<tr><td>${esc(info.label)}</td><td>${p.econ == null ? "not priced" : `${Number(p.econ).toFixed(2)} ${esc(info.unit)}`}${
-      deck ? ` · ${esc(deckLabel(deck))}` : ""} <span style="color:#71717a">(Steven, display only)</span></td></tr>`;
+  const econShown = ECON_METRICS.filter((m) => `econ_${m.value}` in p);
+  if (tier && econShown.length) {
+    const deck = st.mapLegend?.case?.deck_id ?? st.mapDeck;
+    econ = econShown.map((m) => `<tr><td>${esc(m.label)}</td><td>${Number(p[`econ_${m.value}`]).toFixed(2)} ${esc(m.unit)}</td></tr>`).join("")
+      + `<tr><td></td><td style="color:#71717a">Steven${deck ? `, ${esc(deckLabel(deck))}` : ""} · display only</td></tr>`;
   }
   return `
     <div>

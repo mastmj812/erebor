@@ -18,7 +18,7 @@ import {
   colorForSource,
 } from "../map/formations";
 import { HG_GRADIENT_CSS, rampColor } from "../map/highgradeColors";
-import { categoryLabel } from "../map/sticksLayers";
+import { stickPasses } from "../map/screen";
 import { useMapStore, type GunbarrelPad, type GunbarrelWell } from "../store";
 
 const M = { l: 46, r: 10, t: 18, b: 26 };
@@ -87,7 +87,7 @@ function GbTooltip({ w, x, y, muted, interactive, metricLabel, formatMetric }: {
       <div className="gb-tip-name">{w.unique_id}</div>
       <table className="gb-tip-tbl">
         <tbody>
-          <tr><td>Type</td><td>{w.category === "PDP" ? "producing well (PDP)" : w.category === "LOCATION" ? "Novi stick location" : categoryLabel(w.category)}</td></tr>
+          <tr><td>Type</td><td>{w.category === "PDP" ? "producing well (PDP)" : "Novi stick location"}</td></tr>
           <tr><td>Formation</td><td>{w.formation}</td></tr>
           <tr><td>Blue Ox</td><td>
             {w.formation_blueox ?? "—"}
@@ -190,8 +190,11 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
   const excludedSticks = useMapStore((s) => s.excludedSticks);
   const toggleStick = useMapStore((s) => s.toggleStick);
   const showPdp = useMapStore((s) => s.showPdp);
-  const showNotCovered = useMapStore((s) => s.showNotCovered);
+  const notCoveredShown = useMapStore((s) => s.notCoveredShown);
   const tierFilter = useMapStore((s) => s.tierFilter);
+  const proxFilter = useMapStore((s) => s.proxFilter);
+  const mapRanges = useMapStore((s) => s.mapRanges);
+  const formationFilter = useMapStore((s) => s.formationFilter);
   const eurStream = useMapStore((s) => s.eurStream);
   const econMetric = useMapStore((s) => s.econMetric);
   const mapDeck = useMapStore((s) => s.mapDeck);
@@ -236,11 +239,18 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
   const FOOTER = 26, LEGEND_H = 56, GAP = 8;
   const exForm = new Set(excluded);
   const exStick = new Set(excludedSticks);
-  // Same visibility as the map.
+  // Same visibility as the map: bench include filter, PDP context, the shared screen
+  // (map/screen.ts, read off the selection's values for the stick) and the not-covered classes.
+  const selById = new Map(sel.sticks.map((s) => [s.stick_id, s]));
+  const formInc = new Set(formationFilter);
+  const screen = { tiers: tierFilter, prox: proxFilter, ranges: mapRanges };
   const visible = (w: GunbarrelWell) => {
+    if (formInc.size && !formInc.has(w.formation_blueox ?? "(unmapped)")) return false;
     if (w.category === "PDP") return showPdp;
     const t = w.coverage ? TIER_OF_COVERAGE[w.coverage] : undefined;
-    return t ? tierFilter.includes(t) : showNotCovered;
+    if (!t) return notCoveredShown.includes(w.coverage ?? "not_screened");
+    const s = selById.get(w.stick_id);
+    return s ? stickPasses(s, screen) : tierFilter.includes(t);
   };
   const pads = gb.pads.map((p) => ({ ...p, wells: p.wells.filter(visible) }));
   const n = pads.length;

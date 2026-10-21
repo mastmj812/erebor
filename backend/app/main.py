@@ -15,6 +15,7 @@ from app.api import (
     production,
     select,
     tiles,
+    workup,
 )
 from app.config import settings
 
@@ -41,4 +42,5 @@ app.include_router(production.router, prefix="/api")
 app.include_router(gunbarrel.router, prefix="/api")
 app.include_router(highgrade.router, prefix="/api")
 app.include_router(box.router, prefix="/api")
+app.include_router(workup.router, prefix="/api")
 app.include_router(accuracy.router, prefix="/api")

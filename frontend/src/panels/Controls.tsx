@@ -4,15 +4,15 @@ import {
   ECON_METRICS,
   EUR_STREAMS,
   EUR_UNIT,
+  MAP_COVERAGE_LABELS,
   PROX_FILTER_GROUPS,
   deckLabel,
-  econMetricInfo,
   type EconMetric,
 } from "../api/boxMap";
 import { PROX_GROUP_LABELS, fetchBoxMeta, type ProxGroup } from "../api/highgrade";
 import { selectByPolygon, uploadDeals } from "../api/select";
 import { blueoxLegend, colorForBlueox } from "../map/formations";
-import { valueProp } from "../map/sticksLayers";
+import { NOT_COVERED_CLASSES, RANGE_METRICS, rangeMetricInfo, type RangeMetric } from "../map/screen";
 import { useMapStore, type OverlayKey, type SelectionRule } from "../store";
 import { ChipGroup } from "./ChipGroup";
 
@@ -24,13 +24,17 @@ const OVERLAY_LABELS: Record<OverlayKey, string> = {
   sections: "Sections (numbered, z≥11)",
 };
 
+// "not_covered_outside_extent" -> its label without the trailing "(…)" note, for a chip.
+const shortLabel = (k: string) => (MAP_COVERAGE_LABELS[k] ?? k).replace(/\s*\(.*\)\s*$/, "");
+
 export function Controls() {
   const basin = useMapStore((s) => s.basin);
   const setBasin = useMapStore((s) => s.setBasin);
   const showPdp = useMapStore((s) => s.showPdp);
   const setShowPdp = useMapStore((s) => s.setShowPdp);
-  const showNotCovered = useMapStore((s) => s.showNotCovered);
-  const setShowNotCovered = useMapStore((s) => s.setShowNotCovered);
+  const notCoveredShown = useMapStore((s) => s.notCoveredShown);
+  const setNotCoveredShown = useMapStore((s) => s.setNotCoveredShown);
+  const toggleNotCovered = useMapStore((s) => s.toggleNotCovered);
   const tierFilter = useMapStore((s) => s.tierFilter);
   const toggleTier = useMapStore((s) => s.toggleTier);
   const proxFilter = useMapStore((s) => s.proxFilter);
@@ -41,8 +45,10 @@ export function Controls() {
   const setEconMetric = useMapStore((s) => s.setEconMetric);
   const mapDeck = useMapStore((s) => s.mapDeck);
   const setMapDeck = useMapStore((s) => s.setMapDeck);
-  const valueRange = useMapStore((s) => s.valueRange);
-  const setValueRange = useMapStore((s) => s.setValueRange);
+  const mapRanges = useMapStore((s) => s.mapRanges);
+  const addMapRange = useMapStore((s) => s.addMapRange);
+  const updateMapRange = useMapStore((s) => s.updateMapRange);
+  const removeMapRange = useMapStore((s) => s.removeMapRange);
   const boxMeta = useMapStore((s) => s.boxMeta);
   const setBoxMeta = useMapStore((s) => s.setBoxMeta);
   const overlays = useMapStore((s) => s.overlays);
@@ -67,6 +73,8 @@ export function Controls() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [unitText, setUnitText] = useState("");
+  // setBasin clears the store's unitFilter; clear the box with it so it never shows dead terms.
+  useEffect(() => { setUnitText(""); }, [basin]);
 
   // BOX record run + scope + Steven's priced decks for this basin (shared with
   // Highgrade; setBasin clears it so it refetches per basin).
@@ -100,9 +108,17 @@ export function Controls() {
   const decks = [...new Map((boxMeta?.decks ?? []).map((d) => [d.deck_id, d])).values()];
   const priced = boxMeta?.econ_status !== "not_yet_priced" && decks.length > 0;
   const noForecast = boxMeta != null && boxMeta.basin === basin && (boxMeta.forecast_count ?? 0) === 0;
-  const vProp = valueProp(colorMode, eurStream);
-  const unit = colorMode === "eur" ? EUR_UNIT[eurStream] : colorMode === "econ" ? econMetricInfo(econMetric).unit : "";
   const num = (v: string): number | null => (v.trim() === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+  const ncCounts = boxMeta?.basin === basin ? boxMeta.basin_coverage ?? {} : {};
+  const ncAll = notCoveredShown.length === NOT_COVERED_CLASSES.length;
+  // The record run's own not-covered classes it has no rows for (older-run classes such as
+  // not_covered_wcxy) get no chip; the derived classes (not screened, realized, ...) always do.
+  const ncOptions = NOT_COVERED_CLASSES.filter((k) => !k.startsWith("not_covered_") || !boxMeta || k in ncCounts);
+  // A bench outside BOX has no forecast: picking its chip while its class is hidden would
+  // blank the map, so say so and offer to show it.
+  const pickedOther = formationFilter.filter((c) => otherCodes.includes(c));
+  const otherHidden = pickedOther.length > 0 && !notCoveredShown.includes("bench_not_in_box");
+  const econRanged = mapRanges.some((r) => rangeMetricInfo(r.metric).econ);
   const ncSummary = Object.entries(boxMeta?.basin_coverage ?? {})
     .map(([k, v]) => `${v.toLocaleString()} ${k.replace("not_covered_", "")}`)
     .join(", ");
@@ -180,9 +196,25 @@ export function Controls() {
         <label htmlFor="show-pdp">PDP (producing context)</label>
       </div>
       <div className="row">
-        <input id="show-nc" type="checkbox" checked={showNotCovered} onChange={() => setShowNotCovered(!showNotCovered)} />
-        <label htmlFor="show-nc">No BOX forecast (any reason) — grey</label>
+        <input
+          id="show-nc" type="checkbox" checked={notCoveredShown.length > 0}
+          ref={(el) => { if (el) el.indeterminate = notCoveredShown.length > 0 && !ncAll; }}
+          onChange={() => setNotCoveredShown(notCoveredShown.length > 0 ? [] : [...NOT_COVERED_CLASSES])}
+        />
+        <label htmlFor="show-nc">No BOX forecast — grey, by reason</label>
       </div>
+      {notCoveredShown.length > 0 && (
+        <div style={{ marginLeft: 18 }}>
+          <ChipGroup
+            label="Reasons shown"
+            hint="Never valued, never on a ramp. Counts = the record run's rows; the derived classes (not screened, bench not in BOX, realized) carry none."
+            options={ncOptions}
+            selected={notCoveredShown}
+            onToggle={toggleNotCovered}
+            labelOf={(k) => `${shortLabel(k)}${k in ncCounts ? ` · ${ncCounts[k].toLocaleString()}` : ""}`}
+          />
+        </div>
+      )}
 
       <div style={{ marginTop: 8 }}>
         <ChipGroup
@@ -211,6 +243,15 @@ export function Controls() {
           onToggle={toggleMapFormation}
           swatch={(code) => colorForBlueox(basin, code)}
         />
+        {otherHidden && (
+          <div className="caveat">
+            {pickedOther.join(", ")} {pickedOther.length === 1 ? "has" : "have"} no BOX forecast, so {pickedOther.length === 1 ? "its" : "their"} sticks
+            read &ldquo;bench not in BOX&rdquo;, which is hidden.{" "}
+            <button type="button" className="link" onClick={() => setNotCoveredShown([...new Set([...notCoveredShown, "bench_not_in_box"])])}>
+              show them
+            </button>
+          </div>
+        )}
         {formationFilter.length > 0 && (
           <div style={{ fontSize: 11, color: "#71717a", marginTop: 2 }}>
             {formationFilter.length} bench{formationFilter.length === 1 ? "" : "es"} ·{" "}
@@ -258,20 +299,50 @@ export function Controls() {
           </div>
         </div>
       )}
-      {vProp && (
-        <div className="row" style={{ marginTop: 6, alignItems: "center" }}>
-          <span style={{ fontSize: 11.5 }}>Range</span>
-          <input
-            type="number" placeholder="min" value={valueRange[0] ?? ""} style={{ width: 70, fontSize: 12 }}
-            onChange={(e) => setValueRange([num(e.target.value), valueRange[1]])}
-          />
-          <input
-            type="number" placeholder="max" value={valueRange[1] ?? ""} style={{ width: 70, fontSize: 12 }}
-            onChange={(e) => setValueRange([valueRange[0], num(e.target.value)])}
-          />
-          <span style={{ fontSize: 11, color: "#71717a" }}>{unit}</span>
+
+      <h3 style={{ marginTop: 10 }}>Screen BOX forecast locations</h3>
+      {mapRanges.map((r, i) => (
+        <div key={i} style={{ marginBottom: 6 }}>
+          <div className="row" style={{ alignItems: "center", gap: 4, marginBottom: 2 }}>
+            <select
+              value={r.metric} style={{ flex: 1, minWidth: 0, fontSize: 12 }}
+              onChange={(e) => updateMapRange(i, { metric: e.target.value as RangeMetric, lo: null, hi: null })}
+            >
+              {RANGE_METRICS.map((m) => (
+                <option key={m.value} value={m.value} disabled={m.econ && !priced}>{m.label}</option>
+              ))}
+            </select>
+            <button type="button" title="Remove this range" style={{ fontSize: 11, cursor: "pointer" }} onClick={() => removeMapRange(i)}>✕</button>
+          </div>
+          <div className="row" style={{ alignItems: "center", gap: 4 }}>
+            <input
+              type="number" placeholder="min" value={r.lo ?? ""} style={{ flex: 1, minWidth: 0, fontSize: 12 }}
+              onChange={(e) => updateMapRange(i, { lo: num(e.target.value) })}
+            />
+            <span style={{ fontSize: 11, color: "#71717a" }}>to</span>
+            <input
+              type="number" placeholder="max" value={r.hi ?? ""} style={{ flex: 1, minWidth: 0, fontSize: 12 }}
+              onChange={(e) => updateMapRange(i, { hi: num(e.target.value) })}
+            />
+            <span style={{ fontSize: 11, color: "#71717a" }}>{rangeMetricInfo(r.metric).unit}</span>
+          </div>
         </div>
-      )}
+      ))}
+      <select
+        value="" style={{ width: "100%", fontSize: 12 }}
+        onChange={(e) => { if (e.target.value) addMapRange(e.target.value as RangeMetric); }}
+      >
+        <option value="" disabled>+ add a range…</option>
+        {RANGE_METRICS.map((m) => (
+          <option key={m.value} value={m.value} disabled={m.econ && !priced}>{m.label} ({m.unit})</option>
+        ))}
+      </select>
+      <div style={{ fontSize: 11, color: "#71717a", marginTop: 2 }}>
+        Every range applies at once, on top of the tier / proximity / bench filters; the color is independent. A forecast
+        location with no value for a range fails it (e.g. no IRR). A range never hides a location without a BOX forecast.
+        The lasso rollup, profile and gunbarrel use the same screen.
+        {econRanged ? ` Econ ranges use ${deckLabel(mapDeck ?? boxMeta?.default_deck ?? "")} (Steven, display only).` : ""}
+      </div>
 
       <h3 style={{ marginTop: 10 }}>Filter to unit(s)</h3>
       <textarea

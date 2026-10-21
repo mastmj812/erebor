@@ -8,9 +8,9 @@ import {
   econMetricInfo,
   type EconMetric,
 } from "../api/boxMap";
-import { PROX_OUTCOME_GROUP } from "../api/highgrade";
 import { selectByPolygon } from "../api/select";
 import { colorForBlueox } from "../map/formations";
+import { activeRanges, stickPasses } from "../map/screen";
 import { useMapStore, type SelectionStick } from "../store";
 
 // AOI rollup on the BOX record run (overhaul step 4). Per bench: forecast-carrying
@@ -46,6 +46,7 @@ export function ResultsPanel() {
   const clearCulls = useMapStore((s) => s.clearCulls);
   const tierFilter = useMapStore((s) => s.tierFilter);
   const proxFilter = useMapStore((s) => s.proxFilter);
+  const mapRanges = useMapStore((s) => s.mapRanges);
   const econMetric = useMapStore((s) => s.econMetric);
   const setEconMetric = useMapStore((s) => s.setEconMetric);
   const mapDeck = useMapStore((s) => s.mapDeck);
@@ -87,8 +88,8 @@ export function ResultsPanel() {
       notCovered[k] = (notCovered[k] ?? 0) + 1;
       continue;
     }
-    if (!tierFilter.includes(tier)) { filtered++; continue; }
-    if (proxFilter.length && !(s.prox_outcome && proxFilter.includes(PROX_OUTCOME_GROUP[s.prox_outcome]))) { filtered++; continue; }
+    // the map's screen (tier / proximity / every range), one definition: map/screen.ts
+    if (!stickPasses(s, { tiers: tierFilter, prox: proxFilter, ranges: mapRanges })) { filtered++; continue; }
     const r = rows.get(bench) ?? { bench, n: 0, nV: 0, nP: 0, oil: 0, gas: 0, water: 0, latKft: 0, oilForFt: 0, econ: [], unpriced: 0 };
     r.n++;
     if (tier === "validated") r.nV++; else r.nP++;
@@ -119,7 +120,7 @@ export function ResultsPanel() {
       <h3>Selection ({sel.rule}) · BOX run {sel.box_run.run_id}</h3>
       <div className="count">
         {fmt(tot.n)} BOX forecast locations ({fmt(tot.nV)} validated · {fmt(tot.nP)} PROVISIONAL) · {fmt(pdp)} PDP
-        {filtered > 0 ? ` · ${fmt(filtered)} filtered (bench / tier / proximity)` : ""}
+        {filtered > 0 ? ` · ${fmt(filtered)} filtered (bench / tier / proximity${activeRanges(mapRanges).length ? " / ranges" : ""})` : ""}
         {sel.truncated ? " · capped 20k" : ""}
       </div>
       {culled > 0 && (
@@ -147,7 +148,7 @@ export function ResultsPanel() {
             <th className="num" title="lateral-weighted oil EUR per foot">bbl/ft</th>
             <th className="num" title="gas EUR, Bcf">Gas Bcf</th>
             <th className="num" title={`${info.label} — ${isSummed(econMetric) ? "sum" : "median"}, ${info.unit}`}>
-              {info.label.split(" ")[0]}{isSummed(econMetric) ? "" : " P50"}
+              {info.label.split(" ")[0]}{isSummed(econMetric) ? "" : " median"}
             </th>
           </tr>
         </thead>

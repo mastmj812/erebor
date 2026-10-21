@@ -43,6 +43,10 @@ const ACC_HIT = "acc-wells-hit";
 const ACC_GRID_SOURCE = "acc-grid";
 const ACC_GRID_FILL = "acc-grid-fill";
 const ACC_GRID_LINE = "acc-grid-line";
+// Map-tab BOX workup: the clicked location, its named analogs and the same-bench producers
+// nearby that are NOT analogs (api/workup.ts -> geo).
+const WK_SOURCE = "workup";
+const WK_LAYERS = ["wk-casing", "wk-nearby", "wk-analog", "wk-location", "wk-label"];
 const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
 
 let pmtilesRegistered = false;
@@ -203,6 +207,9 @@ export function MapView() {
   const accOperator = useMapStore((s) => s.accOperator);
   const accMapView = useMapStore((s) => s.accMapView);
   const accGrid = useMapStore((s) => s.accGrid);
+  const workup = useMapStore((s) => s.workup);
+  const workupOnMap = useMapStore((s) => s.workupOnMap);
+  const workupZoom = useMapStore((s) => s.workupZoom);
 
   // -------- init map (once) --------
   useEffect(() => {
@@ -391,6 +398,35 @@ export function MapView() {
           });
       });
 
+      // BOX workup cohort (on top of the sticks): analogs orange, nearby non-analogs violet
+      // dashed, the location itself cyan; analog ranks labelled along their laterals.
+      map.addSource(WK_SOURCE, { type: "geojson", data: EMPTY_FC });
+      // a white casing so the cohort reads apart from ramp-colored sticks underneath
+      map.addLayer({
+        id: "wk-casing", type: "line", source: WK_SOURCE,
+        paint: { "line-color": "#ffffff", "line-width": ["case", ["==", ["get", "role"], "location"], 10, 8], "line-opacity": 0.95 },
+      });
+      map.addLayer({
+        id: "wk-nearby", type: "line", source: WK_SOURCE, filter: ["==", ["get", "role"], "nearby"],
+        paint: { "line-color": "#7c3aed", "line-width": 3, "line-dasharray": [2, 1.5], "line-opacity": 0.9 },
+      });
+      map.addLayer({
+        id: "wk-analog", type: "line", source: WK_SOURCE, filter: ["==", ["get", "role"], "analog"],
+        paint: { "line-color": "#ea580c", "line-width": 4, "line-opacity": 0.95 },
+      });
+      map.addLayer({
+        id: "wk-location", type: "line", source: WK_SOURCE, filter: ["==", ["get", "role"], "location"],
+        paint: { "line-color": "#06b6d4", "line-width": 6, "line-opacity": 0.9 },
+      });
+      map.addLayer({
+        id: "wk-label", type: "symbol", source: WK_SOURCE, filter: ["==", ["get", "role"], "analog"],
+        layout: {
+          "symbol-placement": "line-center", "text-field": ["concat", "#", ["to-string", ["get", "rank"]]],
+          "text-size": 12, "text-font": ["Noto Sans Regular"], "text-allow-overlap": true,
+        },
+        paint: { "text-color": "#7c2d12", "text-halo-color": "rgba(255,255,255,0.95)", "text-halo-width": 1.5 },
+      });
+
       // Draw controller: lasso / box -> run selection.
       const drawer = new DrawingController(map, {
         onPolygon: (poly) => void runSelect(poly),
@@ -429,6 +465,9 @@ export function MapView() {
         );
         const name = feats[0]?.properties?.unique_id as string | undefined;
         if (!name) return;
+        // A Novi stick location (stick_id > 0) opens its BOX workup; PDP (-(api10)) has none.
+        const sid = Number(feats[0]?.properties?.stick_id);
+        useMapStore.getState().openWorkup(sid > 0 ? sid : null);
         try {
           const w = await fetchWellProduction(name, useMapStore.getState().basin);
           useMapStore.getState().setWellOverlay(w);
@@ -633,6 +672,29 @@ export function MapView() {
       src.setData(EMPTY_FC);
     }
   }, [highgrade, styleLoaded]);
+
+  // -------- BOX workup cohort -> layer data (Map tab only, when shown) --------
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const src = map.getSource(WK_SOURCE) as maplibregl.GeoJSONSource | undefined;
+    if (!src) return;
+    src.setData(workup?.geo ?? EMPTY_FC);
+    const vis = workup && workupOnMap && appMode === "map" ? "visible" : "none";
+    for (const id of WK_LAYERS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis);
+  }, [workup, workupOnMap, appMode, styleLoaded]);
+
+  // -------- zoom to the workup cohort (button in the Workup tab) --------
+  useEffect(() => {
+    if (!styleLoaded || !workupZoom) return;
+    const map = mapRef.current;
+    const geo = useMapStore.getState().workup?.geo;
+    if (!map || !geo) return;
+    const bb = geomsBbox(geo.features.map((f) => f.geometry));
+    // left padding clears the control panel; the workup window floats and can be dragged
+    if (bb) map.fitBounds(bb, { padding: { left: 280, right: 60, top: 80, bottom: 60 }, duration: 600, maxZoom: 13 });
+  }, [workupZoom, styleLoaded]);
 
   // -------- accuracy wells -> layer data --------
   useEffect(() => {

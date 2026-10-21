@@ -376,6 +376,27 @@ exists and how to verify it, then wait for Michael's go.
   - Stale docstrings fixed (box_locations classes, box.py, production.py).
   - The erebor rows of the workspace `CLAUDE.md` updated (outside this repo).
 
+### Follow-up after step 6 (2026-10-21) — Map screens + single-location workup
+Michael's review of the Map tab:
+- **One screen everywhere** (`frontend/src/map/screen.ts`): the map filter, the lasso rollup, the AOI profile and the
+  gunbarrel show the same locations. Any number of ranges (BOX EUR/ft per stream, lateral, any of Steven's econ
+  metrics) apply at once. A forecast location with no value for an active range fails it, as in Highgrade. Before
+  this, the map kept such a location and the rollup ignored ranges altogether.
+- **Ramp scaled to what is shown:** the legend's P5–P95 spans the benches (include / exclude) and tiers on screen.
+- **No BOX forecast by reason:** each not-covered class can be shown on its own. Picking a bench outside BOX says
+  its sticks are hidden and offers to show them.
+- **Clicked-well curve** opens on BOX vs Novi.
+- **Workup tab** in the Map tab's bottom window (`/api/box/location`). Clicking a location shows:
+  - the EUR chain: cohort P50 per 1,000 ft × lateral multiplier × haircut × proximity. It reproduces the stored EUR
+    on all 42,475 run-14 forecast rows;
+  - the type curve against each named analog's actuals and their P10 / P50 / P90;
+  - the run's flags on the location;
+  - same-bench producers within 2 mi that are NOT analogs;
+  - same-bench BOX neighbours within 1 mi (click one to open it, ⇄ to step back);
+  - the cohort drawn on the map.
+- **Not done (Michael):** PV per foot (C), a provisional line style (D), a live count without a lasso (F) and
+  shareable view state in the URL (G).
+
 ### Step 7 (deferred, own plan) — BOX hindcast on the Accuracy tab
 - Needs a warehouse BOX-accuracy matview first (cross-repo, warehouse first).
 - Scoped only when Michael asks.

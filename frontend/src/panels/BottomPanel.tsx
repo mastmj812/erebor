@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useMapStore } from "../store";
 import { GunbarrelView } from "./GunbarrelView";
 import { ProductionView } from "./ProductionPanel";
+import { WorkupView } from "./WorkupView";
 
 // Measure an element (ResizeObserver) so the charts fill the window as it resizes.
 // Uses a CALLBACK ref so the observer attaches whenever the node mounts — the
@@ -26,6 +27,7 @@ function useElementSize() {
 export function BottomPanel() {
   const sel = useMapStore((s) => s.selection);
   const overlay = useMapStore((s) => s.wellOverlay);
+  const workupStick = useMapStore((s) => s.workupStickId);
   const tab = useMapStore((s) => s.bottomTab);
   const setTab = useMapStore((s) => s.setBottomTab);
 
@@ -57,22 +59,25 @@ export function BottomPanel() {
     e.preventDefault();
   };
 
-  if (!sel && !overlay) return null;
+  if (!sel && !overlay && workupStick == null) return null;
 
   return (
     <div className="floatwin" style={{ left: pos.x, top: pos.y }}>
       <div className="win-head" onMouseDown={onHeadDown}>
-        <span className="win-title">⠿ {tab === "production" ? "Production" : "Gunbarrel"}</span>
+        <span className="win-title">⠿ {tab === "production" ? "Production" : tab === "gunbarrel" ? "Gunbarrel" : "BOX workup"}</span>
         <div className="seg sm tabs" onMouseDown={(e) => e.stopPropagation()}>
           <button className={tab === "production" ? "active" : ""} onClick={() => setTab("production")}>Production</button>
           <button className={tab === "gunbarrel" ? "active" : ""} onClick={() => setTab("gunbarrel")}>Gunbarrel</button>
+          <button className={tab === "workup" ? "active" : ""} onClick={() => setTab("workup")}>Workup</button>
         </div>
       </div>
       <div className="win-body" ref={bodyRef}>
         {tab === "production" ? (
           <ProductionView width={size.width} height={size.height} />
-        ) : (
+        ) : tab === "gunbarrel" ? (
           <GunbarrelView width={size.width} height={size.height} />
+        ) : (
+          <WorkupView />
         )}
       </div>
     </div>

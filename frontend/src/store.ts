@@ -12,6 +12,7 @@ import type {
 } from "./api/accuracy";
 import type { BoxLegend, EconMetric, EurStream, Tier } from "./api/boxMap";
 import type { BoxMeta, HighgradeFilters, ProxGroup } from "./api/highgrade";
+import type { LocationWorkup } from "./api/workup";
 import type { MapRange, RangeMetric } from "./map/screen";
 import type { ColorMode } from "./map/sticksLayers";
 
@@ -68,7 +69,7 @@ export interface WellBoxForecast {
   streams: Partial<Record<"oil" | "gas" | "water", BoxWellSeries>>;
 }
 export type WellSource = "novi" | "box" | "both";
-export type BottomTab = "production" | "gunbarrel";
+export type BottomTab = "production" | "gunbarrel" | "workup";
 export interface GunbarrelWell {
   stick_id: number; unique_id: string;
   category: string;                       // Map-tab gunbarrel: PDP | LOCATION (Novi's own tag is not shipped)
@@ -225,6 +226,16 @@ interface MapState {
   bottomTab: BottomTab;
   gunbarrel: GunbarrelData | null;
   gunbarrelLoading: boolean;
+  // Single-location BOX workup (bottom window "Workup"): the clicked Novi stick location
+  // (stick_id > 0), its loaded workup, the stick it was opened from (one step back), whether
+  // the cohort is drawn on the map, and a zoom-to-cohort request (a fresh object re-fires).
+  workupStickId: number | null;
+  workupPrevId: number | null;
+  workup: LocationWorkup | null;
+  workupCache: Record<number, LocationWorkup>; // loaded this basin, so stepping back is instant
+  workupLoading: boolean;
+  workupOnMap: boolean;
+  workupZoom: { n: number } | null;
   setAppMode: (m: AppMode) => void;
   setHighgrade: (h: HighgradeResult | null) => void;
   setHighgradeFilters: (f: HighgradeFilters | null) => void;
@@ -290,6 +301,11 @@ interface MapState {
   setBottomTab: (t: BottomTab) => void;
   setGunbarrel: (g: GunbarrelData | null) => void;
   setGunbarrelLoading: (b: boolean) => void;
+  openWorkup: (stickId: number | null, fromNeighbour?: boolean) => void;
+  setWorkup: (w: LocationWorkup | null) => void;
+  setWorkupLoading: (b: boolean) => void;
+  setWorkupOnMap: (b: boolean) => void;
+  zoomToWorkup: () => void;
 }
 
 export const useMapStore = create<MapState>((set, get) => ({
@@ -352,6 +368,13 @@ export const useMapStore = create<MapState>((set, get) => ({
   bottomTab: "production",
   gunbarrel: null,
   gunbarrelLoading: false,
+  workupStickId: null,
+  workupPrevId: null,
+  workup: null,
+  workupCache: {},
+  workupLoading: false,
+  workupOnMap: true,
+  workupZoom: null,
   setAppMode: (m) => set({ appMode: m, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWellApi10: null, accWell: null, accWellLoading: false }),
   setHighgrade: (h) => set({ highgrade: h }),
   setHighgradeFilters: (f) => set({ highgradeFilters: f }),
@@ -403,7 +426,7 @@ export const useMapStore = create<MapState>((set, get) => ({
     }),
   setAccVintages: (v) => set({ accVintages: v }),
   setBasin: (b) =>
-    set({ basin: b, highgrade: null, highgradeFilters: null, boxMeta: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWells: null, accSummary: null, accSummaryLoading: false, accTier: "all", accBench: [], accOperator: [], accWellApi10: null, accWell: null, accWellLoading: false, accSelection: null, accSelectionLoading: false, accMapView: "wells", accGrid: null, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], formationFilter: [], excludedSticks: [], unitFilter: [], mapLegend: null, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+    set({ basin: b, highgrade: null, highgradeFilters: null, boxMeta: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWells: null, accSummary: null, accSummaryLoading: false, accTier: "all", accBench: [], accOperator: [], accWellApi10: null, accWell: null, accWellLoading: false, accSelection: null, accSelectionLoading: false, accMapView: "wells", accGrid: null, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], formationFilter: [], excludedSticks: [], unitFilter: [], mapLegend: null, production: null, productionStale: false, wellOverlay: null, gunbarrel: null, workupStickId: null, workupPrevId: null, workup: null, workupCache: {}, workupLoading: false }),
   toggleOverlay: (k) =>
     set((s) => ({ overlays: { ...s.overlays, [k]: !s.overlays[k] } })),
   loadBasins: async () => {
@@ -476,6 +499,22 @@ export const useMapStore = create<MapState>((set, get) => ({
   setBottomTab: (t) => set({ bottomTab: t }),
   setGunbarrel: (g) => set({ gunbarrel: g }),
   setGunbarrelLoading: (b) => set({ gunbarrelLoading: b }),
+  // A map click opens a location fresh; a click on a neighbour inside the workup keeps the
+  // location it came from, so the window can step back to it.
+  openWorkup: (id, fromNeighbour = false) =>
+    set((s) => (id === s.workupStickId ? {} : {
+      workupStickId: id, workup: id != null ? s.workupCache[id] ?? null : null,
+      workupPrevId: fromNeighbour ? s.workupStickId : null,
+    })),
+  setWorkup: (w) =>
+    set((s) => (w == null ? { workup: null, workupLoading: false } : {
+      workup: w.location.stick_id === s.workupStickId ? w : s.workup,
+      workupCache: { ...s.workupCache, [w.location.stick_id]: w },
+      workupLoading: false,
+    })),
+  setWorkupLoading: (b) => set({ workupLoading: b }),
+  setWorkupOnMap: (b) => set({ workupOnMap: b }),
+  zoomToWorkup: () => set((s) => ({ workupZoom: { n: (s.workupZoom?.n ?? 0) + 1 } })),
 }));
 
 export function basinBbox(meta: BasinMeta[], basin: string): [number, number, number, number] | null {

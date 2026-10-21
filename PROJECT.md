@@ -68,13 +68,17 @@ npm run dev        # http://localhost:5180  (proxies /api -> :8077)
 
 **Map**
 - `/api/health`, `/api/basins`.
-- `/api/tiles/{z}/{x}/{y}.mvt?basin=&econ=&deck=` carries BOX properties per stick and is cached in process.
+- `/api/tiles/{z}/{x}/{y}.mvt?basin=&econ=&deck=` carries BOX properties per stick and is cached in process
+  (`econ` = a comma list: the econ color metric + any econ range, one `econ_<metric>` property each).
 - `/api/layers/{pads,land_grid,outline}.geojson?basin=`.
 - `/api/basemap/{permian.pmtiles,blocks.geojson,sections.geojson}`.
 
 **BOX**
 - `/api/box/meta?basin=`: record run, disclosure, priced decks, coverage by class.
-- `/api/box/legend?basin=&metric=`: ramp breaks.
+- `/api/box/legend?basin=&metric=[&bench=&exclude=&tier=]`: ramp breaks (P5–P95) over the forecast locations on the
+  benches and tiers the map shows.
+- `/api/box/location?basin=&stick_id=`: the single-location workup (Map tab "Workup"): the EUR build chain, type curve
+  vs named analogs, the cohort's flags, same-bench producers nearby NOT in the cohort, and same-bench BOX neighbours.
 - `/api/box/pad?basin=&pad_key=`: the per-DSU workup, with named analogs, the BOX÷Novi cross-check, and
   forecast vs analog actuals.
 

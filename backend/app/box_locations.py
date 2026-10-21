@@ -39,10 +39,12 @@ from sqlalchemy.orm import Session
 #                        configuration has no drilled precedent: no forecast, search
 #                        provenance kept (like not_covered_no_analogs)
 #   bench_not_in_box  its bench is in no box.bench_scope pool (not part of BOX v1)
-#   realized          reconciliation matched it to production (shown only when the
-#                     Highgrade "All Novi BASE_CASE" toggle readmits realized PUDs)
-#   no_box_row        drillable, on a BOX bench, yet missing from the record run —
-#                     expected 0; non-zero means the Novi vintage moved under the run
+#   not_screened      on a BOX bench, not reconciled away, yet no row in the record run:
+#                     Novi-RES sticks inside a BOX pool (D117 step 3 parked), and any
+#                     stick that drifted out of the run's Novi vintage
+#   realized          our reconciliation matched it to production (Map + pad workup;
+#                     Highgrade never screens it)
+NOT_SCREENED = "not_screened"
 COVERAGE_CLASSES: tuple[str, ...] = (
     "covered",
     "covered_provisional",
@@ -52,20 +54,16 @@ COVERAGE_CLASSES: tuple[str, ...] = (
     "not_covered_wcxy",
     "not_covered_unvalidated",
     "not_covered_emerging",
+    NOT_SCREENED,
     "bench_not_in_box",
     "realized",
-    "no_box_row",
 )
-# Map tiles: Novi supplies only the stick GEOMETRY (Michael, 2026-10-21: Novi's own
-# tags — BASE_CASE / RES, depletion tiers — are not used anywhere; classification is
-# ours). So a Novi stick with no row in the record run is classed by OUR facts only:
-# realized (our reconciliation), on a BOX bench but never screened by the record run
-# (this is where Novi-RES sticks inside a BOX pool land, and a PUD that drifted out of
-# the run's vintage), or on a bench BOX does not cover.
-NOT_SCREENED = "not_screened"
-MAP_COVERAGE_CLASSES: tuple[str, ...] = (
-    *(c for c in COVERAGE_CLASSES if c != "no_box_row"), NOT_SCREENED,
-)
+# Novi supplies only the stick GEOMETRY (Michael, 2026-10-21: Novi's own tags — PUD / RES,
+# depletion tiers — are not used anywhere; classification is ours). So a Novi stick with no
+# row in the record run is classed by OUR facts only: realized (our reconciliation), on a
+# BOX bench but never screened by the record run, or on a bench BOX does not cover. The Map
+# and the workup use the same classes (MAP_COVERAGE_CLASSES is kept as the tiles' name).
+MAP_COVERAGE_CLASSES: tuple[str, ...] = COVERAGE_CLASSES
 
 # The coverage classes that carry a BOX forecast (volumes, EUR, analogs, charts).
 FORECAST_CLASSES: tuple[str, ...] = ("covered", "covered_provisional")
@@ -141,12 +139,13 @@ def econ_join() -> str:
 
 
 def coverage_sql(a: str) -> str:  # noqa: ARG001 — alias kept for call-site symmetry
-    """Coverage class of a Novi PUD row (aliases from box_joins: `bp`, `bsm`; plus `rec`
-    reconciliation). Evaluated per class in the pad counts, so it stays join-only."""
+    """Coverage class of a Novi stick row from curated.intel_locations (aliases from
+    box_joins: `bp`, `bsm`; plus `rec` reconciliation) — the pad workup's twin of
+    map_coverage_sql (same classes; this one reads reconciliation from `rec`)."""
     return (
         "(CASE WHEN bp.coverage IS NOT NULL THEN bp.coverage "
         "WHEN rec.status IN ('realized_drift', 'realized_phantom') THEN 'realized' "
-        "WHEN bsm.bench IS NOT NULL THEN 'no_box_row' "
+        f"WHEN bsm.bench IS NOT NULL THEN '{NOT_SCREENED}' "
         "ELSE 'bench_not_in_box' END)"
     )
 

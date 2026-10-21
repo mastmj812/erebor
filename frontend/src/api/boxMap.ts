@@ -26,7 +26,6 @@ export const ECON_METRICS: { value: EconMetric; label: string; unit: string; bet
   { value: "capex", label: "Capex", unit: "$MM", better: "low" },
 ];
 export const econMetricInfo = (m: EconMetric) => ECON_METRICS.find((x) => x.value === m)!;
-export const DEFAULT_DECK = "wti70_hh3";
 
 export type Tier = "validated" | "provisional";
 export const TIER_OF_COVERAGE: Record<string, Tier> = { covered: "validated", covered_provisional: "provisional" };
@@ -35,12 +34,9 @@ export const FORECAST_COVERAGE = ["covered", "covered_provisional"];
 // Novi supplies only the stick geometry; its own PUD / RES and tier tags are not used
 // (Michael, 2026-10-21). A stick with no row in the BOX record run is classed by our facts:
 // realized (our reconciliation), on a BOX bench but never screened by the run, or on a
-// bench BOX does not cover (backend box_locations.map_coverage_sql).
+// bench BOX does not cover (backend box_locations.map_coverage_sql / coverage_sql).
 export const NOT_SCREENED = "not_screened";
-export const MAP_COVERAGE_LABELS: Record<string, string> = {
-  ...COVERAGE_LABELS,
-  [NOT_SCREENED]: "on a BOX bench, not screened by the record run",
-};
+export const MAP_COVERAGE_LABELS: Record<string, string> = COVERAGE_LABELS;
 export const MAP_COVERAGE_ORDER = [
   "covered", "covered_provisional",
   "not_covered_no_precedent", "not_covered_no_analogs", "not_covered_outside_extent",

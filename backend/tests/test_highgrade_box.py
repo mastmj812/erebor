@@ -19,7 +19,7 @@ def test_coverage_classes_cover_the_sql_60_values():
     sql60 = {"covered", "covered_provisional", "not_covered_emerging", "not_covered_wcxy", "not_covered_unvalidated",
              "not_covered_outside_extent", "not_covered_no_analogs", "not_covered_no_precedent"}  # + sql/65 (D114)
     assert sql60 <= set(box.COVERAGE_CLASSES)
-    assert set(box.COVERAGE_CLASSES) - sql60 == {"bench_not_in_box", "realized", "no_box_row"}
+    assert set(box.COVERAGE_CLASSES) - sql60 == {"bench_not_in_box", "realized", "not_screened"}
     derived = set(re.findall(r"THEN '([a-z_]+)'", box.coverage_sql("il")))
     assert derived <= set(box.COVERAGE_CLASSES)
 

@@ -7,8 +7,9 @@
 |---|---|---|
 | 1 Warehouse 3Q26 pads → `intel_pad_geom` v3 | **applied live 2026-10-21** (engineering_db #173 + data dictionary #174): 17,526 pads, all 42,475 BOX PUDs inside Novi polygons | engineering_db `sql/66`, `sql/67` |
 | 2 Remove export; Accuracy = Novi reference; pin pad vintage | merged (erebor #18) | erebor |
-| 3 Map tab BOX-first | this PR | erebor |
+| 3 Map tab BOX-first | merged (erebor #19); low-zoom tile cache + binary fetch merged (erebor #20) | erebor |
 | 4–6 | not started | |
+| BOX universe (D117, engineering_db) | step 1 decision (#175) + step 2 reconciliation of every Novi stick **applied live 2026-10-21** (#177, #178): realized RES now read `realized` on the map. BOX step 3 (rehearsal adding ~6,200 in-extent RES locations) waits on Michael's go | engineering_db `sql/68`, `docs/box/universe-2026-10-21/` |
 | 7 BOX hindcast | deferred | |
 
 

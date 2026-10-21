@@ -1,13 +1,14 @@
 import { useCallback, useRef, useState } from "react";
 
-import { fetchProductionAggregate } from "../api/production";
+import { fetchBoxProfile } from "../api/production";
 import { colorForBlueox } from "../map/formations";
 import { COVERAGE_LABELS, isForecastClass } from "../api/highgrade";
 import { useMapStore, type Phase, type WellSource } from "../store";
 import { LineChart, type Series } from "./LineChart";
 
 const PHASES: Phase[] = ["oil", "gas", "water"];
-const STEP_DAYS = 30; // forecast cadence
+const STEP_DAYS = 30; // Novi forecast cadence (single-well comparison curve)
+const DAYS_PER_MONTH = 365.25 / 12; // BOX monthly volumes (exact per-month integrals, D39)
 
 function cumsum(vals: number[]): number[] {
   let acc = 0;
@@ -45,13 +46,14 @@ export function ProductionView(_props: { width?: number; height?: number }) {
   const basin = useMapStore((s) => s.basin);
   const rule = useMapStore((s) => s.selectionRule);
   const excluded = useMapStore((s) => s.excludedFormations);
+  const formationFilter = useMapStore((s) => s.formationFilter);
+  const tierFilter = useMapStore((s) => s.tierFilter);
   const prod = useMapStore((s) => s.production);
   const loading = useMapStore((s) => s.productionLoading);
   const phase = useMapStore((s) => s.productionPhase);
   const mode = useMapStore((s) => s.chartMode);
   const agg = useMapStore((s) => s.aggMode);
   const overlay = useMapStore((s) => s.wellOverlay);
-  const sel = useMapStore((s) => s.selection);
   const excludedSticks = useMapStore((s) => s.excludedSticks);
   const stale = useMapStore((s) => s.productionStale);
   const wellSource = useMapStore((s) => s.wellSource);
@@ -61,12 +63,8 @@ export function ProductionView(_props: { width?: number; height?: number }) {
     if (!aoi) return;
     st.getState().setProductionLoading(true);
     try {
-      // Map culled stick_ids -> well names so the backend drops them from the curves.
-      const byId = new Map((sel?.sticks ?? []).map((s) => [s.stick_id, s.unique_id]));
-      const exclude = excludedSticks
-        .map((id) => byId.get(id))
-        .filter((n): n is string => !!n);
-      const p = await fetchProductionAggregate(aoi, basin, rule, exclude);
+      // BOX record run, forecast-carrying locations only; culls / bench filter / tiers mirror the map.
+      const p = await fetchBoxProfile(aoi, basin, rule, excludedSticks, formationFilter, tierFilter);
       st.getState().setProduction(p);
     } catch (e) {
       console.error(e);
@@ -78,16 +76,22 @@ export function ProductionView(_props: { width?: number; height?: number }) {
   const exSet = new Set(excluded);
   const series: Series[] = [];
   if (prod) {
-    for (const f of prod.formations) {
-      if (exSet.has(f.formation)) continue;
-      // Avg = per-well type curve (sum / well_count); Sum = total field rate.
-      const div = agg === "avg" ? f.well_count || 1 : 1;
-      const raw = f[phase].map((v) => v / div);
+    // BOX AOI profile per bench: avg = cohort MEAN per 1,000 ft (never P50, rule 18); sum = field
+    // total. Monthly volumes are uptime-free, so "rate" = volume / days in month (not a calendar
+    // rate). PROVISIONAL benches (and provisional water) draw dashed (D105).
+    const xs = Array.from({ length: prod.months }, (_, k) => (k + 0.5) * DAYS_PER_MONTH / 365);
+    const xsCum = Array.from({ length: prod.months }, (_, k) => (k + 1) * DAYS_PER_MONTH / 365);
+    for (const b of prod.benches) {
+      if (exSet.has(b.formation)) continue;
+      const vols = (agg === "avg" ? b.per_kft_mean : b.sum)[phase];
+      let acc = 0;
+      const prov = b.tier === "provisional" || (phase === "water" && b.n_water_provisional === b.n);
       series.push({
-        label: f.formation,
-        color: colorForBlueox(basin, f.formation),
-        xs: yrs(prod.ip_days),
-        ys: mode === "rate" ? raw : cumsum(raw),
+        label: `${b.formation} (${b.n}${b.tier === "provisional" ? " PROV" : b.tier === "mixed" ? " mixed" : ""})`,
+        color: colorForBlueox(basin, b.formation),
+        xs: mode === "rate" ? xs : xsCum,
+        ys: mode === "rate" ? vols.map((v) => v / DAYS_PER_MONTH) : vols.map((v) => (acc += v)),
+        dashed: prov,
       });
     }
   }
@@ -123,14 +127,16 @@ export function ProductionView(_props: { width?: number; height?: number }) {
 
   const baseUnit = phase === "gas" ? (mode === "rate" ? "MCFD" : "MCF")
     : (mode === "rate" ? (phase === "oil" ? "BOPD" : "BWPD") : "BBL");
-  const unit = agg === "avg" ? `${baseUnit}/well` : baseUnit;
+  const unit = prod && agg === "avg" ? `${baseUnit} per 1,000 ft, mean` : baseUnit;
 
   return (
     <div className="prod-view">
       <div className="prod-head">
         <strong>
-          Production — {src === "novi" ? "Novi" : src === "box" ? "BOX" : "Novi + BOX"} forecast
-          {prod && src !== "novi" ? " (AOI profiles: Novi)" : ""}
+          Production —{" "}
+          {prod ? `AOI: BOX run ${prod.box_run.run_id} ${agg === "avg" ? "mean per 1,000 ft" : "field total"}` : ""}
+          {prod && overlay ? " · " : ""}
+          {overlay ? `well: ${src === "novi" ? "Novi" : src === "box" ? "BOX" : "BOX vs Novi"}` : ""}
         </strong>
         <div className="seg sm">
           {PHASES.map((p) => (
@@ -143,7 +149,7 @@ export function ProductionView(_props: { width?: number; height?: number }) {
           <button className={mode === "cum" ? "active" : ""} onClick={() => st.getState().setChartMode("cum")}>cum</button>
         </div>
         <div className="seg sm">
-          <button className={agg === "avg" ? "active" : ""} onClick={() => st.getState().setAggMode("avg")}>avg/well</button>
+          <button className={agg === "avg" ? "active" : ""} onClick={() => st.getState().setAggMode("avg")}>mean / 1,000 ft</button>
           <button className={agg === "sum" ? "active" : ""} onClick={() => st.getState().setAggMode("sum")}>sum</button>
         </div>
         {prod && stale && (
@@ -200,9 +206,9 @@ export function ProductionView(_props: { width?: number; height?: number }) {
       ) : (
         <div className="prod-load">
           <button disabled={loading} onClick={() => void load()}>
-            {loading ? "Loading… (a few seconds)" : "Load production profiles"}
+            {loading ? "Loading… (a few seconds)" : "Load BOX profiles (by bench)"}
           </button>
-          <span className="count">or click a stick on the map to overlay a single well</span>
+          <span className="count">or click a stick on the map to overlay a single well (BOX vs Novi)</span>
         </div>
       )}
     </div>

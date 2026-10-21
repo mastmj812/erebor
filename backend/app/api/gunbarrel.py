@@ -14,6 +14,12 @@ Assumes the selection is roughly parallel laterals (one azimuth) — true for a
 box/lasso over a development area; a selection spanning two differently-oriented
 areas will skew the offset. Uses wellstick_geom (present for all categories);
 no pad resolution, so no well is dropped.
+
+BOX-first (overhaul step 4): each location carries its BOX record-run coverage, per-ft
+EUR per stream and — with `econ` + `deck` — ONE of Steven's econ columns for the record
+run's case (display only, D13), all through app.box_locations. Novi supplies only the
+geometry: `category` is PDP | LOCATION, and Novi's recon / depletion / support screens
+are gone (the client hides no-BOX-forecast locations like the map does).
 """
 
 from __future__ import annotations
@@ -23,10 +29,20 @@ import math
 from typing import Literal
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.box_locations import (
+    ECON_METRICS,
+    EUR_STREAMS,
+    box_joins,
+    econ_case,
+    econ_join,
+    kind_sql,
+    map_coverage_sql,
+    record_run_id,
+)
 from app.db import get_session
 
 router = APIRouter(prefix="/gunbarrel", tags=["gunbarrel"])
@@ -61,40 +77,42 @@ class GbBody(BaseModel):
     aoi: dict
     basin: Literal["delaware", "midland"]
     rule: Rule = "intersects"
-    # Mirror the map's display filters so the gun-barrel shows exactly what's on
-    # the map. remaining_only: drop everything reconciliation flagged as already
-    # realized (realized_drift/phantom, conflict, net_new_pdp) — keep remaining
-    # PUDs + ordinary producers (null recon) + RES. exclude_depleted: drop Tier-4
-    # PUDs. Both leave producing context (null recon / null deplet_t) intact.
-    remaining_only: bool = False
-    exclude_depleted: bool = False
+    econ: str | None = Field(None, pattern="^(" + "|".join(ECON_METRICS) + ")$")
+    deck: str | None = Field(None, max_length=64)
 
 
-@router.post("")
-def gunbarrel(body: GbBody, session: Session = Depends(get_session)) -> dict:
-    pred = _PRED[body.rule]
-    filt = ""
-    if body.remaining_only:
-        filt += " AND (w.recon_status IS NULL OR w.recon_status = 'remaining_pud')"
-    if body.exclude_depleted:
-        filt += " AND w.deplet_t IS DISTINCT FROM 'Tier-4'"
-    rows = session.execute(
-        text(f"""
+def gunbarrel_sql(rule: Rule, econ_metric: str | None) -> str:
+    econ_col = f", be.{ECON_METRICS[econ_metric]['col']} AS econ" if econ_metric else ""
+    eur_cols = ", ".join(f"bs{s[0]}.eur_per_kft / 1000.0 AS {s}_eur_ft" for s in EUR_STREAMS)
+    return f"""
             WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g)
-            SELECT w.stick_id, w.unique_id, w.category, UPPER(w.formation) AS formation,
+            SELECT w.stick_id, w.unique_id, {kind_sql("w")} AS category, UPPER(w.formation) AS formation,
                    w.formation_blueox, w.basin_blueox, w.formation_blueox_source,
-                   w.recon_status, w.deplet_t, w.pdp_count_3mi,
+                   {map_coverage_sql("w")} AS coverage, {eur_cols},
+                   bpp.outcome AS prox_outcome{econ_col},
                    w.tvd, w.ll_ft,
                    ST_X(ST_LineInterpolatePoint(w.wellstick_geom, 0.5)) AS mx,
                    ST_Y(ST_LineInterpolatePoint(w.wellstick_geom, 0.5)) AS my,
                    ST_X(ST_StartPoint(w.wellstick_geom)) AS sx, ST_Y(ST_StartPoint(w.wellstick_geom)) AS sy,
                    ST_X(ST_EndPoint(w.wellstick_geom))   AS ex, ST_Y(ST_EndPoint(w.wellstick_geom))   AS ey
-            FROM curated.erebor_locations w, aoi
+            FROM curated.erebor_locations w
+            CROSS JOIN aoi
+            {box_joins("w", bench="w.formation_blueox")}
+            {econ_join() if econ_metric else ""}
             WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL
-              AND w.tvd IS NOT NULL AND {pred}{filt}
-        """),
-        {"aoi": json.dumps(body.aoi), "basin": body.basin},
-    ).mappings().all()
+              AND w.tvd IS NOT NULL AND {_PRED[rule]}
+        """
+
+
+@router.post("")
+def gunbarrel(body: GbBody, session: Session = Depends(get_session)) -> dict:
+    run_id = record_run_id(session)
+    case = econ_case(session, run_id, body.deck) if (body.econ and run_id is not None) else None
+    econ_metric = body.econ if case is not None else None
+    params = {"aoi": json.dumps(body.aoi), "basin": body.basin, "box_run": run_id}
+    if case is not None:
+        params |= {"econ_deck": case["deck_id"], "econ_aset": case["assumption_set_id"]}
+    rows = session.execute(text(gunbarrel_sql(body.rule, econ_metric)), params).mappings().all()
 
     if not rows:
         return {"pad_count": 0, "pads": []}
@@ -136,9 +154,11 @@ def gunbarrel(body: GbBody, session: Session = Depends(get_session)) -> dict:
             "formation_blueox": r["formation_blueox"],
             "basin_blueox": r["basin_blueox"],
             "formation_blueox_source": r["formation_blueox_source"],
-            "recon_status": r["recon_status"],
-            "deplet_t": r["deplet_t"],
-            "pdp_count_3mi": r["pdp_count_3mi"],  # PUD/RES offset support; NULL for PDP
+            "coverage": r["coverage"],  # BOX record-run class; NULL on PDP
+            **{f"{s}_eur_ft": (float(r[f"{s}_eur_ft"]) if r[f"{s}_eur_ft"] is not None else None)
+               for s in EUR_STREAMS},
+            "prox_outcome": r["prox_outcome"],
+            "econ": float(r["econ"]) if econ_metric and r["econ"] is not None else None,
             "tvd": float(r["tvd"]),
             "ll_ft": float(r["ll_ft"]) if r["ll_ft"] is not None else None,
             "offset_ft": round(offset_ft, 1),

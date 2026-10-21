@@ -1,9 +1,15 @@
-"""Production profiles for an AOI selection.
+"""Production profiles.
 
-  * POST /production/aggregate : per-formation streams (oil/gas/water), summed over
-    the selected wells, stitched Novi forecast (0 -> ~29.5 yr) + Arps tail
-    (~29.5 -> 50 yr). well_count lets the frontend show per-well averages.
-  * GET  /production/well      : one well's forecast stream + Arps tail to 50 yr.
+  * POST /production/box_profile : the BOX record run's monthly volumes for the
+    forecast-carrying locations in an AOI, per Blue Ox bench: the field SUM and the
+    cohort MEAN per 1,000 ft (rule 18: a mean, never labelled P50; locations without
+    a lateral basis drop from numerator AND denominator). Exact monthly integrals,
+    uptime-free (D39 / D63), 600 months, so a bench's months sum to its stored EUR.
+    Validated vs PROVISIONAL counts per bench (D105); water carries its own tier.
+    Replaces the Novi aggregate (overhaul step 4: Novi's forecast survives only as the
+    single-well comparison below).
+  * GET  /production/well        : one well's Novi forecast stream + Arps tail to 50 yr
+    (the comparison curve), plus its BOX record-run forecast under `box`.
 
 Forecast/Arps are keyed by novi_wellname (= PUD/RES Unique ID). /well also carries the
 BOX record run's forecast for that PUD when one exists (app/api/box.well_forecast). PDP sticks are
@@ -25,6 +31,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.api.box import well_forecast
+from app.box_locations import FORECAST_IN_SQL, record_run
 from app.db import get_session
 from decline.models import arps_exponential, arps_hyperbolic
 
@@ -107,118 +114,98 @@ def _anchored_tail(
     return tv
 
 
-class AggBody(BaseModel):
+BOX_MONTHS = 600  # box.pud_forecast_month.month_no 1..600 (50 yr, D16 / D39)
+STREAMS = ("oil", "gas", "water")
+
+
+class ProfileBody(BaseModel):
     aoi: dict
     basin: Literal["delaware", "midland"]
     rule: Rule = "intersects"
-    exclude: list[str] = []  # manually-culled well names (unique_id) to drop
+    exclude_sticks: list[int] = []          # culled stick_ids
+    formations: list[str] = []              # bench include filter (empty = all); '(unmapped)' allowed
+    tiers: list[Literal["validated", "provisional"]] = ["validated", "provisional"]
 
 
-def _sel_cte(pred: str) -> str:
-    # The curve rollup dimension is the Blue Ox bench (formation_blueox), matching
-    # the map sticks and the ResultsPanel cull list (both keyed on the bench code).
-    # NULL -> '(unmapped)' to mirror ResultsPanel, so its cull checkboxes line up
-    # with these curves. Sourced from curated.erebor_locations (the only relation
-    # carrying formation_blueox alongside unique_id / wellstick_geom).
+def profile_sql(rule: Rule) -> str:
+    """The AOI's forecast-carrying BOX locations (sel) -> per (bench, stream, month)
+    volume SUM and SUM of volume per 1,000 ft. The lateral basis is the one the stored
+    eur_per_kft used (eur / eur_per_kft), so mean-per-kft x lateral == the location."""
     return f"""
         WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g),
         sel AS (
-          SELECT w.unique_id, COALESCE(w.formation_blueox, '(unmapped)') AS formation
-          FROM curated.erebor_locations w, aoi
-          WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL AND {pred}
-            AND w.unique_id <> ALL((:exclude)::text[])
+          SELECT bp.location_id, COALESCE(w.formation_blueox, '(unmapped)') AS formation, bp.coverage,
+                 bso.eur / NULLIF(bso.eur_per_kft, 0) AS lat_kft
+          FROM curated.erebor_locations w
+          CROSS JOIN aoi
+          JOIN box.pud_forecast bp ON bp.run_id = :box_run AND bp.stick_id = w.stick_id
+          JOIN box.pud_forecast_stream bso ON bso.run_id = bp.run_id AND bso.location_id = bp.location_id
+                                          AND bso.stream = 'oil'
+          WHERE w.basin = :basin AND w.wellstick_geom IS NOT NULL AND {_PRED[rule]}
+            AND bp.coverage IN {FORECAST_IN_SQL}
+            AND bp.coverage = ANY(CAST(:coverages AS text[]))
+            AND w.stick_id <> ALL(CAST(:exclude AS bigint[]))
+            AND (cardinality(CAST(:formations AS text[])) = 0
+                 OR COALESCE(w.formation_blueox, '(unmapped)') = ANY(CAST(:formations AS text[])))
         )
+        SELECT s.formation, m.stream, m.month_no,
+               SUM(m.volume) AS vol,
+               SUM(m.volume / s.lat_kft) FILTER (WHERE s.lat_kft > 0) AS vol_per_kft
+        FROM sel s
+        JOIN box.pud_forecast_month m ON m.run_id = :box_run AND m.location_id = s.location_id
+        GROUP BY 1, 2, 3
     """
 
 
-@router.post("/aggregate")
-def aggregate(body: AggBody, session: Session = Depends(get_session)) -> dict:
-    pred = _PRED[body.rule]
-    params = {"aoi": json.dumps(body.aoi), "basin": body.basin, "exclude": body.exclude}
+def counts_sql(rule: Rule) -> str:
+    return profile_sql(rule).split("SELECT s.formation, m.stream")[0] + """
+        SELECT s.formation,
+               count(*) AS n,
+               count(*) FILTER (WHERE s.coverage = 'covered') AS n_validated,
+               count(*) FILTER (WHERE s.coverage = 'covered_provisional') AS n_provisional,
+               count(*) FILTER (WHERE s.lat_kft > 0) AS n_kft,
+               count(*) FILTER (WHERE bsw.tier = 'provisional') AS n_water_provisional
+        FROM sel s
+        LEFT JOIN box.pud_forecast_stream bsw ON bsw.run_id = :box_run AND bsw.location_id = s.location_id
+                                             AND bsw.stream = 'water'
+        GROUP BY 1
+    """
 
-    # 1) forecast (ML stream) summed per (formation, ip_day) -> ~29.5 yr
-    fc_rows = session.execute(
-        text(_sel_cte(pred) + """
-            SELECT sel.formation, f.ip_day,
-                   SUM(f.oil) AS oil, SUM(f.gas) AS gas, SUM(f.water) AS water,
-                   COUNT(*) AS n
-            FROM sel JOIN curated.intel_forecast f
-              ON f.basin = :basin AND f.novi_wellname = sel.unique_id
-            GROUP BY sel.formation, f.ip_day
-            ORDER BY sel.formation, f.ip_day
-        """),
-        params,
-    ).mappings().all()
 
-    # 2) Arps segments per selected well (for the tail beyond the forecast)
-    arps_rows = session.execute(
-        text(_sel_cte(pred) + """
-            SELECT sel.unique_id, sel.formation, a.production_stream,
-                   a.segment_curve_type, a.b, a.d_nom, a.q_start, a.q_stop,
-                   a.day_start, a.day_stop
-            FROM sel JOIN curated.intel_arps a
-              ON a.basin = :basin AND a.novi_wellname = sel.unique_id
-        """),
-        params,
-    ).mappings().all()
+def bench_tier(n_validated: int, n_provisional: int) -> str:
+    return "provisional" if n_validated == 0 else "validated" if n_provisional == 0 else "mixed"
 
-    fc_days = sorted({r["ip_day"] for r in fc_rows})
-    last_day = fc_days[-1] if fc_days else 0
-    tail_days = list(range(int(last_day) + STEP, HORIZON_DAY + 1, STEP))
-    ip_days = fc_days + tail_days
-    n = len(ip_days)
-    fidx = {d: i for i, d in enumerate(fc_days)}
 
-    def blank(formation: str) -> dict:
-        return {
-            "formation": formation, "well_count": 0,
-            "oil": [0.0] * n, "gas": [0.0] * n, "water": [0.0] * n,
+@router.post("/box_profile")
+def box_profile(body: ProfileBody, session: Session = Depends(get_session)) -> dict:
+    run = record_run(session)
+    coverages = [{"validated": "covered", "provisional": "covered_provisional"}[t] for t in body.tiers]
+    params = {"aoi": json.dumps(body.aoi), "basin": body.basin, "box_run": run["run_id"],
+              "coverages": coverages, "exclude": body.exclude_sticks, "formations": body.formations}
+    counts = {r["formation"]: dict(r) for r in session.execute(text(counts_sql(body.rule)), params).mappings()}
+    benches: dict[str, dict] = {}
+    for f, c in counts.items():
+        benches[f] = {
+            "formation": f, "n": int(c["n"]), "n_validated": int(c["n_validated"]),
+            "n_provisional": int(c["n_provisional"]), "n_lateral": int(c["n_kft"]),
+            "n_water_provisional": int(c["n_water_provisional"]),
+            "tier": bench_tier(int(c["n_validated"]), int(c["n_provisional"])),
+            "sum": {st: [0.0] * BOX_MONTHS for st in STREAMS},
+            "per_kft_mean": {st: [0.0] * BOX_MONTHS for st in STREAMS},
         }
-
-    forms: dict[str, dict] = {}
-    for r in fc_rows:
-        g = forms.setdefault(r["formation"], blank(r["formation"]))
-        i = fidx[r["ip_day"]]
-        g["oil"][i] = float(r["oil"] or 0.0)
-        g["gas"][i] = float(r["gas"] or 0.0)
-        g["water"][i] = float(r["water"] or 0.0)
-        g["well_count"] = max(g["well_count"], int(r["n"]))
-
-    # Arps tail: sum each well's segment-evaluated tail into its formation
-    # (numpy), then anchor each formation's tail level to its own summed
-    # forecast at the seam (see _anchored_tail — per-well anchoring would
-    # need per-well last-row rates the grouped query doesn't fetch; the
-    # aggregate is a formation-level sum, so a formation-level anchor is
-    # grain-consistent).
-    base, nt = len(fc_days), len(tail_days)
-    tail_arr = np.asarray(tail_days, dtype=float)
-    seam_arr = np.asarray([float(last_day)])
-    segs_by: dict[tuple, list] = defaultdict(list)
-    for r in arps_rows:
-        segs_by[(r["formation"], r["unique_id"], r["production_stream"])].append(r)
-    ftail: dict[str, dict[str, np.ndarray]] = {}
-    fseam: dict[str, dict[str, float]] = {}
-    for (formation, _uid, stream), segs in segs_by.items():
-        if stream not in ("oil", "gas", "water"):
+    for r in session.execute(text(profile_sql(body.rule)), params).mappings():
+        b = benches.get(r["formation"])
+        k = int(r["month_no"]) - 1
+        if b is None or r["stream"] not in STREAMS or not 0 <= k < BOX_MONTHS:
             continue
-        ft = ftail.setdefault(
-            formation, {"oil": np.zeros(nt), "gas": np.zeros(nt), "water": np.zeros(nt)}
-        )
-        fs = fseam.setdefault(formation, {"oil": 0.0, "gas": 0.0, "water": 0.0})
-        ft[stream] += _tail_values(segs, tail_arr)
-        fs[stream] += float(_tail_values(segs, seam_arr)[0])
-    for formation, ft in ftail.items():
-        g = forms.setdefault(formation, blank(formation))
-        for stream in ("oil", "gas", "water"):
-            tv = ft[stream]
-            last_fc = float(g[stream][base - 1]) if base >= 1 else 0.0
-            seam = fseam[formation][stream]
-            if last_fc > 0.0 and seam > 0.0:
-                tv = tv * (last_fc / seam)
-            for k in range(nt):
-                g[stream][base + k] += float(tv[k])
-
-    return {"ip_days": ip_days, "forecast_end_day": last_day, "formations": list(forms.values())}
+        b["sum"][r["stream"]][k] = float(r["vol"] or 0.0)
+        if b["n_lateral"]:
+            b["per_kft_mean"][r["stream"]][k] = float(r["vol_per_kft"] or 0.0) / b["n_lateral"]
+    return {
+        "box_run": {"run_id": run["run_id"], "data_through": run["data_through"]},
+        "months": BOX_MONTHS,
+        "benches": sorted(benches.values(), key=lambda b: -b["n"]),
+    }
 
 
 @router.get("/well")

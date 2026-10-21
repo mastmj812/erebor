@@ -231,7 +231,7 @@ export function MapView() {
         return;
       }
       try {
-        const result = await selectByPolygon(poly, st.basin, st.selectionRule);
+        const result = await selectByPolygon(poly, st.basin, st.selectionRule, st.mapDeck);
         useMapStore.getState().setSelection(result, poly);
       } catch (e) {
         console.error("selection failed", e);

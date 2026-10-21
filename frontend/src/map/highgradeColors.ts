@@ -33,3 +33,21 @@ export function choroplethFillColor(
 
 // CSS gradient for the legend bar (left = low, right = high).
 export const HG_GRADIENT_CSS = `linear-gradient(to right, ${HG_LOW}, ${HG_MID}, ${HG_HIGH})`;
+
+// Same blue -> amber -> red ramp as a plain color for SVG charts (the gunbarrel): v at
+// lo..hi, mid = the amber stop; `lowIsBetter` flips it so red always = better.
+function hexToRgb(h: string): [number, number, number] {
+  const n = parseInt(h.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function mix(a: string, b: string, t: number): string {
+  const [r1, g1, b1] = hexToRgb(a), [r2, g2, b2] = hexToRgb(b);
+  const c = (x: number, y: number) => Math.round(x + (y - x) * t).toString(16).padStart(2, "0");
+  return `#${c(r1, r2)}${c(g1, g2)}${c(b1, b2)}`;
+}
+export function rampColor(v: number, lo: number, mid: number, hi: number, lowIsBetter = false): string {
+  const [a, z] = lowIsBetter ? [HG_HIGH, HG_LOW] : [HG_LOW, HG_HIGH];
+  if (!(hi > lo)) return HG_MID;
+  if (v <= mid) return mix(a, HG_MID, Math.max(0, Math.min(1, (v - lo) / Math.max(mid - lo, 1e-9))));
+  return mix(HG_MID, z, Math.max(0, Math.min(1, (v - mid) / Math.max(hi - mid, 1e-9))));
+}

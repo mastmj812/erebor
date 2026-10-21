@@ -1,7 +1,8 @@
 """Map tab on BOX (overhaul step 3) — app.box_locations + the tile SQL, DB-free.
 
 Pins: a not-covered stick carries no EUR / econ value (never a zero); PDP rows are
-never classed (rule 8: producing context, no forecast); Novi RES is its own class;
+never classed (rule 8: producing context, no forecast); Novi's own PUD / RES tag never
+classifies a stick (only the geometry comes from Novi);
 econ comes only from the record run's priced case and only through the whitelist;
 the default econ case is WTI 70 / HH 3 (overhaul decision 3).
 """
@@ -26,12 +27,14 @@ def test_box_joins_bench_expression_is_injectable():
     assert "bp.stick_id = w.stick_id" in bl.box_joins("w", bench="w.formation_blueox")
 
 
-def test_map_coverage_classes_pdp_null_res_own_class():
+def test_map_coverage_classes_use_our_facts_only():
     sql = bl.map_coverage_sql("w")
-    # PDP first (NULL), then BOX's own class, then RES, then the derived classes
+    # PDP first (NULL), then BOX's own class, then our reconciliation, then bench scope
     assert sql.index("w.category = 'PDP' THEN NULL") < sql.index("bp.coverage IS NOT NULL") \
-        < sql.index(f"THEN '{bl.RES_CLASS}'") < sql.index("THEN 'realized'")
-    assert bl.RES_CLASS in bl.MAP_COVERAGE_CLASSES and bl.RES_CLASS not in bl.COVERAGE_CLASSES
+        < sql.index("THEN 'realized'") < sql.index(f"THEN '{bl.NOT_SCREENED}'") < sql.index("bench_not_in_box")
+    # Novi's own PUD / RES tag never classifies a stick (Michael, 2026-10-21)
+    assert "'RES'" not in sql and "'PUD'" not in sql
+    assert bl.NOT_SCREENED in bl.MAP_COVERAGE_CLASSES and "no_box_row" not in bl.MAP_COVERAGE_CLASSES
 
 
 def test_tile_columns_per_foot_and_no_econ_by_default():
@@ -48,6 +51,14 @@ def test_tile_econ_is_whitelisted():
     assert "be.breakeven_wti_pv20" in bl.tile_columns("w", "be_wti")
     with pytest.raises(KeyError):
         bl.tile_columns("w", "pv10_mm; DROP TABLE x")
+
+
+def test_tile_ships_pdp_or_location_not_novi_tags():
+    sql = tiles._mvt_sql("lines", None)
+    assert "CASE WHEN w.category = 'PDP' THEN 'PDP' ELSE 'LOCATION' END AS category" in sql
+    select = sql.split("FROM curated.erebor_locations")[0]
+    for novi in ("w.deplet_t", "w.rqt", "w.npv", "w.pv", "w.oil_eur", "w.gas_eur", "w.pdp_count", "w.inflation_ratio"):
+        assert novi not in select
 
 
 def test_tile_sql_only_joins_econ_when_asked():

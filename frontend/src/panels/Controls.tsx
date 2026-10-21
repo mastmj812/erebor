@@ -156,7 +156,7 @@ export function Controls() {
         <div className="caveat">
           BOX does not forecast {basin === "midland" ? "Midland" : "this basin"} yet: no PUD here carries a BOX
           forecast{ncSummary ? ` (${ncSummary}; the rest are on benches outside BOX)` : ""}. Showing PDP context —
-          turn on &ldquo;Not covered&rdquo; to see the Novi PUDs. This lights up when a BOX record run covers the basin.
+          turn on &ldquo;No BOX forecast&rdquo; to see the Novi stick locations. This lights up when a BOX record run covers the basin.
         </div>
       )}
       {boxMeta?.basin === basin && boxMeta.stale && (
@@ -181,13 +181,13 @@ export function Controls() {
       </div>
       <div className="row">
         <input id="show-nc" type="checkbox" checked={showNotCovered} onChange={() => setShowNotCovered(!showNotCovered)} />
-        <label htmlFor="show-nc">Not covered (no BOX forecast; Novi RES) — grey</label>
+        <label htmlFor="show-nc">No BOX forecast (any reason) — grey</label>
       </div>
 
       <div style={{ marginTop: 8 }}>
         <ChipGroup
           label="PDP proximity"
-          hint="Empty = all BOX forecasts. Haircut = multi-parent oil × factor (D113). No-precedent PUDs carry no forecast (under Not covered)."
+          hint="Empty = all BOX forecasts. Haircut = multi-parent oil × factor (D113). No-precedent locations carry no forecast (under No BOX forecast)."
           options={PROX_FILTER_GROUPS}
           selected={proxFilter}
           onToggle={(g) => toggleProx(g as ProxGroup)}

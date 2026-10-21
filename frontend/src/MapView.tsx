@@ -18,7 +18,6 @@ import {
   colorExpr,
   linesLayer,
   pointsLayer,
-  categoryLabel,
   stickFilter,
   tileUrl,
   valueProp,
@@ -829,7 +828,7 @@ function popupHtml(
     <div>
       <div class="mtt-name">${esc(p.unique_id)}</div>
       <table class="mtt-table">
-        <tr><td>Category</td><td>${esc(categoryLabel(String(p.category)))}</td></tr>
+        <tr><td>Type</td><td>${p.category === "PDP" ? "producing well (PDP)" : "Novi stick location"}</td></tr>
         <tr><td>Bench</td><td>${esc(p.formation_blueox ?? "(unmapped)")}</td></tr>
         ${boxRow}
         ${tier ? perFt("oil") + perFt("gas") + perFt("water") : ""}

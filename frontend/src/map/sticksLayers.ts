@@ -94,7 +94,7 @@ const colorOrSelected = colorExpr("bench", { stream: "oil", legend: null }); // 
 
 export interface StickFilterOpts {
   showPdp: boolean;            // producing context
-  showNotCovered: boolean;     // PUDs without a BOX forecast + Novi RES (off by default)
+  showNotCovered: boolean;     // Novi stick locations without a BOX forecast (off by default)
   tiers: Tier[];               // forecast tiers shown (validated / provisional)
   prox: ProxGroup[];           // PDP-proximity outcome groups (empty = all)
   valueProp: string | null;    // the active value property (EUR / econ), for the range
@@ -106,7 +106,7 @@ export interface StickFilterOpts {
 
 // MapLibre filter. A forecast-carrying PUD passes the tier / proximity / value-range
 // screens; a stick with no value (unpriced) is not dropped by a range (it is grey, never
-// zero). Not-covered PUDs + RES show only with `showNotCovered`; PDP only with `showPdp`.
+// zero). Locations without a BOX forecast show only with `showNotCovered`; PDP only with `showPdp`.
 // Bench include (`formationFilter`), rollup exclude (`excludedFormations`) and the unit
 // filter apply to everything, as before.
 export function stickFilter(o: StickFilterOpts): FilterSpecification {

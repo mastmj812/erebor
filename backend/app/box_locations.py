@@ -56,10 +56,16 @@ COVERAGE_CLASSES: tuple[str, ...] = (
     "realized",
     "no_box_row",
 )
-# Map tiles only: a Novi RES (EMERGING) stick is outside the BOX universe by construction
-# (D1/D67: BOX screens reconciled PUDs, never RES) — its own class, shown with not-covered.
-RES_CLASS = "not_in_box_res"
-MAP_COVERAGE_CLASSES: tuple[str, ...] = (*COVERAGE_CLASSES, RES_CLASS)
+# Map tiles: Novi supplies only the stick GEOMETRY (Michael, 2026-10-21: Novi's own
+# tags — BASE_CASE / RES, depletion tiers — are not used anywhere; classification is
+# ours). So a Novi stick with no row in the record run is classed by OUR facts only:
+# realized (our reconciliation), on a BOX bench but never screened by the record run
+# (this is where Novi-RES sticks inside a BOX pool land, and a PUD that drifted out of
+# the run's vintage), or on a bench BOX does not cover.
+NOT_SCREENED = "not_screened"
+MAP_COVERAGE_CLASSES: tuple[str, ...] = (
+    *(c for c in COVERAGE_CLASSES if c != "no_box_row"), NOT_SCREENED,
+)
 
 # The coverage classes that carry a BOX forecast (volumes, EUR, analogs, charts).
 FORECAST_CLASSES: tuple[str, ...] = ("covered", "covered_provisional")
@@ -147,14 +153,14 @@ def coverage_sql(a: str) -> str:  # noqa: ARG001 — alias kept for call-site sy
 
 def map_coverage_sql(a: str) -> str:
     """Coverage class of a curated.erebor_locations row (`a`) for the Map tiles: NULL on
-    PDP (producing context, never forecast — rule 8), RES_CLASS on Novi RES, else the
-    coverage_sql classes with reconciliation read from the row's own recon_status."""
+    PDP (producing context, never forecast — rule 8); otherwise BOX's own class, else
+    realized (our reconciliation, sql/20), else NOT_SCREENED on a BOX bench, else
+    bench_not_in_box. Novi's PUD / RES category is deliberately not read."""
     return (
         f"(CASE WHEN {a}.category = 'PDP' THEN NULL "
         "WHEN bp.coverage IS NOT NULL THEN bp.coverage "
-        f"WHEN {a}.category = 'RES' THEN '{RES_CLASS}' "
         f"WHEN {a}.recon_status IN ('realized_drift', 'realized_phantom') THEN 'realized' "
-        "WHEN bsm.bench IS NOT NULL THEN 'no_box_row' "
+        f"WHEN bsm.bench IS NOT NULL THEN '{NOT_SCREENED}' "
         "ELSE 'bench_not_in_box' END)"
     )
 

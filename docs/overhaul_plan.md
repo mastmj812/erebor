@@ -74,10 +74,21 @@ DSUs that tile the basin.
    there, not made here.
 
 ## Decisions (agreed 2026-10-20)
-1. **Novi role.** BOX is the only forecast and econ source on the map and in Highgrade.
-   - Novi survives only as the location universe: sticks, pad_name, recon status, geometry.
-   - It also survives as the BOX÷Novi cross-check column inside the pad workup.
-   - Novi NPV and its three caveats go away.
+1. **Novi role** (tightened by Michael, 2026-10-21). Erebor takes exactly three things from Novi:
+   - the stick location / geometry;
+   - the DSU pad shapefiles;
+   - the Novi forecast, ONLY as a comparison curve against BOX in the production plot (and the BOX÷Novi
+     column in the pad workup).
+
+   Nothing else from Novi classifies or values anything:
+   - no BASE_CASE / EMERGING (PUD / RES) tags;
+   - no depletion / rqt / spacing / completion tiers;
+   - no Novi NPV, and its three caveats go away.
+
+   Novi's tags have been shown wrong repeatedly. Novi RES is just how Novi marked sticks outside its
+   (already too generous) development extent, or on emerging targets like WDFD where its forecasting and
+   valuation do not apply. Classification is BOX's (coverage classes, extents, proximity) plus our own
+   reconciliation (sql/20, realized vs remaining). Every later step drops Novi labels wherever they still show.
 2. **Econ = record run only.** Until Steven pushes run 14, econ shows as "not yet priced on run 14"
    everywhere. Run-10 dollars never appear on run-14 volumes.
 3. **Econ display.** Deck picker over Steven's decks, default WTI 70 / HH 3, default metric PV10.
@@ -183,8 +194,15 @@ exists and how to verify it, then wait for Michael's go.
   coverage in the basin.
 - Pads overlay → the 2026Q3 DSU polygons: all of them, including DSUs with no remaining stick, so the
   map shows the infill frame. Remove the 3Q25 read.
-- **Novi RES sticks:** RES is not in the BOX universe (D1/D67). It shows only under the not-covered
-  toggle, as "not in BOX universe (RES)". Michael confirms at this gate.
+- ~~**Novi RES sticks:** shown as "not in BOX universe (RES)".~~ Superseded at this gate (Michael,
+  2026-10-21):
+  - The map never reads Novi's PUD / RES tag. Tiles ship `category` = PDP | LOCATION.
+  - A stick with no record-run row is `realized` (our reconciliation), `not_screened` (on a BOX bench but
+    never screened by the run), or `bench_not_in_box`.
+  - **Open, engineering_db:** BOX's own universe (D1/D67) still excludes Novi-RES sticks. About 6,380
+    Delaware RES sticks sit on a BOX bench with their midpoint inside a record extent (WCA 5,192, WCC 577,
+    BS3_S 502, …), so BOX never screened them only because of Novi's tag. Whether BOX should screen every
+    in-extent stick is a BOX-plan decision, outside this overhaul.
 
 **Quality checks**
 - MVT null properties use `has`/`coalesce`.

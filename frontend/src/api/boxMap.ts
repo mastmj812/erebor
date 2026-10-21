@@ -32,17 +32,20 @@ export type Tier = "validated" | "provisional";
 export const TIER_OF_COVERAGE: Record<string, Tier> = { covered: "validated", covered_provisional: "provisional" };
 export const FORECAST_COVERAGE = ["covered", "covered_provisional"];
 
-// Map-only class: Novi RES is outside the BOX universe by construction (D1/D67).
-export const RES_CLASS = "not_in_box_res";
+// Novi supplies only the stick geometry; its own PUD / RES and tier tags are not used
+// (Michael, 2026-10-21). A stick with no row in the BOX record run is classed by our facts:
+// realized (our reconciliation), on a BOX bench but never screened by the run, or on a
+// bench BOX does not cover (backend box_locations.map_coverage_sql).
+export const NOT_SCREENED = "not_screened";
 export const MAP_COVERAGE_LABELS: Record<string, string> = {
   ...COVERAGE_LABELS,
-  [RES_CLASS]: "Novi EMERGING (RES) — not in the BOX universe",
+  [NOT_SCREENED]: "on a BOX bench, not screened by the record run",
 };
 export const MAP_COVERAGE_ORDER = [
   "covered", "covered_provisional",
   "not_covered_no_precedent", "not_covered_no_analogs", "not_covered_outside_extent",
   "not_covered_emerging", "not_covered_wcxy", "not_covered_unvalidated",
-  "bench_not_in_box", "realized", "no_box_row", RES_CLASS,
+  NOT_SCREENED, "bench_not_in_box", "realized",
 ];
 
 // Coverage color mode. Forecast classes are the two saturated colors; every
@@ -58,8 +61,7 @@ export const COVERAGE_COLORS: Record<string, string> = {
   not_covered_unvalidated: "#cbd5e1",
   bench_not_in_box: "#d4d4d8",
   realized: "#e7e5e4",
-  no_box_row: "#ef4444",
-  [RES_CLASS]: "#e4e4e7",
+  [NOT_SCREENED]: "#e4e4e7",
 };
 export const PDP_COLOR = "#475569";          // producing context in the BOX color modes
 export const NOT_COVERED_COLOR = "#d4d4d8";  // value modes: no BOX forecast

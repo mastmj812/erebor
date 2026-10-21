@@ -8,9 +8,10 @@ BOX attributes).
   * z >= 9  -> intel_lines   (full wellstick LINESTRING)
 
 basin is required (the map shows one basin at a time). Every category ships in
-every tile; the frontend filters client-side (no refetch). BOX properties per stick:
-`coverage` (NULL on PDP — producing context, never forecast; `not_in_box_res` on
-Novi RES), `water_tier`, `oil_eur_ft` / `gas_eur_ft` / `water_eur_ft` (per FOOT),
+every tile; the frontend filters client-side (no refetch). Novi supplies only the
+stick geometry: `category` is PDP | LOCATION (Novi's PUD / RES tag is not shipped).
+BOX properties per stick: `coverage` (NULL on PDP — producing context, never
+forecast; app.box_locations.map_coverage_sql), `water_tier`, `oil_eur_ft` / `gas_eur_ft` / `water_eur_ft` (per FOOT),
 `prox_outcome`, `prox_factor` (only when < 1). A not-covered stick has no EUR
 property at all (MVT omits NULLs) — never a zero.
 
@@ -46,7 +47,9 @@ WITH bounds AS (SELECT ST_TileEnvelope(:z, :x, :y) AS env)
   SELECT
     w.stick_id,
     w.unique_id,
-    w.category,
+    -- PDP vs a Novi stick location; Novi's own PUD / RES tag is not shipped (only the
+    -- stick geometry comes from Novi — classification is BOX's `coverage`).
+    CASE WHEN w.category = 'PDP' THEN 'PDP' ELSE 'LOCATION' END AS category,
     w.formation_blueox,
     w.basin_blueox,
     w.operator,

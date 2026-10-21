@@ -37,8 +37,9 @@ Single-parent / unexposed PUDs are BOX as-is; gas and water are untouched. Store
 already carries it (eur = eur_raw x eur_haircut x prox_factor), so every BOX EUR here
 picks it up; box.pud_proximity (alias `bpp`) is read only to SHOW the configuration.
 
-The fragments below (box_joins / coverage_sql / econ_join) are shared with
-highgrade.py so the choropleth, the gunbarrel and this workup class every PUD the
+The shared fragments (box_joins / coverage_sql / econ_join, the coverage classes,
+record_run) live in app.box_locations — the one location_id-keyed BOX module — so the
+Map tiles, the Highgrade choropleth, the gunbarrel and this workup class every PUD the
 same way. Nothing here reads the retired step-4/5 tables (D66).
 """
 
@@ -52,122 +53,37 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
+from app.box_locations import (  # noqa: F401 — re-exported: highgrade + tests import these from here
+    COVERAGE_CLASSES,
+    FORECAST_CLASSES,
+    FORECAST_IN_SQL,
+    PROX_GROUPS,
+    PROX_OUTCOMES,
+    SEARCHED_CLASSES,
+    TIER_OF,
+    box_joins,
+    coverage_sql,
+    econ_join,
+    record_run,
+)
+from app.box_locations import (
+    DEFAULT_ECON_METRIC,
+    ECON_METRICS,
+    EUR_UNITS,
+    econ_case,
+    pick_econ_case,
+    record_run_id,
+)
 from app.db import get_session
 
 router = APIRouter(prefix="/box", tags=["box"])
 
 _BASIN = Query(..., pattern="^(delaware|midland)$")
 
-# Every screened PUD lands in exactly one class. The first seven are box.pud_forecast's
-# own coverage values (sql/60 + sql/63, D67 / D105); the last three are derived for a PUD
-# with no row in the record run:
-#   covered              VALIDATED tier: the bench passed its out-of-time test
-#   covered_provisional  PROVISIONAL tier (D105): forecast-carrying exactly like covered,
-#                        but the bench was never out-of-time tested (AVA_0/1/2, BS2_C) or
-#                        failed its one-time holdout (BS3_S, BS3_C, WCB_2, BS1_S). Counted
-#                        apart from covered everywhere, never silently summed into it
-#   not_covered_no_precedent  (D114, sql/65) a searched, in-extent PUD whose PDP-proximity
-#                        configuration has no drilled precedent: no forecast, search
-#                        provenance kept (like not_covered_no_analogs)
-#   bench_not_in_box  its bench is in no box.bench_scope pool (not part of BOX v1)
-#   realized          reconciliation matched it to production (shown only when the
-#                     Highgrade "All Novi BASE_CASE" toggle readmits realized PUDs)
-#   no_box_row        drillable, on a BOX bench, yet missing from the record run —
-#                     expected 0; non-zero means the Novi vintage moved under the run
-COVERAGE_CLASSES: tuple[str, ...] = (
-    "covered",
-    "covered_provisional",
-    "not_covered_no_analogs",
-    "not_covered_no_precedent",
-    "not_covered_outside_extent",
-    "not_covered_wcxy",
-    "not_covered_unvalidated",
-    "not_covered_emerging",
-    "bench_not_in_box",
-    "realized",
-    "no_box_row",
-)
-
-# The coverage classes that carry a BOX forecast (volumes, EUR, analogs, charts).
-FORECAST_CLASSES: tuple[str, ...] = ("covered", "covered_provisional")
-TIER_OF: dict[str, str] = {"covered": "validated", "covered_provisional": "provisional"}
-FORECAST_IN_SQL = "('covered', 'covered_provisional')"
-# Searched PUDs without a forecast: they keep the analog search provenance and their
-# bench's disclosure group (the "screen identity" of a PUD BOX looked at and declined).
-SEARCHED_CLASSES: tuple[str, ...] = (*FORECAST_CLASSES, "not_covered_no_analogs", "not_covered_no_precedent")
-
-# PDP-proximity outcomes (box.pud_proximity.outcome, sql/65) grouped into the three
-# Highgrade filter values. A PUD with no box.pud_proximity row (outside the extent,
-# emerging, ... — never measured) matches none of them.
-PROX_GROUPS: dict[str, tuple[str, ...]] = {
-    "as_is": ("as_is_unexposed", "as_is_single_parent"),
-    "haircut": ("haircut",),
-    "no_precedent": ("no_forecast_precedent", "no_forecast_package"),
-}
-PROX_OUTCOMES: tuple[str, ...] = tuple(o for g in PROX_GROUPS.values() for o in g)
-
 STREAMS = ("oil", "gas")  # the streams with a haircut / F(k) / D59 disclosure
 SERIES_STREAMS = ("oil", "gas", "water")  # the streams with monthly volumes (water: sql/62)
 HORIZONS = ("12", "24", "36", "48")
 K_CHART = 48  # months of cum per 1,000 ft on the workup chart (engineering_db box/production_pages.K_CHART)
-
-
-def box_joins(a: str) -> str:
-    """BOX record-run joins onto a Novi PUD alias `a` (needs param :box_run).
-    box.pud_forecast is UNIQUE on (run_id, stick_id) and the stream rows on
-    (run_id, location_id, stream), so no join multiplies rows."""
-    return (
-        f"LEFT JOIN box.pud_forecast bp ON bp.run_id = :box_run AND bp.stick_id = {a}.stick_id "
-        "LEFT JOIN box.pud_forecast_stream bso ON bso.run_id = bp.run_id "
-        "AND bso.location_id = bp.location_id AND bso.stream = 'oil' "
-        "LEFT JOIN box.pud_forecast_stream bsg ON bsg.run_id = bp.run_id "
-        "AND bsg.location_id = bp.location_id AND bsg.stream = 'gas' "
-        # PDP-proximity record (sql/65), PK (run_id, location_id); no row on runs before 11
-        "LEFT JOIN box.pud_proximity bpp ON bpp.run_id = bp.run_id AND bpp.location_id = bp.location_id "
-        "LEFT JOIN box.pud_forecast_stream bsw ON bsw.run_id = bp.run_id "
-        "AND bsw.location_id = bp.location_id AND bsw.stream = 'water' "
-        # the PUD's bench is in a BOX pool (bench_scope.member_benches; DISTINCT so a
-        # bench listed in two pools could never multiply rows). Needs the `fb` join first.
-        "LEFT JOIN (SELECT DISTINCT basin, unnest(member_benches) AS bench FROM box.bench_scope) bsm "
-        f"ON bsm.basin = {a}.basin AND bsm.bench = fb.formation_blueox"
-    )
-
-
-def econ_join() -> str:
-    """Steven's priced case (needs :econ_deck, :econ_aset); PK (run, location, deck,
-    assumption set) -> at most one row per location. Display-only (D13)."""
-    return (
-        "LEFT JOIN box_econ.box_pud_econ be ON be.run_id = bp.run_id AND be.location_id = bp.location_id "
-        "AND be.deck_id = :econ_deck AND be.assumption_set_id = :econ_aset"
-    )
-
-
-def coverage_sql(a: str) -> str:  # noqa: ARG001 — alias kept for call-site symmetry
-    """Coverage class of a Novi PUD row (aliases from box_joins: `bp`, `bsm`; plus `rec`
-    reconciliation). Evaluated per class in the pad counts, so it stays join-only."""
-    return (
-        "(CASE WHEN bp.coverage IS NOT NULL THEN bp.coverage "
-        "WHEN rec.status IN ('realized_drift', 'realized_phantom') THEN 'realized' "
-        "WHEN bsm.bench IS NOT NULL THEN 'no_box_row' "
-        "ELSE 'bench_not_in_box' END)"
-    )
-
-
-def record_run(session: Session) -> dict[str, Any]:
-    """The one BOX run marked is_record (sql/60 allows at most one)."""
-    row = session.execute(
-        text(
-            "SELECT run_id, report_version, data_through, code_sha, engine_sha, dealintake_config, "
-            "created_at, haircut, calendar_factor, disclosure, counts, notes "
-            "FROM box.forecast_run WHERE is_record"
-        )
-    ).mappings().first()
-    if row is None:
-        raise HTTPException(503, "no BOX forecast run is marked as the record")
-    r = dict(row)
-    r["data_through"] = r["data_through"].isoformat()
-    r["created_at"] = r["created_at"].isoformat()
-    return r
 
 
 # Coverage groups of a multi-group run (engineering_db box/production.PRODUCTION_BENCHES):
@@ -399,7 +315,8 @@ def meta(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict:
         text(
             "SELECT deck_id, assumption_set_id, downtime_basis, count(*) AS n_priced, "
             "min(wti) AS wti, min(hh) AS hh, max(built_at) AS built_at, "
-            "count(*) FILTER (WHERE unpriced_reason IS NOT NULL) AS n_unpriced "
+            "count(*) FILTER (WHERE unpriced_reason IS NOT NULL) AS n_unpriced, "
+            "max(pushed_at) AS pushed_at, max(pushed_by) AS pushed_by "
             "FROM box_econ.box_pud_econ WHERE run_id = :r "
             "GROUP BY deck_id, assumption_set_id, downtime_basis ORDER BY deck_id, assumption_set_id"
         ),
@@ -413,6 +330,13 @@ def meta(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict:
         text("SELECT bench, in_scope, member_benches, reason FROM box.bench_scope WHERE basin = :b ORDER BY bench"),
         {"b": basin},
     ).mappings().all()
+    # The basin's PUDs per coverage class in the record run (Map legend + the Midland
+    # "not forecast yet" banner). PUDs with no row (bench not in BOX, realized) are not here.
+    basin_coverage = dict(session.execute(
+        text("SELECT coverage, count(*) FROM box.pud_forecast WHERE run_id = :r AND basin = :b GROUP BY 1"),
+        {"r": run["run_id"], "b": basin},
+    ).all())
+    case = pick_econ_case([dict(d) for d in decks], None)
     return {
         "basin": basin,
         "run": {k: run[k] for k in ("run_id", "report_version", "data_through", "code_sha", "engine_sha",
@@ -423,13 +347,73 @@ def meta(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict:
         "calendar_factor": calendar_factor_points(run),
         "groups": group_blocks(run, run_groups(run)),
         "proximity": proximity_block(run),
-        "decks": [{**d, "built_at": d["built_at"].isoformat() if d["built_at"] else None} for d in decks],
+        "decks": [{**d, "built_at": d["built_at"].isoformat() if d["built_at"] else None,
+                   "pushed_at": d["pushed_at"].isoformat() if d["pushed_at"] else None} for d in decks],
+        # overhaul decision 2: econ only for the record run; until Steven prices it, say so
+        "econ_status": "priced" if decks else "not_yet_priced",
+        "default_deck": case["deck_id"] if case else None,
+        "basin_coverage": {k: int(v) for k, v in basin_coverage.items()},
+        "forecast_count": int(sum(v for k, v in basin_coverage.items() if k in FORECAST_CLASSES)),
         "intel_report_versions": list(vintages),
         # the record run keys on its own vintage's stick ids; a newer Novi vintage in the
         # warehouse means BOX coverage reads as no_box_row until the quarterly BOX refresh
         "stale": run["report_version"] not in vintages,
         "scope": [dict(s) for s in scope],
     }
+
+
+LEGEND_QUANTILES = (0.05, 0.25, 0.5, 0.75, 0.95)
+
+
+@router.get("/legend")
+def legend(
+    basin: str = _BASIN,
+    metric: str = Query(..., pattern="^(oil_eur_ft|gas_eur_ft|water_eur_ft|econ)$"),
+    econ: str | None = Query(None, pattern="^(" + "|".join(ECON_METRICS) + ")$"),
+    deck: str | None = Query(None, max_length=64),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Color-ramp breaks for a Map metric over the basin's forecast-carrying PUDs of the
+    record run (covered + covered_provisional): P5 / P25 / P50 / P75 / P95, with the
+    count per tier. EUR per FOOT = eur_per_kft / 1000. Econ = Steven's case for the
+    record run only (display, D13); `priced: false` when that run is not priced."""
+    run_id = record_run_id(session)
+    if run_id is None:
+        raise HTTPException(503, "no BOX forecast run is marked as the record")
+    params: dict[str, Any] = {"r": run_id, "b": basin}
+    out: dict[str, Any] = {"basin": basin, "metric": metric, "run_id": run_id}
+    if metric == "econ":
+        m = ECON_METRICS[econ or DEFAULT_ECON_METRIC]
+        case = econ_case(session, run_id, deck)
+        out.update({"econ": econ or DEFAULT_ECON_METRIC, "unit": m["unit"], "better": m["better"],
+                    "label": m["label"], "priced": case is not None, "case": case and {
+                        "deck_id": case["deck_id"], "assumption_set_id": case["assumption_set_id"],
+                        "built_at": case["built_at"].isoformat() if case.get("built_at") else None}})
+        if case is None:
+            return {**out, "n": 0, "breaks": None, "tier_counts": None}
+        value = f"be.{m['col']}"
+        join = ("JOIN box_econ.box_pud_econ be ON be.run_id = bp.run_id AND be.location_id = bp.location_id "
+                "AND be.deck_id = :d AND be.assumption_set_id = :a")
+        params.update({"d": case["deck_id"], "a": case["assumption_set_id"]})
+    else:
+        stream = metric.split("_", 1)[0]
+        out.update({"stream": stream, "unit": EUR_UNITS[stream], "better": "high"})
+        value = "s.eur_per_kft / 1000.0"
+        join = "JOIN box.pud_forecast_stream s ON s.run_id = bp.run_id AND s.location_id = bp.location_id AND s.stream = :s"
+        params["s"] = stream
+    qcols = ", ".join(f"percentile_cont({q}) WITHIN GROUP (ORDER BY v)" for q in LEGEND_QUANTILES)
+    row = session.execute(text(f"""
+        SELECT count(v), count(v) FILTER (WHERE coverage = 'covered'),
+               count(v) FILTER (WHERE coverage = 'covered_provisional'), {qcols}
+        FROM (SELECT bp.coverage, {value} AS v FROM box.pud_forecast bp {join}
+              WHERE bp.run_id = :r AND bp.basin = :b AND bp.coverage IN {FORECAST_IN_SQL}) t
+    """), params).one()
+    n = int(row[0])
+    out.update({"n": n,
+                "tier_counts": {"validated": int(row[1]), "provisional": int(row[2])},
+                "breaks": None if n == 0 else dict(zip(("p5", "p25", "p50", "p75", "p95"),
+                                                       (float(v) for v in row[3:]), strict=True))})
+    return out
 
 
 # ---------------------------------------------------------------------------

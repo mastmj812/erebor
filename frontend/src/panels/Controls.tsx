@@ -1,32 +1,50 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import {
+  ECON_METRICS,
+  EUR_STREAMS,
+  EUR_UNIT,
+  PROX_FILTER_GROUPS,
+  deckLabel,
+  econMetricInfo,
+  type EconMetric,
+} from "../api/boxMap";
+import { PROX_GROUP_LABELS, fetchBoxMeta, type ProxGroup } from "../api/highgrade";
 import { selectByPolygon, uploadDeals } from "../api/select";
 import { blueoxLegend, colorForBlueox } from "../map/formations";
-import { CATEGORIES, categoryLabel } from "../map/sticksLayers";
+import { valueProp } from "../map/sticksLayers";
 import { useMapStore, type OverlayKey, type SelectionRule } from "../store";
 import { ChipGroup } from "./ChipGroup";
 
 const OVERLAY_LABELS: Record<OverlayKey, string> = {
-  pads: "Pad / DSU polygons",
+  pads: "Novi DSU polygons (all, newest vintage)",
   grid: "Operated land grid",
   outline: "Basin outline",
   blocks: "Blocks (TX/NM grid)",
   sections: "Sections (numbered, z≥11)",
 };
 
-// Native inventory-tier names + a short descriptor. category wire values are
-// unchanged (PUD=BASE_CASE, RES=EMERGING); see sticksLayers.categoryLabel.
-const CATEGORY_HINT: Record<string, string> = {
-  PDP: "producing",
-  PUD: "undeveloped",
-  RES: "resource",
-};
-
 export function Controls() {
   const basin = useMapStore((s) => s.basin);
   const setBasin = useMapStore((s) => s.setBasin);
-  const categories = useMapStore((s) => s.categories);
-  const toggleCategory = useMapStore((s) => s.toggleCategory);
+  const showPdp = useMapStore((s) => s.showPdp);
+  const setShowPdp = useMapStore((s) => s.setShowPdp);
+  const showNotCovered = useMapStore((s) => s.showNotCovered);
+  const setShowNotCovered = useMapStore((s) => s.setShowNotCovered);
+  const tierFilter = useMapStore((s) => s.tierFilter);
+  const toggleTier = useMapStore((s) => s.toggleTier);
+  const proxFilter = useMapStore((s) => s.proxFilter);
+  const toggleProx = useMapStore((s) => s.toggleProx);
+  const eurStream = useMapStore((s) => s.eurStream);
+  const setEurStream = useMapStore((s) => s.setEurStream);
+  const econMetric = useMapStore((s) => s.econMetric);
+  const setEconMetric = useMapStore((s) => s.setEconMetric);
+  const mapDeck = useMapStore((s) => s.mapDeck);
+  const setMapDeck = useMapStore((s) => s.setMapDeck);
+  const valueRange = useMapStore((s) => s.valueRange);
+  const setValueRange = useMapStore((s) => s.setValueRange);
+  const boxMeta = useMapStore((s) => s.boxMeta);
+  const setBoxMeta = useMapStore((s) => s.setBoxMeta);
   const overlays = useMapStore((s) => s.overlays);
   const toggleOverlay = useMapStore((s) => s.toggleOverlay);
   const basinsMeta = useMapStore((s) => s.basinsMeta);
@@ -45,14 +63,21 @@ export function Controls() {
   const formationFilter = useMapStore((s) => s.formationFilter);
   const toggleMapFormation = useMapStore((s) => s.toggleMapFormation);
   const clearMapFormations = useMapStore((s) => s.clearMapFormations);
-  const remainingOnly = useMapStore((s) => s.remainingOnly);
-  const toggleRemainingOnly = useMapStore((s) => s.toggleRemainingOnly);
-  const excludeDepleted = useMapStore((s) => s.excludeDepleted);
-  const toggleExcludeDepleted = useMapStore((s) => s.toggleExcludeDepleted);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [unitText, setUnitText] = useState("");
+
+  // BOX record run + scope + Steven's priced decks for this basin (shared with
+  // Highgrade; setBasin clears it so it refetches per basin).
+  useEffect(() => {
+    if (boxMeta && boxMeta.basin === basin) return;
+    let alive = true;
+    fetchBoxMeta(basin)
+      .then((m) => { if (alive) setBoxMeta(m); })
+      .catch((e) => console.warn("BOX meta failed", e));
+    return () => { alive = false; };
+  }, [basin, boxMeta, setBoxMeta]);
 
   // Map-only filter: terms (one per line / comma-separated) matched against
   // unique_id, OR'd, with a trailing-digit guard so "Eddy Unit 10" doesn't also
@@ -63,12 +88,24 @@ export function Controls() {
   };
 
   const count = basinsMeta.find((m) => m.basin === basin)?.count;
-  // formation_blueox codes present in this basin (same set the Legend shows),
-  // plus an "(unmapped)" chip for sticks with no bench (NULL formation_blueox).
-  const formationCodes = [
-    ...blueoxLegend(basin).flatMap((g) => g.codes.map((c) => c.code)),
-    "(unmapped)",
-  ];
+  // formation_blueox codes present in this basin (same set the Legend shows), split
+  // into the benches BOX forecasts (bench_scope in-scope pools) and the rest, plus an
+  // "(unmapped)" chip for sticks with no bench (NULL formation_blueox).
+  const allCodes = blueoxLegend(basin).flatMap((g) => g.codes.map((c) => c.code));
+  const scope = boxMeta?.basin === basin ? boxMeta.scope : [];
+  const boxSet = new Set(scope.filter((x) => x.in_scope).flatMap((x) => x.member_benches));
+  const boxCodes = allCodes.filter((c) => boxSet.has(c));
+  const otherCodes = [...allCodes.filter((c) => !boxSet.has(c)), "(unmapped)"];
+  const pools = scope.filter((x) => x.in_scope && x.member_benches.length > 1);
+  const decks = [...new Map((boxMeta?.decks ?? []).map((d) => [d.deck_id, d])).values()];
+  const priced = boxMeta?.econ_status !== "not_yet_priced" && decks.length > 0;
+  const noForecast = boxMeta != null && boxMeta.basin === basin && (boxMeta.forecast_count ?? 0) === 0;
+  const vProp = valueProp(colorMode, eurStream);
+  const unit = colorMode === "eur" ? EUR_UNIT[eurStream] : colorMode === "econ" ? econMetricInfo(econMetric).unit : "";
+  const num = (v: string): number | null => (v.trim() === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+  const ncSummary = Object.entries(boxMeta?.basin_coverage ?? {})
+    .map(([k, v]) => `${v.toLocaleString()} ${k.replace("not_covered_", "")}`)
+    .join(", ");
 
   // Changing the rule re-runs selection on the current AOI (the toggle
   // materially changes counts — keep it live rather than forcing a redraw).
@@ -115,20 +152,61 @@ export function Controls() {
         <button className={basin === "midland" ? "active" : ""} onClick={() => setBasin("midland")}>Midland</button>
       </div>
       {count != null && <div className="count">{count.toLocaleString()} locations</div>}
-
-      <h3>Categories</h3>
-      {CATEGORIES.map((c) => (
-        <div className="row" key={c}>
-          <input id={`cat-${c}`} type="checkbox" checked={categories.includes(c)} onChange={() => toggleCategory(c)} />
-          <label htmlFor={`cat-${c}`}>{categoryLabel(c)} ({CATEGORY_HINT[c]})</label>
+      {noForecast && (
+        <div className="caveat">
+          BOX does not forecast {basin === "midland" ? "Midland" : "this basin"} yet: no PUD here carries a BOX
+          forecast{ncSummary ? ` (${ncSummary}; the rest are on benches outside BOX)` : ""}. Showing PDP context —
+          turn on &ldquo;Not covered&rdquo; to see the Novi PUDs. This lights up when a BOX record run covers the basin.
         </div>
-      ))}
+      )}
+      {boxMeta?.basin === basin && boxMeta.stale && (
+        <div className="caveat">
+          BOX record run {boxMeta.run.run_id} keys on Novi {boxMeta.run.report_version}; a newer Novi vintage is
+          loaded, so coverage may read &ldquo;no BOX row&rdquo; until BOX refreshes.
+        </div>
+      )}
+
+      <h3>Show</h3>
+      <div className="row">
+        <input id="show-validated" type="checkbox" checked={tierFilter.includes("validated")} onChange={() => toggleTier("validated")} />
+        <label htmlFor="show-validated">BOX forecast — validated</label>
+      </div>
+      <div className="row">
+        <input id="show-provisional" type="checkbox" checked={tierFilter.includes("provisional")} onChange={() => toggleTier("provisional")} />
+        <label htmlFor="show-provisional">BOX forecast — PROVISIONAL tier</label>
+      </div>
+      <div className="row">
+        <input id="show-pdp" type="checkbox" checked={showPdp} onChange={() => setShowPdp(!showPdp)} />
+        <label htmlFor="show-pdp">PDP (producing context)</label>
+      </div>
+      <div className="row">
+        <input id="show-nc" type="checkbox" checked={showNotCovered} onChange={() => setShowNotCovered(!showNotCovered)} />
+        <label htmlFor="show-nc">Not covered (no BOX forecast; Novi RES) — grey</label>
+      </div>
+
+      <div style={{ marginTop: 8 }}>
+        <ChipGroup
+          label="PDP proximity"
+          hint="Empty = all BOX forecasts. Haircut = multi-parent oil × factor (D113). No-precedent PUDs carry no forecast (under Not covered)."
+          options={PROX_FILTER_GROUPS}
+          selected={proxFilter}
+          onToggle={(g) => toggleProx(g as ProxGroup)}
+          labelOf={(g) => PROX_GROUP_LABELS[g as ProxGroup]}
+        />
+      </div>
 
       <div style={{ marginTop: 10 }}>
         <ChipGroup
-          label="Formations (Blue Ox)"
-          hint="Empty = all benches. Click to scout/screen specific ones — scopes the map and the selection rollup."
-          options={formationCodes}
+          label="Benches BOX forecasts"
+          hint={`Empty = all benches. Scopes the map and the selection rollup.${pools.length ? ` Pools: ${pools.map((x) => `${x.bench} = ${x.member_benches.join(" + ")}`).join("; ")}.` : ""}`}
+          options={boxCodes}
+          selected={formationFilter}
+          onToggle={toggleMapFormation}
+          swatch={(code) => colorForBlueox(basin, code)}
+        />
+        <ChipGroup
+          label="Other benches (no BOX forecast)"
+          options={otherCodes}
           selected={formationFilter}
           onToggle={toggleMapFormation}
           swatch={(code) => colorForBlueox(basin, code)}
@@ -143,19 +221,57 @@ export function Controls() {
 
       <h3 style={{ marginTop: 10 }}>Color sticks by</h3>
       <div className="seg">
+        <button className={colorMode === "eur" ? "active" : ""} onClick={() => setColorMode("eur")}>BOX EUR/ft</button>
+        <button className={colorMode === "econ" ? "active" : ""} onClick={() => setColorMode("econ")}>Econ</button>
+        <button className={colorMode === "coverage" ? "active" : ""} onClick={() => setColorMode("coverage")}>Coverage</button>
         <button className={colorMode === "bench" ? "active" : ""} onClick={() => setColorMode("bench")}>Bench</button>
-        <button className={colorMode === "status" ? "active" : ""} onClick={() => setColorMode("status")}>Recon status</button>
-        <button className={colorMode === "depletion" ? "active" : ""} onClick={() => setColorMode("depletion")}>Depletion</button>
-        <button className={colorMode === "support" ? "active" : ""} onClick={() => setColorMode("support")}>PDP support</button>
       </div>
-      <div className="row" style={{ marginTop: 6 }}>
-        <input id="remaining-only" type="checkbox" checked={remainingOnly} onChange={toggleRemainingOnly} />
-        <label htmlFor="remaining-only">Remaining BASE_CASE only</label>
-      </div>
-      <div className="row">
-        <input id="exclude-depleted" type="checkbox" checked={excludeDepleted} onChange={toggleExcludeDepleted} />
-        <label htmlFor="exclude-depleted">Exclude depleted (Tier-4)</label>
-      </div>
+      {colorMode === "eur" && (
+        <div className="seg sm" style={{ marginTop: 4 }}>
+          {EUR_STREAMS.map((st) => (
+            <button key={st} className={eurStream === st ? "active" : ""} onClick={() => setEurStream(st)}>
+              {st} ({EUR_UNIT[st]})
+            </button>
+          ))}
+        </div>
+      )}
+      {colorMode === "econ" && (
+        <div style={{ marginTop: 4 }}>
+          <div className="row">
+            <select value={econMetric} onChange={(e) => setEconMetric(e.target.value as EconMetric)} style={{ flex: 1, fontSize: 12 }}>
+              {ECON_METRICS.map((m) => <option key={m.value} value={m.value}>{m.label} ({m.unit})</option>)}
+            </select>
+            <select
+              value={mapDeck ?? boxMeta?.default_deck ?? ""}
+              onChange={(e) => setMapDeck(e.target.value || null)}
+              disabled={!priced}
+              style={{ flex: 1, fontSize: 12 }}
+            >
+              {decks.map((d) => <option key={d.deck_id} value={d.deck_id}>{deckLabel(d.deck_id, d.wti, d.hh)}</option>)}
+            </select>
+          </div>
+          {!priced && boxMeta && (
+            <div className="caveat">Not yet priced on BOX run {boxMeta.run.run_id} — econ appears when Steven pushes it.</div>
+          )}
+          <div style={{ fontSize: 11, color: "#71717a", marginTop: 2 }}>
+            Steven&rsquo;s econ, display only — erebor computes no economics (D13).
+          </div>
+        </div>
+      )}
+      {vProp && (
+        <div className="row" style={{ marginTop: 6, alignItems: "center" }}>
+          <span style={{ fontSize: 11.5 }}>Range</span>
+          <input
+            type="number" placeholder="min" value={valueRange[0] ?? ""} style={{ width: 70, fontSize: 12 }}
+            onChange={(e) => setValueRange([num(e.target.value), valueRange[1]])}
+          />
+          <input
+            type="number" placeholder="max" value={valueRange[1] ?? ""} style={{ width: 70, fontSize: 12 }}
+            onChange={(e) => setValueRange([valueRange[0], num(e.target.value)])}
+          />
+          <span style={{ fontSize: 11, color: "#71717a" }}>{unit}</span>
+        </div>
+      )}
 
       <h3 style={{ marginTop: 10 }}>Filter to unit(s)</h3>
       <textarea

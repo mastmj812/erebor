@@ -5,9 +5,10 @@
 ## Status
 | Step | State | Where |
 |---|---|---|
-| 1 Warehouse 3Q26 pads → `intel_pad_geom` v3 | code merged (engineering_db #173); **live load pending** (after step 2 merges, Delaware drop back on SharePoint) | engineering_db `sql/66`, `sql/67` |
-| 2 Remove export; Accuracy = Novi reference; pin pad vintage | this PR | erebor |
-| 3–6 | not started | |
+| 1 Warehouse 3Q26 pads → `intel_pad_geom` v3 | **applied live 2026-10-21** (engineering_db #173 + data dictionary #174): 17,526 pads, all 42,475 BOX PUDs inside Novi polygons | engineering_db `sql/66`, `sql/67` |
+| 2 Remove export; Accuracy = Novi reference; pin pad vintage | merged (erebor #18) | erebor |
+| 3 Map tab BOX-first | this PR | erebor |
+| 4–6 | not started | |
 | 7 BOX hindcast | deferred | |
 
 
@@ -194,6 +195,26 @@ exists and how to verify it, then wait for Michael's go.
 **Tests:** DB-free SQL-shape and projection tests in the `test_highgrade_box.py` style.
 
 **Gate:** stop.
+
+**As built (2026-10-21) — changes from the plan above:**
+- Ramp breaks come from a separate `GET /api/box/legend?basin&metric[&econ&deck]` (P5 / P25 / P50 / P75 / P95
+  over the basin's forecast PUDs), not from `/api/box/meta`. Meta gained `econ_status`, `default_deck`,
+  `basin_coverage`, `forecast_count` and the econ `pushed_at` / `pushed_by` provenance.
+- Econ tiles carry ONE metric (`?econ=pv10&deck=…`) rather than all nine, to keep the tiles small. Switching
+  metric refetches; the EUR, coverage and bench modes share one cached URL.
+- The provisional tier is shown through two "Show" toggles (validated / PROVISIONAL), the popup and the legend
+  counts. A dashed line is not possible here: MapLibre's `line-dasharray` is not data-driven.
+- Color modes: BOX EUR/ft (default, oil), Econ, Coverage, Bench. The Novi recon-status, depletion and
+  PDP-support modes and the "Remaining BASE_CASE only" / "Exclude depleted" map toggles are gone. The store
+  keeps `remainingOnly` / `excludeDepleted` for the selection rollup and gunbarrel until step 4.
+- The Pads overlay draws every newest-vintage Novi DSU with geometry only (`pad_name`, `well_cnt`); Novi NPV
+  is removed from it.
+- Tile timing (Delaware, live): z11 ≈ 0.5 s / 330 KB; z9 ≈ 3 s / 3.1 MB; z6–7 ≈ 6 s / 6–7 MB.
+  - The new tiles are 28 % smaller than the Novi tiles they replace, at the same speed.
+  - Slow low-zoom tiles were already there before this step. Follow-up: a server tile cache or a simplified
+    z ≤ 8 point layer.
+- Highgrade's BOX econ default deck now follows `default_deck` (WTI 70 / HH 3), so it works when the Map tab
+  loaded `boxMeta` first.
 
 ### Step 4 — Lasso selection workflow on BOX
 - `/api/select` rollup:

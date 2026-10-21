@@ -183,19 +183,29 @@ export function HighgradePanel() {
     return () => { live = false; };
   }, [basin, includeRealized, source]);
 
-  // BOX record run + provenance + Steven's priced decks, once per basin.
+  // BOX record run + provenance + Steven's priced decks, once per basin. The Map tab
+  // may have loaded boxMeta already, so the default econ case is set from whichever
+  // load got there first: the meta's default deck (WTI 70 / HH 3), else the first.
   useEffect(() => {
-    if (source !== "box" || boxMeta?.basin === basin) return;
+    if (source !== "box") return;
+    const pickDeck = (m: NonNullable<typeof boxMeta>) => {
+      const d = m.decks.find((x) => x.deck_id === m.default_deck) ?? m.decks[0];
+      setEconDeck(d ? { deck_id: d.deck_id, assumption_set_id: d.assumption_set_id } : null);
+    };
+    if (boxMeta?.basin === basin) {
+      if (!econDeck) pickDeck(boxMeta);
+      return;
+    }
     let live = true;
     fetchBoxMeta(basin)
       .then((m) => {
         if (!live) return;
         setBoxMeta(m);
-        setEconDeck(m.decks.length ? { deck_id: m.decks[0].deck_id, assumption_set_id: m.decks[0].assumption_set_id } : null);
+        pickDeck(m);
       })
       .catch((e) => { if (live) setError(String(e)); });
     return () => { live = false; };
-  }, [source, basin, boxMeta, setBoxMeta, setEconDeck]);
+  }, [source, basin, boxMeta, econDeck, setBoxMeta, setEconDeck]);
 
   // A metric the new source does not carry falls back to that source's default;
   // source-only range bounds are dropped so they never leak into the other source.

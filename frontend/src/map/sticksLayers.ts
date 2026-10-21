@@ -6,11 +6,20 @@ import type {
 } from "maplibre-gl";
 
 import {
-  blueoxColorExpression,
-  depletionColorExpression,
-  statusColorExpression,
-  supportColorExpression,
-} from "./formations";
+  COVERAGE_COLORS,
+  FORECAST_COVERAGE,
+  NOT_COVERED_COLOR,
+  PDP_COLOR,
+  UNPRICED_COLOR,
+  type BoxLegend,
+  type EconMetric,
+  type EurStream,
+  type Tier,
+} from "../api/boxMap";
+import type { ProxGroup } from "../api/highgrade";
+import { PROX_OUTCOME_GROUP } from "../api/highgrade";
+import { HG_HIGH, HG_LOW, HG_MID } from "./highgradeColors";
+import { blueoxColorExpression } from "./formations";
 
 export const INTEL_SOURCE = "intel";
 export const POINTS_LAYER = "intel-points";
@@ -33,59 +42,108 @@ export function categoryLabel(c: string): string {
   return CATEGORY_LABEL[c as Category] ?? c;
 }
 
-export type ColorMode = "bench" | "status" | "depletion" | "support";
+// Map color modes (overhaul step 3, BOX-first): Blue Ox bench, BOX coverage / tier,
+// BOX EUR per foot (one stream), or Steven's econ (one metric, one deck; display-only).
+export type ColorMode = "bench" | "coverage" | "eur" | "econ";
 
 // Selected sticks (feature-state, keyed by stick_id via the source promoteId)
-// paint yellow; everything else takes the active color mode (Blue Ox bench, §6
-// reconciliation status, or Novi depletion tier). Same palettes as the gun-barrel.
+// paint yellow; everything else takes the active color mode.
 const SELECTED = ["boolean", ["feature-state", "selected"], false];
 
-export function colorExpr(mode: ColorMode): ExpressionSpecification {
-  const base =
-    mode === "status" ? statusColorExpression()
-    : mode === "depletion" ? depletionColorExpression()
-    : mode === "support" ? supportColorExpression()
-    : blueoxColorExpression();
+const IS_PDP = ["==", ["get", "category"], "PDP"];
+const IS_FORECAST = ["in", ["coalesce", ["get", "coverage"], ""], ["literal", FORECAST_COVERAGE]];
+
+// The tile property a value color mode reads: `<stream>_eur_ft` or `econ`.
+export function valueProp(mode: ColorMode, stream: EurStream): string | null {
+  return mode === "eur" ? `${stream}_eur_ft` : mode === "econ" ? "econ" : null;
+}
+
+// Ramp over the legend's P5 / P50 / P95 (blue -> amber -> red = better). A "lower is
+// better" metric (breakeven) runs the colors the other way so red always = better.
+function rampExpr(prop: string, legend: BoxLegend | null): unknown {
+  const b = legend?.breaks;
+  if (!b || !(b.p95 > b.p5)) return HG_MID;
+  const [lo, hi] = legend!.better === "low" ? [HG_HIGH, HG_LOW] : [HG_LOW, HG_HIGH];
+  const mid = Math.min(Math.max(b.p50, b.p5 + 1e-9), b.p95 - 1e-9);
+  return ["interpolate", ["linear"], ["to-number", ["get", prop]], b.p5, lo, mid, HG_MID, b.p95, hi];
+}
+
+export interface ColorOpts { stream: EurStream; legend: BoxLegend | null }
+
+export function colorExpr(mode: ColorMode, opts: ColorOpts): ExpressionSpecification {
+  let base: unknown;
+  if (mode === "bench") {
+    base = blueoxColorExpression();
+  } else if (mode === "coverage") {
+    const pairs = Object.entries(COVERAGE_COLORS).flat();
+    base = ["case", IS_PDP, PDP_COLOR, ["match", ["coalesce", ["get", "coverage"], ""], ...pairs, NOT_COVERED_COLOR]];
+  } else {
+    const prop = valueProp(mode, opts.stream)!;
+    base = [
+      "case",
+      IS_PDP, PDP_COLOR,
+      ["has", prop], rampExpr(prop, opts.legend),
+      IS_FORECAST, UNPRICED_COLOR, // econ mode: forecast-carrying, not priced
+      NOT_COVERED_COLOR,
+    ];
+  }
   return ["case", SELECTED, "#facc15", base] as unknown as ExpressionSpecification;
 }
 
-const colorOrSelected = colorExpr("bench"); // initial layer paint; MapView swaps it
+const colorOrSelected = colorExpr("bench", { stream: "oil", legend: null }); // initial paint; MapView swaps it
 
-// MapLibre filter: active categories AND not-excluded formation_blueox codes AND
-// (if any) unit match. excludedFormations holds formation_blueox codes (the
-// rollup/exclude dimension shared with the ResultsPanel).
-// Empty categories -> none. `units` are EXACT-SUFFIX matched against unique_id
-// (the unit number is the tail, so "Eddy Unit 10" matches "...Eddy Unit 10" but
-// not "...Eddy Unit 100"), OR'd across terms.
-export function stickFilter(
-  cats: Category[],
-  excludedFormations: string[],
-  units: string[] = [],
-  remainingOnly = false,
-  excludeDepleted = false,
-  formationFilter: string[] = [],
-): FilterSpecification {
-  const clauses: unknown[] = [
-    cats.length === 0
-      ? ["==", ["get", "category"], "__none__"]
-      : ["in", ["get", "category"], ["literal", cats]],
+export interface StickFilterOpts {
+  showPdp: boolean;            // producing context
+  showNotCovered: boolean;     // PUDs without a BOX forecast + Novi RES (off by default)
+  tiers: Tier[];               // forecast tiers shown (validated / provisional)
+  prox: ProxGroup[];           // PDP-proximity outcome groups (empty = all)
+  valueProp: string | null;    // the active value property (EUR / econ), for the range
+  range: [number | null, number | null];
+  excludedFormations: string[];
+  units: string[];
+  formationFilter: string[];
+}
+
+// MapLibre filter. A forecast-carrying PUD passes the tier / proximity / value-range
+// screens; a stick with no value (unpriced) is not dropped by a range (it is grey, never
+// zero). Not-covered PUDs + RES show only with `showNotCovered`; PDP only with `showPdp`.
+// Bench include (`formationFilter`), rollup exclude (`excludedFormations`) and the unit
+// filter apply to everything, as before.
+export function stickFilter(o: StickFilterOpts): FilterSpecification {
+  const forecast: unknown[] = [
+    "all",
+    ["in", ["get", "coverage"], ["literal", o.tiers.map((t) => (t === "validated" ? "covered" : "covered_provisional"))]],
   ];
-  if (formationFilter.length > 0) {
-    // Map-scouting INCLUDE filter (Controls formation picker): show only these
-    // formation_blueox codes. "(unmapped)" matches features with no
-    // formation_blueox — the MVT omits null props, so an absent property IS the
-    // unmapped case; mirrors the rollup's COALESCE(..., '(unmapped)').
-    const codes = formationFilter.filter((f) => f !== "(unmapped)");
+  if (o.prox.length > 0) {
+    const outcomes = Object.entries(PROX_OUTCOME_GROUP).filter(([, g]) => o.prox.includes(g)).map(([k]) => k);
+    forecast.push(["in", ["coalesce", ["get", "prox_outcome"], ""], ["literal", outcomes]]);
+  }
+  const [lo, hi] = o.range;
+  if (o.valueProp && (lo != null || hi != null)) {
+    const v = ["to-number", ["get", o.valueProp]];
+    const bounds: unknown[] = ["all"];
+    if (lo != null) bounds.push([">=", v, lo]);
+    if (hi != null) bounds.push(["<=", v, hi]);
+    forecast.push(["any", ["!", ["has", o.valueProp]], bounds]);
+  }
+  const clauses: unknown[] = [
+    ["case", IS_PDP, o.showPdp, IS_FORECAST, forecast, o.showNotCovered],
+  ];
+  if (o.formationFilter.length > 0) {
+    // Map-scouting INCLUDE filter: show only these formation_blueox codes.
+    // "(unmapped)" matches features with no formation_blueox — the MVT omits null
+    // props, so an absent property IS the unmapped case; mirrors the rollup's
+    // COALESCE(..., '(unmapped)').
+    const codes = o.formationFilter.filter((f) => f !== "(unmapped)");
     const parts: unknown[] = [];
     if (codes.length > 0) parts.push(["in", ["get", "formation_blueox"], ["literal", codes]]);
-    if (formationFilter.includes("(unmapped)")) parts.push(["!", ["has", "formation_blueox"]]);
+    if (o.formationFilter.includes("(unmapped)")) parts.push(["!", ["has", "formation_blueox"]]);
     clauses.push(parts.length === 1 ? parts[0] : ["any", ...parts]);
   }
-  if (excludedFormations.length > 0) {
-    // excludedFormations are formation_blueox codes (the rollup/exclude dimension).
-    clauses.push(["!", ["in", ["get", "formation_blueox"], ["literal", excludedFormations]]]);
+  if (o.excludedFormations.length > 0) {
+    clauses.push(["!", ["in", ["get", "formation_blueox"], ["literal", o.excludedFormations]]]);
   }
-  if (units.length > 0) {
+  if (o.units.length > 0) {
     // Match each term as a substring of unique_id, but NOT when it's immediately
     // followed by another digit — so "Eddy Unit 10" hits "...Unit 10" yet not
     // "...Unit 100/101". Uses only `in` (slice/length get rejected in filters).
@@ -95,32 +153,12 @@ export function stickFilter(
     const digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
     clauses.push([
       "any",
-      ["==", ["get", "category"], "PDP"],
-      ...units.map((u) => [
+      IS_PDP,
+      ...o.units.map((u) => [
         "all",
         ["in", u, uid],
         ["!", ["any", ...digits.map((d) => ["in", u + d, uid])]],
       ]),
-    ]);
-  }
-  if (remainingOnly) {
-    // Drillable-inventory view: keep remaining PUDs + producing context (ordinary
-    // producers / RES carry no recon_status), and drop everything reconciliation
-    // flagged as already realized — realized_drift/phantom, conflict (PUD side)
-    // and net_new_pdp (PDP side). `has` is false for null props in the tile.
-    clauses.push([
-      "any",
-      ["==", ["get", "recon_status"], "remaining_pud"],
-      ["!", ["has", "recon_status"]],
-    ]);
-  }
-  if (excludeDepleted) {
-    // Drop offset-depleted (Tier-4) PUDs — drained rock that overstates value.
-    // PDP/RES (deplet_t null) pass through.
-    clauses.push([
-      "any",
-      ["!=", ["get", "category"], "PUD"],
-      ["!=", ["get", "deplet_t"], "Tier-4"],
     ]);
   }
   if (clauses.length === 1) return clauses[0] as unknown as FilterSpecification;
@@ -164,6 +202,13 @@ export const linesLayer: LineLayerSpecification = {
   },
 };
 
-export function tileUrl(basin: string): string {
-  return `${window.location.origin}/api/tiles/{z}/{x}/{y}.mvt?basin=${basin}`;
+// Econ tiles carry ONE metric for ONE deck (record run only); every other mode shares
+// the plain URL so its tiles stay cached across mode switches.
+export function tileUrl(basin: string, econ?: EconMetric | null, deck?: string | null): string {
+  const q = new URLSearchParams({ basin });
+  if (econ) {
+    q.set("econ", econ);
+    if (deck) q.set("deck", deck);
+  }
+  return `${window.location.origin}/api/tiles/{z}/{x}/{y}.mvt?${q.toString()}`;
 }

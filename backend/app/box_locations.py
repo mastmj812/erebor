@@ -1,0 +1,243 @@
+"""BOX per-location projection — the ONE place erebor reads BOX attributes of a location.
+
+Overhaul plan (docs/overhaul_plan.md): every BOX attribute is read by `location_id`
+through this module (box.pud_forecast joins to its stream / proximity / econ rows on
+(run_id, location_id)). Today a BOX location IS a Novi stick, so the entry point is
+`box.pud_forecast.stick_id` (UNIQUE per run); when BOX-derived locations replace the
+Novi sticks (DSU infill), this module and the tile geometry source change, not every
+panel.
+
+Shared by the Map tiles (api/tiles.py), Highgrade (api/highgrade.py) and the BOX
+workup (api/box.py) so all three class every PUD the same way:
+
+  * the record run (`box.forecast_run.is_record`, at most one — sql/60);
+  * coverage classes: box.pud_forecast's own values + derived ones for a Novi stick
+    with no row in the record run. NOT covered is a stated class, never a zero (D2/D67);
+  * the econ case: Steven's box_econ.box_pud_econ for the RECORD run only — display-only
+    with provenance (D13); erebor computes no economics and never shows another run's
+    dollars on the record run's volumes (overhaul decision 2).
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Any
+
+from fastapi import HTTPException
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+# Every screened PUD lands in exactly one class. The first eight are box.pud_forecast's
+# own coverage values (sql/60 + sql/63 + sql/65, D67 / D105 / D114); the last three are
+# derived for a PUD with no row in the record run:
+#   covered              VALIDATED tier: the bench passed its out-of-time test
+#   covered_provisional  PROVISIONAL tier (D105): forecast-carrying exactly like covered,
+#                        but the bench was never out-of-time tested (AVA_0/1/2, BS2_C) or
+#                        failed its one-time holdout (BS3_S, BS3_C, WCB_2, BS1_S). Counted
+#                        apart from covered everywhere, never silently summed into it
+#   not_covered_no_precedent  (D114, sql/65) a searched, in-extent PUD whose PDP-proximity
+#                        configuration has no drilled precedent: no forecast, search
+#                        provenance kept (like not_covered_no_analogs)
+#   bench_not_in_box  its bench is in no box.bench_scope pool (not part of BOX v1)
+#   realized          reconciliation matched it to production (shown only when the
+#                     Highgrade "All Novi BASE_CASE" toggle readmits realized PUDs)
+#   no_box_row        drillable, on a BOX bench, yet missing from the record run —
+#                     expected 0; non-zero means the Novi vintage moved under the run
+COVERAGE_CLASSES: tuple[str, ...] = (
+    "covered",
+    "covered_provisional",
+    "not_covered_no_analogs",
+    "not_covered_no_precedent",
+    "not_covered_outside_extent",
+    "not_covered_wcxy",
+    "not_covered_unvalidated",
+    "not_covered_emerging",
+    "bench_not_in_box",
+    "realized",
+    "no_box_row",
+)
+# Map tiles only: a Novi RES (EMERGING) stick is outside the BOX universe by construction
+# (D1/D67: BOX screens reconciled PUDs, never RES) — its own class, shown with not-covered.
+RES_CLASS = "not_in_box_res"
+MAP_COVERAGE_CLASSES: tuple[str, ...] = (*COVERAGE_CLASSES, RES_CLASS)
+
+# The coverage classes that carry a BOX forecast (volumes, EUR, analogs, charts).
+FORECAST_CLASSES: tuple[str, ...] = ("covered", "covered_provisional")
+TIER_OF: dict[str, str] = {"covered": "validated", "covered_provisional": "provisional"}
+FORECAST_IN_SQL = "('covered', 'covered_provisional')"
+# Searched PUDs without a forecast: they keep the analog search provenance and their
+# bench's disclosure group (the "screen identity" of a PUD BOX looked at and declined).
+SEARCHED_CLASSES: tuple[str, ...] = (*FORECAST_CLASSES, "not_covered_no_analogs", "not_covered_no_precedent")
+
+# PDP-proximity outcomes (box.pud_proximity.outcome, sql/65) grouped into the three
+# filter values. A PUD with no box.pud_proximity row (outside the extent, emerging, ...
+# — never measured) matches none of them.
+PROX_GROUPS: dict[str, tuple[str, ...]] = {
+    "as_is": ("as_is_unexposed", "as_is_single_parent"),
+    "haircut": ("haircut",),
+    "no_precedent": ("no_forecast_precedent", "no_forecast_package"),
+}
+PROX_OUTCOMES: tuple[str, ...] = tuple(o for g in PROX_GROUPS.values() for o in g)
+
+# Map color / range metrics. EUR per FOOT = stored eur_per_kft / 1000 (bbl/ft oil + water,
+# mcf/ft gas), the raw 50-yr technical integral incl. the D62/D102 haircut and the D113
+# proximity factor (stored EUR already carries both; nothing here re-applies them).
+EUR_STREAMS: tuple[str, ...] = ("oil", "gas", "water")
+EUR_UNITS: dict[str, str] = {"oil": "bbl/ft", "gas": "mcf/ft", "water": "bbl/ft"}
+
+# Steven's econ columns erebor may DISPLAY (whitelist -> box_econ.box_pud_econ column,
+# unit, and which end is "better" for the color ramp). Display only (D13).
+ECON_METRICS: dict[str, dict[str, str]] = {
+    "pv0": {"col": "pv0_mm", "unit": "$MM", "better": "high", "label": "PV0"},
+    "pv10": {"col": "pv10_mm", "unit": "$MM", "better": "high", "label": "PV10"},
+    "pv15": {"col": "pv15_mm", "unit": "$MM", "better": "high", "label": "PV15"},
+    "pv20": {"col": "pv20_mm", "unit": "$MM", "better": "high", "label": "PV20"},
+    "pv25": {"col": "pv25_mm", "unit": "$MM", "better": "high", "label": "PV25"},
+    "pv30": {"col": "pv30_mm", "unit": "$MM", "better": "high", "label": "PV30"},
+    "irr": {"col": "irr_pct", "unit": "%", "better": "high", "label": "IRR"},
+    "be_wti": {"col": "breakeven_wti_pv20", "unit": "$/bbl WTI", "better": "low", "label": "Breakeven WTI @ PV20"},
+    "capex": {"col": "capex_mm", "unit": "$MM", "better": "low", "label": "Capex"},
+}
+# Default econ case (overhaul decision 3): WTI $70 / HH $3, PV10.
+DEFAULT_DECK = "wti70_hh3"
+DEFAULT_ECON_METRIC = "pv10"
+
+
+def box_joins(a: str, bench: str = "fb.formation_blueox") -> str:
+    """BOX record-run joins onto a Novi PUD alias `a` (needs param :box_run).
+    box.pud_forecast is UNIQUE on (run_id, stick_id) and the stream rows on
+    (run_id, location_id, stream), so no join multiplies rows. `bench` = the
+    expression holding the PUD's formation_blueox (the `fb` join by default)."""
+    return (
+        f"LEFT JOIN box.pud_forecast bp ON bp.run_id = :box_run AND bp.stick_id = {a}.stick_id "
+        "LEFT JOIN box.pud_forecast_stream bso ON bso.run_id = bp.run_id "
+        "AND bso.location_id = bp.location_id AND bso.stream = 'oil' "
+        "LEFT JOIN box.pud_forecast_stream bsg ON bsg.run_id = bp.run_id "
+        "AND bsg.location_id = bp.location_id AND bsg.stream = 'gas' "
+        # PDP-proximity record (sql/65), PK (run_id, location_id); no row on runs before 11
+        "LEFT JOIN box.pud_proximity bpp ON bpp.run_id = bp.run_id AND bpp.location_id = bp.location_id "
+        "LEFT JOIN box.pud_forecast_stream bsw ON bsw.run_id = bp.run_id "
+        "AND bsw.location_id = bp.location_id AND bsw.stream = 'water' "
+        # the PUD's bench is in a BOX pool (bench_scope.member_benches; DISTINCT so a
+        # bench listed in two pools could never multiply rows).
+        "LEFT JOIN (SELECT DISTINCT basin, unnest(member_benches) AS bench FROM box.bench_scope) bsm "
+        f"ON bsm.basin = {a}.basin AND bsm.bench = {bench}"
+    )
+
+
+def econ_join() -> str:
+    """Steven's priced case (needs :econ_deck, :econ_aset); PK (run, location, deck,
+    assumption set) -> at most one row per location. Display-only (D13)."""
+    return (
+        "LEFT JOIN box_econ.box_pud_econ be ON be.run_id = bp.run_id AND be.location_id = bp.location_id "
+        "AND be.deck_id = :econ_deck AND be.assumption_set_id = :econ_aset"
+    )
+
+
+def coverage_sql(a: str) -> str:  # noqa: ARG001 — alias kept for call-site symmetry
+    """Coverage class of a Novi PUD row (aliases from box_joins: `bp`, `bsm`; plus `rec`
+    reconciliation). Evaluated per class in the pad counts, so it stays join-only."""
+    return (
+        "(CASE WHEN bp.coverage IS NOT NULL THEN bp.coverage "
+        "WHEN rec.status IN ('realized_drift', 'realized_phantom') THEN 'realized' "
+        "WHEN bsm.bench IS NOT NULL THEN 'no_box_row' "
+        "ELSE 'bench_not_in_box' END)"
+    )
+
+
+def map_coverage_sql(a: str) -> str:
+    """Coverage class of a curated.erebor_locations row (`a`) for the Map tiles: NULL on
+    PDP (producing context, never forecast — rule 8), RES_CLASS on Novi RES, else the
+    coverage_sql classes with reconciliation read from the row's own recon_status."""
+    return (
+        f"(CASE WHEN {a}.category = 'PDP' THEN NULL "
+        "WHEN bp.coverage IS NOT NULL THEN bp.coverage "
+        f"WHEN {a}.category = 'RES' THEN '{RES_CLASS}' "
+        f"WHEN {a}.recon_status IN ('realized_drift', 'realized_phantom') THEN 'realized' "
+        "WHEN bsm.bench IS NOT NULL THEN 'no_box_row' "
+        "ELSE 'bench_not_in_box' END)"
+    )
+
+
+def tile_columns(a: str, econ_metric: str | None) -> str:
+    """The BOX properties a Map tile carries per stick (select-list fragment over the
+    box_joins / econ_join aliases). Rounded so the MVT value pool stays small; MVT drops
+    NULL properties, so a not-covered stick simply has no EUR / econ property. Econ is
+    ONE whitelisted metric for the requested deck (the color mode's), not all nine."""
+    cols = [
+        f"{map_coverage_sql(a)} AS coverage",
+        "bsw.tier AS water_tier",
+        *(f"round((bs{s[0]}.eur_per_kft / 1000.0)::numeric, 1)::float8 AS {s}_eur_ft"
+          for s in EUR_STREAMS),
+        "bpp.outcome AS prox_outcome",
+        "CASE WHEN bso.prox_factor < 1 THEN round(bso.prox_factor::numeric, 3)::float8 END AS prox_factor",
+    ]
+    if econ_metric is not None:
+        col = ECON_METRICS[econ_metric]["col"]  # whitelisted: KeyError before any SQL
+        cols.append(f"round(be.{col}::numeric, 2)::float8 AS econ")
+    return ", ".join(cols)
+
+
+def record_run(session: Session) -> dict[str, Any]:
+    """The one BOX run marked is_record (sql/60 allows at most one)."""
+    row = session.execute(
+        text(
+            "SELECT run_id, report_version, data_through, code_sha, engine_sha, dealintake_config, "
+            "created_at, haircut, calendar_factor, disclosure, counts, notes "
+            "FROM box.forecast_run WHERE is_record"
+        )
+    ).mappings().first()
+    if row is None:
+        raise HTTPException(503, "no BOX forecast run is marked as the record")
+    r = dict(row)
+    r["data_through"] = r["data_through"].isoformat()
+    r["created_at"] = r["created_at"].isoformat()
+    return r
+
+
+# --- per-request lookups the tile endpoint would otherwise repeat for every tile -------
+# A short TTL keeps a re-marked record run / a fresh econ push visible within a minute.
+_TTL_S = 60.0
+_cache: dict[tuple, tuple[float, Any]] = {}
+
+
+def _cached(key: tuple, fn):  # noqa: ANN001, ANN202
+    hit = _cache.get(key)
+    now = time.monotonic()
+    if hit is not None and now - hit[0] < _TTL_S:
+        return hit[1]
+    val = fn()
+    _cache[key] = (now, val)
+    return val
+
+
+def record_run_id(session: Session) -> int | None:
+    """run_id of the record run (None when no run is marked), cached for _TTL_S."""
+    return _cached(("record_run_id",), lambda: session.execute(
+        text("SELECT run_id FROM box.forecast_run WHERE is_record")).scalar())
+
+
+def pick_econ_case(cases: list[dict[str, Any]], deck: str | None) -> dict[str, Any] | None:
+    """The econ case to show from the record run's priced cases ({deck_id,
+    assumption_set_id, built_at}): the requested deck, else DEFAULT_DECK, else the
+    first; within a deck the most recently built assumption set. None = unpriced."""
+    if not cases:
+        return None
+    want = deck if deck and any(c["deck_id"] == deck for c in cases) else None
+    if want is None:
+        want = DEFAULT_DECK if any(c["deck_id"] == DEFAULT_DECK for c in cases) else sorted(c["deck_id"] for c in cases)[0]
+    same = [c for c in cases if c["deck_id"] == want]
+    return max(same, key=lambda c: (c.get("built_at") is not None, c.get("built_at") or 0, c["assumption_set_id"]))
+
+
+def econ_cases(session: Session, run_id: int) -> list[dict[str, Any]]:
+    """Every priced (deck, assumption set) of the run, cached for _TTL_S."""
+    return _cached(("econ_cases", run_id), lambda: [dict(r) for r in session.execute(
+        text("SELECT deck_id, assumption_set_id, max(built_at) AS built_at "
+             "FROM box_econ.box_pud_econ WHERE run_id = :r GROUP BY 1, 2"),
+        {"r": run_id}).mappings().all()])
+
+
+def econ_case(session: Session, run_id: int, deck: str | None) -> dict[str, Any] | None:
+    """The record run's econ case for `deck` (see pick_econ_case); None = not priced."""
+    return pick_econ_case(econ_cases(session, run_id), deck)

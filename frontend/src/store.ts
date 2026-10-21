@@ -1,6 +1,5 @@
 import { create } from "zustand";
 
-import { fetchDepletionCounts, fetchReconCounts, fetchSupportCounts } from "./api/recon";
 import type {
   AccGrid,
   AccHorizon,
@@ -11,8 +10,9 @@ import type {
   AccVintages,
   AccWellDetail,
 } from "./api/accuracy";
-import type { BoxMeta, EconDeck, ForecastSource, HighgradeFilters } from "./api/highgrade";
-import { CATEGORIES, type Category, type ColorMode } from "./map/sticksLayers";
+import type { BoxLegend, EconMetric, EurStream, Tier } from "./api/boxMap";
+import type { BoxMeta, EconDeck, ForecastSource, HighgradeFilters, ProxGroup } from "./api/highgrade";
+import type { ColorMode } from "./map/sticksLayers";
 
 export interface BasinMeta {
   basin: string;
@@ -175,7 +175,6 @@ interface MapState {
   accVintage: string | null;
   accVintages: AccVintages | null;           // selector options (/accuracy/vintages)
   basin: "delaware" | "midland";
-  categories: Category[];
   overlays: Record<OverlayKey, boolean>;
   basinsMeta: BasinMeta[];
   drawMode: DrawMode;
@@ -189,10 +188,16 @@ interface MapState {
   formationFilter: string[];    // map-scouting INCLUDE filter (empty = all); scopes map + rollup + export
   excludedSticks: number[];     // manually culled stick_ids (dropped from rollup/plot)
   unitFilter: string[];         // map-only: substring terms matched against unique_id (OR)
-  colorMode: ColorMode;         // map sticks: Blue Ox bench / §6 reconciliation status / depletion tier
-  reconCounts: Record<string, number> | null; // recon_status -> stick count for current basin (legend)
-  depletionCounts: Record<string, number> | null; // deplet_t -> stick count for current basin (legend)
-  supportCounts: Record<string, number> | null; // pdp support bucket -> PUD/RES count for current basin (legend)
+  colorMode: ColorMode;         // map sticks: Blue Ox bench / BOX coverage / BOX EUR per ft / Steven econ
+  eurStream: EurStream;         // color mode "eur": which stream
+  econMetric: EconMetric;       // color mode "econ": which of Steven's columns (display-only, D13)
+  mapDeck: string | null;       // color mode "econ": Steven's deck (null = default WTI 70 / HH 3)
+  mapLegend: BoxLegend | null;  // ramp breaks for the active value mode (/api/box/legend)
+  showPdp: boolean;             // map: producing context
+  showNotCovered: boolean;      // map: PUDs without a BOX forecast + Novi RES (grey; off by default)
+  tierFilter: Tier[];           // map: forecast tiers shown
+  proxFilter: ProxGroup[];      // map: PDP-proximity outcome groups (empty = all)
+  valueRange: [number | null, number | null]; // map: range on the active value (EUR or econ)
   remainingOnly: boolean;       // map filter: among PUDs show only remaining (drillable)
   excludeDepleted: boolean;     // map filter: drop offset-depleted (Tier-4) PUDs
   discountRate: DiscountRate;
@@ -239,7 +244,6 @@ interface MapState {
   setAccVintage: (v: string | null) => void;
   setAccVintages: (v: AccVintages | null) => void;
   setBasin: (b: "delaware" | "midland") => void;
-  toggleCategory: (c: Category) => void;
   toggleOverlay: (k: OverlayKey) => void;
   loadBasins: () => Promise<void>;
   setDrawMode: (m: DrawMode) => void;
@@ -252,9 +256,15 @@ interface MapState {
   clearMapFormations: () => void;
   setUnitFilter: (u: string[]) => void;
   setColorMode: (m: ColorMode) => void;
-  loadReconCounts: () => Promise<void>;
-  loadDepletionCounts: () => Promise<void>;
-  loadSupportCounts: () => Promise<void>;
+  setEurStream: (s: EurStream) => void;
+  setEconMetric: (m: EconMetric) => void;
+  setMapDeck: (d: string | null) => void;
+  setMapLegend: (l: BoxLegend | null) => void;
+  setShowPdp: (b: boolean) => void;
+  setShowNotCovered: (b: boolean) => void;
+  toggleTier: (t: Tier) => void;
+  toggleProx: (g: ProxGroup) => void;
+  setValueRange: (r: [number | null, number | null]) => void;
   toggleRemainingOnly: () => void;
   toggleExcludeDepleted: () => void;
   toggleStick: (id: number) => void;
@@ -303,7 +313,6 @@ export const useMapStore = create<MapState>((set, get) => ({
   accVintage: null,
   accVintages: null,
   basin: "delaware",
-  categories: [...CATEGORIES],
   overlays: { pads: false, grid: false, outline: true, blocks: false, sections: false },
   basinsMeta: [],
   drawMode: "off",
@@ -316,10 +325,16 @@ export const useMapStore = create<MapState>((set, get) => ({
   formationFilter: [],
   excludedSticks: [],
   unitFilter: [],
-  colorMode: "bench",
-  reconCounts: null,
-  depletionCounts: null,
-  supportCounts: null,
+  colorMode: "eur",
+  eurStream: "oil",
+  econMetric: "pv10",
+  mapDeck: null,
+  mapLegend: null,
+  showPdp: true,
+  showNotCovered: false,
+  tierFilter: ["validated", "provisional"],
+  proxFilter: [],
+  valueRange: [null, null],
   remainingOnly: false,
   excludeDepleted: false,
   discountRate: 10,
@@ -390,13 +405,7 @@ export const useMapStore = create<MapState>((set, get) => ({
     }),
   setAccVintages: (v) => set({ accVintages: v }),
   setBasin: (b) =>
-    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgEconDeck: null, boxMeta: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWells: null, accSummary: null, accSummaryLoading: false, accTier: "all", accBench: [], accOperator: [], accWellApi10: null, accWell: null, accWellLoading: false, accSelection: null, accSelectionLoading: false, accMapView: "wells", accGrid: null, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], formationFilter: [], excludedSticks: [], unitFilter: [], reconCounts: null, depletionCounts: null, supportCounts: null, remainingOnly: false, excludeDepleted: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
-  toggleCategory: (c) =>
-    set((s) => ({
-      categories: s.categories.includes(c)
-        ? s.categories.filter((x) => x !== c)
-        : [...s.categories, c],
-    })),
+    set({ basin: b, highgrade: null, highgradeFilters: null, hgIncludeRealized: false, hgEconDeck: null, boxMeta: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWells: null, accSummary: null, accSummaryLoading: false, accTier: "all", accBench: [], accOperator: [], accWellApi10: null, accWell: null, accWellLoading: false, accSelection: null, accSelectionLoading: false, accMapView: "wells", accGrid: null, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], formationFilter: [], excludedSticks: [], unitFilter: [], mapLegend: null, valueRange: [null, null], remainingOnly: false, excludeDepleted: false, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleOverlay: (k) =>
     set((s) => ({ overlays: { ...s.overlays, [k]: !s.overlays[k] } })),
   loadBasins: async () => {
@@ -431,31 +440,19 @@ export const useMapStore = create<MapState>((set, get) => ({
     })),
   clearMapFormations: () => set({ formationFilter: [] }),
   setUnitFilter: (u) => set({ unitFilter: u }),
-  setColorMode: (m) => set({ colorMode: m }),
-  loadReconCounts: async () => {
-    if (get().reconCounts) return; // cached for the current basin (cleared by setBasin)
-    try {
-      set({ reconCounts: await fetchReconCounts(get().basin) });
-    } catch (e) {
-      console.warn("loadReconCounts failed", e);
-    }
-  },
-  loadDepletionCounts: async () => {
-    if (get().depletionCounts) return; // cached for the current basin (cleared by setBasin)
-    try {
-      set({ depletionCounts: await fetchDepletionCounts(get().basin) });
-    } catch (e) {
-      console.warn("loadDepletionCounts failed", e);
-    }
-  },
-  loadSupportCounts: async () => {
-    if (get().supportCounts) return; // cached for the current basin (cleared by setBasin)
-    try {
-      set({ supportCounts: await fetchSupportCounts(get().basin) });
-    } catch (e) {
-      console.warn("loadSupportCounts failed", e);
-    }
-  },
+  // A different value (mode / stream / metric / deck) invalidates the range and the legend.
+  setColorMode: (m) => set({ colorMode: m, valueRange: [null, null], mapLegend: null }),
+  setEurStream: (st) => set({ eurStream: st, valueRange: [null, null], mapLegend: null }),
+  setEconMetric: (m) => set({ econMetric: m, valueRange: [null, null], mapLegend: null }),
+  setMapDeck: (d) => set({ mapDeck: d, valueRange: [null, null], mapLegend: null }),
+  setMapLegend: (l) => set({ mapLegend: l }),
+  setShowPdp: (b) => set({ showPdp: b }),
+  setShowNotCovered: (b) => set({ showNotCovered: b }),
+  toggleTier: (t) =>
+    set((s) => ({ tierFilter: s.tierFilter.includes(t) ? s.tierFilter.filter((x) => x !== t) : [...s.tierFilter, t] })),
+  toggleProx: (g) =>
+    set((s) => ({ proxFilter: s.proxFilter.includes(g) ? s.proxFilter.filter((x) => x !== g) : [...s.proxFilter, g] })),
+  setValueRange: (r) => set({ valueRange: r }),
   // Both filters also drive the gun-barrel server query; clear the loaded
   // gun-barrel so it reloads with the new filter (mirrors setSelection).
   toggleRemainingOnly: () => set((s) => ({ remainingOnly: !s.remainingOnly, gunbarrel: null })),

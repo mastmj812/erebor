@@ -18,20 +18,43 @@ property at all (MVT omits NULLs) — never a zero.
 `econ` (optional, `?econ=<metric>&deck=<deck_id>`): ONE of Steven's whitelisted
 columns for the RECORD run's priced case (display-only, D13). An unpriced run
 leaves the property off every stick; the econ legend says "not yet priced".
+
+Speed (low zoom carries the whole basin: z7 7/27/52 Delaware = 91k sticks, 6.4 MB):
+  * the tile bytea is fetched in psycopg's BINARY result format — the default text
+    format ships it hex-encoded, twice the bytes over the Supabase link;
+  * finished tiles live in app.tile_cache (gzipped, served with Content-Encoding:
+    gzip), keyed on the URL + record run + econ case, so repeats cost milliseconds;
+  * the first z <= 8 tile of a basin (non-econ URL) starts a background prewarm of
+    that basin's z3-8 tiles, nearest zoom first, so zooming around low zoom is warm.
+None of the three changes the tile bytes.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
+import gzip
+import logging
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.box_locations import ECON_METRICS, box_joins, econ_case, econ_join, record_run_id, tile_columns
-from app.db import get_session
+from app.config import settings
+from app.db import SessionLocal, get_session
+from app.tile_cache import TileCache, tiles_covering
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tiles", tags=["tiles"])
 
 POINTS_MAX_Z = 8
+# The intel source's minzoom (MapView.tsx) — the prewarm builds z3..POINTS_MAX_Z.
+PREWARM_ZOOMS = range(3, POINTS_MAX_Z + 1)
+PREWARM_WORKERS = 2
 MVT_CONTENT_TYPE = "application/vnd.mapbox-vector-tile"
 
 _GEOM = {"points": "ST_StartPoint(w.wellstick_geom)", "lines": "w.wellstick_geom"}
@@ -77,6 +100,7 @@ FROM mvtgeom WHERE geom IS NOT NULL
 
 @router.get("/{z}/{x}/{y}.mvt")
 def tile(
+    request: Request,
     z: int = Path(ge=0, le=22),
     x: int = Path(ge=0),
     y: int = Path(ge=0),
@@ -91,15 +115,122 @@ def tile(
     run_id = record_run_id(session)
     case = econ_case(session, run_id, deck) if (econ and run_id is not None) else None
     econ_metric = econ if case is not None else None
-    params = {"z": z, "x": x, "y": y, "basin": basin, "box_run": run_id,
-              "econ_deck": case["deck_id"] if case else None,
-              "econ_aset": case["assumption_set_id"] if case else None}
-    result = session.execute(text(_mvt_sql(kind, econ_metric)), params).scalar()
-    payload = bytes(result) if result is not None else b""
-    if not payload:
-        return Response(status_code=204, headers={"Cache-Control": "public, max-age=60"})
-    return Response(
-        content=payload,
-        media_type=MVT_CONTENT_TYPE,
-        headers={"Cache-Control": "public, max-age=60"},
+    params = _params(z, x, y, basin, run_id, case)
+    gz, hit = _cache.get_or_build(
+        _tile_key(basin, z, x, y, run_id, econ_metric, case),
+        lambda: _fetch_tile(session, _mvt_sql(kind, econ_metric), params),
     )
+    if kind == "points" and econ_metric is None and settings.tile_prewarm:
+        _start_prewarm(basin, run_id, z)
+    headers = {"Cache-Control": "public, max-age=60", "Vary": "Accept-Encoding",
+               "X-Tile-Cache": "hit" if hit else "miss"}
+    if not gz:
+        return Response(status_code=204, headers=headers)
+    if "gzip" in request.headers.get("accept-encoding", "").lower():
+        headers["Content-Encoding"] = "gzip"
+        return Response(content=gz, media_type=MVT_CONTENT_TYPE, headers=headers)
+    return Response(content=gzip.decompress(gz), media_type=MVT_CONTENT_TYPE, headers=headers)
+
+
+# --- tile bytes, cache key, prewarm -------------------------------------------------
+_cache = TileCache(settings.tile_cache_mb << 20, settings.tile_cache_ttl_s)
+
+
+def _params(z: int, x: int, y: int, basin: str, run_id: int | None,
+            case: dict[str, Any] | None) -> dict[str, Any]:
+    return {"z": z, "x": x, "y": y, "basin": basin, "box_run": run_id,
+            "econ_deck": case["deck_id"] if case else None,
+            "econ_aset": case["assumption_set_id"] if case else None}
+
+
+def _tile_key(basin: str, z: int, x: int, y: int, run_id: int | None,
+              econ_metric: str | None, case: dict[str, Any] | None) -> tuple:
+    """Everything a tile's bytes depend on besides the warehouse rows themselves (those
+    age out by TTL): the record run, and for an econ tile the metric + the priced case
+    incl. its build time, so a fresh econ push or a re-marked record run misses."""
+    econ_part = None
+    if econ_metric is not None and case is not None:
+        econ_part = (econ_metric, case["deck_id"], case["assumption_set_id"], str(case.get("built_at")))
+    return (basin, z, x, y, run_id, econ_part)
+
+
+def _driver_sql(session: Session, sql: str, params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """The text() SQL compiled for the session's driver: psycopg pyformat placeholders,
+    with the `::` casts and any literal % handled by SQLAlchemy. Like session.execute,
+    params the SQL doesn't use are ignored (the econ binds on a plain tile)."""
+    compiled = text(sql).compile(dialect=session.get_bind().dialect)
+    return compiled.string, {k: params[k] for k in compiled.params}
+
+
+def _fetch_tile(session: Session, sql: str, params: dict[str, Any]) -> bytes:
+    """Run the tile SQL; return the raw MVT bytes (b"" = empty tile). Fetched in the
+    BINARY result format: the default text format ships bytea hex-encoded — twice the
+    bytes over the Supabase link (z7 7/27/52: 5.3 s -> 4.25 s, byte-identical tile).
+    Runs on the session's own connection, inside the transaction the app.db begin hook
+    made READ ONLY with its statement_timeout."""
+    stmt, args = _driver_sql(session, sql, params)
+    dbapi = session.connection().connection.dbapi_connection
+    with dbapi.cursor(binary=True) as cur:
+        cur.execute(stmt, args)
+        row = cur.fetchone()
+    return bytes(row[0]) if row is not None and row[0] is not None else b""
+
+
+_BBOX_SQL = """
+SELECT ST_XMin(e), ST_YMin(e), ST_XMax(e), ST_YMax(e)
+FROM (SELECT ST_Extent(wellstick_geom) AS e FROM curated.erebor_locations
+      WHERE basin = :basin AND wellstick_geom IS NOT NULL) q
+"""
+_prewarm_started: dict[tuple[str, int | None], float] = {}
+_prewarm_lock = threading.Lock()
+
+
+def _start_prewarm(basin: str, run_id: int | None, z_req: int) -> None:
+    """Start the basin's low-zoom prewarm once per (basin, record run) per cache TTL."""
+    key = (basin, run_id)
+    now = time.monotonic()
+    with _prewarm_lock:
+        started = _prewarm_started.get(key)
+        if started is not None and now - started < _cache.ttl_s:
+            return
+        _prewarm_started[key] = now
+    threading.Thread(target=_prewarm, args=(basin, run_id, z_req),
+                     name=f"tile-prewarm-{basin}", daemon=True).start()
+
+
+def prewarm_order(bbox: tuple[float, float, float, float], z_req: int) -> list[tuple[int, int, int]]:
+    """The basin's z3-8 tiles: the requested zoom first, then outward, zooming in before
+    zooming out at each step (scouting zooms in; z+1 also has more, smaller tiles)."""
+    return sorted(tiles_covering(bbox, PREWARM_ZOOMS),
+                  key=lambda t: (abs(t[0] - z_req), t[0] < z_req, t))
+
+
+def _prewarm(basin: str, run_id: int | None, z_req: int) -> None:
+    t0 = time.perf_counter()
+    try:
+        with SessionLocal() as s:
+            bbox = s.execute(text(_BBOX_SQL), {"basin": basin}).one()
+        if bbox[0] is None:
+            return
+        todo = prewarm_order((bbox[0], bbox[1], bbox[2], bbox[3]), z_req)
+        built: list[int] = []  # list.append is atomic across the workers
+
+        def one(t: tuple[int, int, int]) -> None:
+            z, x, y = t
+            key = _tile_key(basin, z, x, y, run_id, None, None)
+            if _cache.get(key) is not None:
+                return
+            with SessionLocal() as s:
+                _, hit = _cache.get_or_build(
+                    key, lambda: _fetch_tile(s, _mvt_sql("points", None), _params(z, x, y, basin, run_id, None)))
+            if not hit:
+                built.append(1)
+
+        with ThreadPoolExecutor(PREWARM_WORKERS, thread_name_prefix=f"tile-prewarm-{basin}") as ex:
+            list(ex.map(one, todo))
+        log.info("tile prewarm %s run %s: %d tiles (%d built) in %.1f s; cache %d tiles / %.1f MB gz",
+                 basin, run_id, len(todo), len(built), time.perf_counter() - t0, len(_cache), _cache.nbytes / 1e6)
+    except Exception:
+        log.exception("tile prewarm failed for %s (retried on the next low-zoom tile)", basin)
+        with _prewarm_lock:
+            _prewarm_started.pop((basin, run_id), None)

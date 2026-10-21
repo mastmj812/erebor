@@ -20,7 +20,9 @@ import {
   pointsLayer,
   stickFilter,
   tileUrl,
+  valueProp,
 } from "./map/sticksLayers";
+import { EUR_UNIT, MAP_COVERAGE_LABELS, TIER_OF_COVERAGE, deckLabel, econMetricInfo } from "./api/boxMap";
 import { DrawingController, bboxToPolygon, type GeoJsonPolygon } from "./map/drawing";
 import { choroplethFillColor } from "./map/highgradeColors";
 import { accuracyGridFill, accuracyLineColor } from "./map/accuracyColors";
@@ -168,7 +170,6 @@ export function MapView() {
   const [styleLoaded, setStyleLoaded] = useState(false);
 
   const basin = useMapStore((s) => s.basin);
-  const categories = useMapStore((s) => s.categories);
   const overlays = useMapStore((s) => s.overlays);
   const basinsMeta = useMapStore((s) => s.basinsMeta);
   const loadBasins = useMapStore((s) => s.loadBasins);
@@ -183,8 +184,15 @@ export function MapView() {
   const unitFilter = useMapStore((s) => s.unitFilter);
   const excludedSticks = useMapStore((s) => s.excludedSticks);
   const colorMode = useMapStore((s) => s.colorMode);
-  const remainingOnly = useMapStore((s) => s.remainingOnly);
-  const excludeDepleted = useMapStore((s) => s.excludeDepleted);
+  const eurStream = useMapStore((s) => s.eurStream);
+  const econMetric = useMapStore((s) => s.econMetric);
+  const mapDeck = useMapStore((s) => s.mapDeck);
+  const mapLegend = useMapStore((s) => s.mapLegend);
+  const showPdp = useMapStore((s) => s.showPdp);
+  const showNotCovered = useMapStore((s) => s.showNotCovered);
+  const tierFilter = useMapStore((s) => s.tierFilter);
+  const proxFilter = useMapStore((s) => s.proxFilter);
+  const valueRange = useMapStore((s) => s.valueRange);
   const appMode = useMapStore((s) => s.appMode);
   const highgrade = useMapStore((s) => s.highgrade);
   const accWells = useMapStore((s) => s.accWells);
@@ -401,7 +409,7 @@ export function MapView() {
         const f = e.features?.[0];
         if (!f) return;
         map.getCanvas().style.cursor = "pointer";
-        popupRef.current!.setLngLat(e.lngLat).setHTML(popupHtml(f.properties)).addTo(map);
+        popupRef.current!.setLngLat(e.lngLat).setHTML(popupHtml(f.properties, useMapStore.getState())).addTo(map);
       };
       const onLeave = () => {
         map.getCanvas().style.cursor = "";
@@ -527,9 +535,6 @@ export function MapView() {
     if (!styleLoaded) return;
     const map = mapRef.current;
     if (!map) return;
-    const src = map.getSource(INTEL_SOURCE) as maplibregl.VectorTileSource | undefined;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (src as any)?.setTiles?.([tileUrl(basin)]);
     removeNoviOverlays(map);
     const bbox = basinBbox(basinsMeta, basin);
     if (bbox) {
@@ -543,26 +548,43 @@ export function MapView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [basin, styleLoaded, basinsMeta]);
 
-  // -------- category + formation filter on both layers --------
+  // -------- tiles: basin, plus ONE econ metric for ONE deck in econ mode --------
+  // Non-econ modes share the plain URL, so switching EUR / coverage / bench reuses tiles.
   useEffect(() => {
     if (!styleLoaded) return;
     const map = mapRef.current;
     if (!map) return;
-    const filt = stickFilter(categories, excludedFormations, unitFilter, remainingOnly, excludeDepleted, formationFilter);
+    const src = map.getSource(INTEL_SOURCE) as maplibregl.VectorTileSource | undefined;
+    const econ = colorMode === "econ" ? econMetric : null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (src as any)?.setTiles?.([tileUrl(basin, econ, econ ? mapDeck : null)]);
+  }, [basin, colorMode, econMetric, mapDeck, styleLoaded]);
+
+  // -------- BOX visibility filters on both layers --------
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const filt = stickFilter({
+      showPdp, showNotCovered, tiers: tierFilter, prox: proxFilter,
+      valueProp: valueProp(colorMode, eurStream), range: valueRange,
+      excludedFormations, units: unitFilter, formationFilter,
+    });
     for (const id of [POINTS_LAYER, LINES_LAYER]) {
       if (map.getLayer(id)) map.setFilter(id, filt);
     }
-  }, [categories, excludedFormations, formationFilter, unitFilter, remainingOnly, excludeDepleted, styleLoaded]);
+  }, [showPdp, showNotCovered, tierFilter, proxFilter, colorMode, eurStream, valueRange,
+      excludedFormations, formationFilter, unitFilter, styleLoaded]);
 
-  // -------- color mode: Blue Ox bench vs §6 reconciliation status --------
+  // -------- color mode: BOX EUR/ft, econ, coverage, or Blue Ox bench --------
   useEffect(() => {
     if (!styleLoaded) return;
     const map = mapRef.current;
     if (!map) return;
-    const expr = colorExpr(colorMode);
+    const expr = colorExpr(colorMode, { stream: eurStream, legend: mapLegend });
     if (map.getLayer(POINTS_LAYER)) map.setPaintProperty(POINTS_LAYER, "circle-color", expr);
     if (map.getLayer(LINES_LAYER)) map.setPaintProperty(LINES_LAYER, "line-color", expr);
-  }, [colorMode, styleLoaded]);
+  }, [colorMode, eurStream, mapLegend, styleLoaded]);
 
   // -------- overlay toggles --------
   useEffect(() => {
@@ -776,19 +798,44 @@ function accPopupHtml(p: Record<string, unknown>, horizon: number, stream: strin
     </div>`;
 }
 
-function popupHtml(p: Record<string, unknown>): string {
+// Stick hover: BOX record-run view of one location (app.box_locations tile props).
+// Not covered reads "Not covered: <reason>" with no EUR rows — never a zero.
+function popupHtml(
+  p: Record<string, unknown>,
+  st: { colorMode: string; econMetric: Parameters<typeof econMetricInfo>[0]; mapLegend: { case?: { deck_id: string } | null } | null },
+): string {
+  const cov = p.coverage as string | undefined;
+  const tier = cov ? TIER_OF_COVERAGE[cov] : undefined;
+  const perFt = (k: "oil" | "gas" | "water") =>
+    p[`${k}_eur_ft`] == null ? "" : `<tr><td>${k[0].toUpperCase() + k.slice(1)} EUR</td><td>${Number(p[`${k}_eur_ft`]).toFixed(1)} ${EUR_UNIT[k]}${
+      k === "water" && p.water_tier ? ` (${esc(p.water_tier)})` : ""}</td></tr>`;
+  const boxRow = p.category === "PDP"
+    ? `<tr><td>BOX</td><td>producing — context only</td></tr>`
+    : tier
+      ? `<tr><td>BOX</td><td>${tier === "validated" ? "forecast — validated" : "forecast — <b>PROVISIONAL</b> tier (D105)"}</td></tr>`
+      : `<tr><td>BOX</td><td>Not covered: ${esc(MAP_COVERAGE_LABELS[cov ?? ""] ?? cov)}</td></tr>`;
+  const prox = p.prox_outcome
+    ? `<tr><td>Proximity</td><td>${esc(String(p.prox_outcome).replaceAll("_", " "))}${p.prox_factor != null ? ` · oil × ${Number(p.prox_factor).toFixed(3)}` : ""}</td></tr>`
+    : "";
+  let econ = "";
+  if (st.colorMode === "econ" && tier) {
+    const info = econMetricInfo(st.econMetric);
+    const deck = st.mapLegend?.case?.deck_id;
+    econ = `<tr><td>${esc(info.label)}</td><td>${p.econ == null ? "not priced" : `${Number(p.econ).toFixed(2)} ${esc(info.unit)}`}${
+      deck ? ` · ${esc(deckLabel(deck))}` : ""} <span style="color:#71717a">(Steven, display only)</span></td></tr>`;
+  }
   return `
     <div>
       <div class="mtt-name">${esc(p.unique_id)}</div>
       <table class="mtt-table">
-        <tr><td>Category</td><td>${esc(p.category)}</td></tr>
-        <tr><td>Formation</td><td>${esc(p.formation)}</td></tr>
-        <tr><td>Recon</td><td>${esc(p.recon_status)}</td></tr>
-        ${p.deplet_t ? `<tr><td>Depletion</td><td>${esc(p.deplet_t)}${p.deplet_t === "Tier-4" ? " — depleted" : ""}</td></tr>` : ""}
+        <tr><td>Type</td><td>${p.category === "PDP" ? "producing well (PDP)" : "Novi stick location"}</td></tr>
+        <tr><td>Bench</td><td>${esc(p.formation_blueox ?? "(unmapped)")}</td></tr>
+        ${boxRow}
+        ${tier ? perFt("oil") + perFt("gas") + perFt("water") : ""}
+        ${prox}
+        ${econ}
         <tr><td>Operator</td><td>${esc(p.operator)}</td></tr>
         <tr><td>Lateral</td><td>${fmtInt(p.ll_ft)} ft</td></tr>
-        <tr><td>Oil EUR</td><td>${fmtInt(p.oil_eur)} bbl</td></tr>
-        <tr><td>NPV25</td><td>${fmtMoney(p.npv25)}</td></tr>
       </table>
     </div>`;
 }

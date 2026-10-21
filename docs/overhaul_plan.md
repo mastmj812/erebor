@@ -5,9 +5,10 @@
 ## Status
 | Step | State | Where |
 |---|---|---|
-| 1 Warehouse 3Q26 pads → `intel_pad_geom` v3 | code merged (engineering_db #173); **live load pending** (after step 2 merges, Delaware drop back on SharePoint) | engineering_db `sql/66`, `sql/67` |
-| 2 Remove export; Accuracy = Novi reference; pin pad vintage | this PR | erebor |
-| 3–6 | not started | |
+| 1 Warehouse 3Q26 pads → `intel_pad_geom` v3 | **applied live 2026-10-21** (engineering_db #173 + data dictionary #174): 17,526 pads, all 42,475 BOX PUDs inside Novi polygons | engineering_db `sql/66`, `sql/67` |
+| 2 Remove export; Accuracy = Novi reference; pin pad vintage | merged (erebor #18) | erebor |
+| 3 Map tab BOX-first | this PR | erebor |
+| 4–6 | not started | |
 | 7 BOX hindcast | deferred | |
 
 
@@ -73,10 +74,21 @@ DSUs that tile the basin.
    there, not made here.
 
 ## Decisions (agreed 2026-10-20)
-1. **Novi role.** BOX is the only forecast and econ source on the map and in Highgrade.
-   - Novi survives only as the location universe: sticks, pad_name, recon status, geometry.
-   - It also survives as the BOX÷Novi cross-check column inside the pad workup.
-   - Novi NPV and its three caveats go away.
+1. **Novi role** (tightened by Michael, 2026-10-21). Erebor takes exactly three things from Novi:
+   - the stick location / geometry;
+   - the DSU pad shapefiles;
+   - the Novi forecast, ONLY as a comparison curve against BOX in the production plot (and the BOX÷Novi
+     column in the pad workup).
+
+   Nothing else from Novi classifies or values anything:
+   - no BASE_CASE / EMERGING (PUD / RES) tags;
+   - no depletion / rqt / spacing / completion tiers;
+   - no Novi NPV, and its three caveats go away.
+
+   Novi's tags have been shown wrong repeatedly. Novi RES is just how Novi marked sticks outside its
+   (already too generous) development extent, or on emerging targets like WDFD where its forecasting and
+   valuation do not apply. Classification is BOX's (coverage classes, extents, proximity) plus our own
+   reconciliation (sql/20, realized vs remaining). Every later step drops Novi labels wherever they still show.
 2. **Econ = record run only.** Until Steven pushes run 14, econ shows as "not yet priced on run 14"
    everywhere. Run-10 dollars never appear on run-14 volumes.
 3. **Econ display.** Deck picker over Steven's decks, default WTI 70 / HH 3, default metric PV10.
@@ -182,8 +194,15 @@ exists and how to verify it, then wait for Michael's go.
   coverage in the basin.
 - Pads overlay → the 2026Q3 DSU polygons: all of them, including DSUs with no remaining stick, so the
   map shows the infill frame. Remove the 3Q25 read.
-- **Novi RES sticks:** RES is not in the BOX universe (D1/D67). It shows only under the not-covered
-  toggle, as "not in BOX universe (RES)". Michael confirms at this gate.
+- ~~**Novi RES sticks:** shown as "not in BOX universe (RES)".~~ Superseded at this gate (Michael,
+  2026-10-21):
+  - The map never reads Novi's PUD / RES tag. Tiles ship `category` = PDP | LOCATION.
+  - A stick with no record-run row is `realized` (our reconciliation), `not_screened` (on a BOX bench but
+    never screened by the run), or `bench_not_in_box`.
+  - **Open, engineering_db:** BOX's own universe (D1/D67) still excludes Novi-RES sticks. About 6,380
+    Delaware RES sticks sit on a BOX bench with their midpoint inside a record extent (WCA 5,192, WCC 577,
+    BS3_S 502, …), so BOX never screened them only because of Novi's tag. Whether BOX should screen every
+    in-extent stick is a BOX-plan decision, outside this overhaul.
 
 **Quality checks**
 - MVT null properties use `has`/`coalesce`.
@@ -194,6 +213,26 @@ exists and how to verify it, then wait for Michael's go.
 **Tests:** DB-free SQL-shape and projection tests in the `test_highgrade_box.py` style.
 
 **Gate:** stop.
+
+**As built (2026-10-21) — changes from the plan above:**
+- Ramp breaks come from a separate `GET /api/box/legend?basin&metric[&econ&deck]` (P5 / P25 / P50 / P75 / P95
+  over the basin's forecast PUDs), not from `/api/box/meta`. Meta gained `econ_status`, `default_deck`,
+  `basin_coverage`, `forecast_count` and the econ `pushed_at` / `pushed_by` provenance.
+- Econ tiles carry ONE metric (`?econ=pv10&deck=…`) rather than all nine, to keep the tiles small. Switching
+  metric refetches; the EUR, coverage and bench modes share one cached URL.
+- The provisional tier is shown through two "Show" toggles (validated / PROVISIONAL), the popup and the legend
+  counts. A dashed line is not possible here: MapLibre's `line-dasharray` is not data-driven.
+- Color modes: BOX EUR/ft (default, oil), Econ, Coverage, Bench. The Novi recon-status, depletion and
+  PDP-support modes and the "Remaining BASE_CASE only" / "Exclude depleted" map toggles are gone. The store
+  keeps `remainingOnly` / `excludeDepleted` for the selection rollup and gunbarrel until step 4.
+- The Pads overlay draws every newest-vintage Novi DSU with geometry only (`pad_name`, `well_cnt`); Novi NPV
+  is removed from it.
+- Tile timing (Delaware, live): z11 ≈ 0.5 s / 330 KB; z9 ≈ 3 s / 3.1 MB; z6–7 ≈ 6 s / 6–7 MB.
+  - The new tiles are 28 % smaller than the Novi tiles they replace, at the same speed.
+  - Slow low-zoom tiles were already there before this step. Follow-up: a server tile cache or a simplified
+    z ≤ 8 point layer.
+- Highgrade's BOX econ default deck now follows `default_deck` (WTI 70 / HH 3), so it works when the Map tab
+  loaded `boxMeta` first.
 
 ### Step 4 — Lasso selection workflow on BOX
 - `/api/select` rollup:

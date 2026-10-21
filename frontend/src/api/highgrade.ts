@@ -98,6 +98,8 @@ export interface BoxDeck extends EconDeck {
   wti: number | null;
   hh: number | null;
   built_at: string | null;
+  pushed_at?: string | null; // when Steven pushed this case (provenance, D13)
+  pushed_by?: string | null;
 }
 export interface BoxDisclosureRow {
   stream: string; horizon: string;
@@ -175,6 +177,11 @@ export interface BoxMeta {
   intel_report_versions: string[];
   stale: boolean;
   scope: { bench: string; in_scope: boolean; member_benches: string[]; reason: string }[];
+  // Map tab (overhaul step 3): econ only for the record run — "not_yet_priced" until Steven pushes it
+  econ_status?: "priced" | "not_yet_priced";
+  default_deck?: string | null;
+  basin_coverage?: Record<string, number>; // the basin's PUDs per coverage class in the record run
+  forecast_count?: number;                 // covered + covered_provisional in the basin (0 = Midland today)
 }
 
 export interface BoxPadLocation {

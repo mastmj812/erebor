@@ -37,10 +37,12 @@ FROM ({inner_sql}) t
 @router.get("/layers/pads.geojson")
 def pads(basin: str = _BASIN, session: Session = Depends(get_session)) -> Response:
     # One vintage only (app.novi_pads): the warehouse keeps 3Q25 and 2026Q3
-    # polygons side by side; drawing both stacks two DSU sets.
+    # polygons side by side; drawing both stacks two DSU sets. Every DSU of that
+    # vintage (sticks or not — the infill frame); geometry only, no Novi NPV
+    # (BOX-first, overhaul decision 1).
     return _fc(
         session,
-        "SELECT pad_name, npv25 AS pad_npv25, geom FROM raw_novi_intel.pads "
+        "SELECT pad_name, well_cnt, geom FROM raw_novi_intel.pads "
         "WHERE basin = :basin AND report_version = :rv AND geom IS NOT NULL",
         {"basin": basin, "rv": current_pads_version(session, basin)},
     )

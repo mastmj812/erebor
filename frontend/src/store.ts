@@ -92,7 +92,7 @@ export interface SelectionStick {
   category: string;
   formation: string;
   formation_blueox: string | null;
-  recon_status: string | null;  // §6 reconciliation tag (null for producers / RES)
+  recon_status: string | null;  // §6 reconciliation tag, every Novi stick incl. RES (engineering_db sql/68, D117); null for producers
   deplet_t: string | null;      // Novi depletion tier (Tier-4 = drained); null for PDP/RES
   pad_name: string | null;
   ll_ft: number | null;

@@ -58,7 +58,7 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
       <div className="count" style={{ margin: 0 }}>
         BOX run {r.run_id} · spec {groups.map((g) => g.spec).filter((v, i, a) => a.indexOf(v) === i).join(" + ")} · code {r.code_sha.slice(0, 7)} · boxfit {r.engine_sha?.slice(0, 7)} ·
         deal-intake config v{r.dealintake_config} · Novi {r.report_version} · production through {r.data_through} ·
-        {" "}{nVal} covered (validated){nProv > 0 ? ` · ${nProv} covered PROVISIONAL (D105)` : ""} of {data.locations.length} PUDs ·
+        {" "}{nVal} covered (validated){nProv > 0 ? ` · ${nProv} covered PROVISIONAL (D105)` : ""} of {data.locations.length} locations ·
         {" "}{data.analogs.length} named analogs
       </div>
 

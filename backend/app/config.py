@@ -30,7 +30,6 @@ class Settings(BaseSettings):
         default=Path("../../permian_type_curve/infra/basemap/sections_tx_nm.geojson"),
         alias="SECTIONS_GEOJSON_PATH",
     )
-    report_version: str = Field(default="3Q25", alias="REPORT_VERSION")
     # Map tile cache (app/tile_cache.py): gzipped tiles in process memory. Both basins'
     # z3-8 pyramid is ~40 MB gzipped; the TTL lets the nightly erebor_locations refresh
     # through within the hour. TILE_PREWARM builds a basin's z <= 8 tiles in the

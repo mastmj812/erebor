@@ -23,9 +23,9 @@ back-compat; runs without by_bench (4, 6, 7) have the one WCA group.
 
   GET /api/box/meta?basin=            record run + provenance + haircut / disclosure
                                        + Steven's priced decks for that run + scope
-  GET /api/box/pad?basin=&pad_key=    one Highgrade pad: every PUD's coverage + BOX
-                                       numbers vs Novi, named analogs, forecast vs
-                                       analog actuals (oil cum per 1,000 ft)
+  GET /api/box/pad?basin=&pad_key=    one Highgrade pad: every Novi stick location's
+                                       coverage + BOX numbers vs Novi, named analogs,
+                                       forecast vs analog actuals (oil cum per 1,000 ft)
 
 PDP-proximity layer (record run 14, D112-D116, engineering_db sql/65): a PUD with 2+
 depleted parents (>= 12 mo on production, >= 30 % alongside, inside the class envelope)
@@ -53,7 +53,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
-from app.box_locations import (  # noqa: F401 — re-exported: highgrade + tests import these from here
+from app.box_locations import (  # noqa: F401 — re-exported: the tests import these from here
     COVERAGE_CLASSES,
     FORECAST_CLASSES,
     FORECAST_IN_SQL,
@@ -356,7 +356,7 @@ def meta(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict:
         "forecast_count": int(sum(v for k, v in basin_coverage.items() if k in FORECAST_CLASSES)),
         "intel_report_versions": list(vintages),
         # the record run keys on its own vintage's stick ids; a newer Novi vintage in the
-        # warehouse means BOX coverage reads as no_box_row until the quarterly BOX refresh
+        # warehouse means sticks read not_screened until the quarterly BOX refresh
         "stale": run["report_version"] not in vintages,
         "scope": [dict(s) for s in scope],
     }
@@ -440,9 +440,10 @@ def monthly_series(months: list[int], volumes: list[float]) -> dict[str, list[fl
 
 
 def well_forecast(session: Session, basin: str, unique_id: str) -> dict[str, Any] | None:
-    """The record run's BOX forecast for one Novi PUD (by its Novi name). None when the name
-    is not a Novi PUD (PDP / RES); otherwise its coverage class, and for a covered PUD the
-    oil + gas + water monthly series (water since sql/62, with its own tier)."""
+    """The record run's BOX forecast for one Novi stick location (by its Novi name). None
+    when the name is no stick location (PDP); otherwise its coverage class, and for a
+    forecast location the oil + gas + water monthly series (water since sql/62, with its
+    own tier). Novi's PUD / RES tag is not read (geometry only, Michael 2026-10-21)."""
     run = record_run(session)
     row = session.execute(
         text(f"""
@@ -456,7 +457,7 @@ def well_forecast(session: Session, basin: str, unique_id: str) -> dict[str, Any
             LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = il.stick_id
             LEFT JOIN curated.reconciled_inventory rec ON rec.stick_id = il.stick_id
             {box_joins('il')}
-            WHERE il.basin = :basin AND il.unique_id = :name AND il.category = 'PUD'
+            WHERE il.basin = :basin AND il.unique_id = :name AND il.category <> 'PDP'
             ORDER BY il.stick_id LIMIT 1
         """),
         {"basin": basin, "name": unique_id, "box_run": run["run_id"]},
@@ -560,7 +561,7 @@ def pad(basin: str = _BASIN, pad_key: str = Query(...), session: Session = Depen
             LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = il.stick_id
             LEFT JOIN curated.reconciled_inventory rec ON rec.stick_id = il.stick_id
             {box_joins('il')}
-            WHERE il.basin = :basin AND il.category = 'PUD'
+            WHERE il.basin = :basin AND il.category <> 'PDP'
             ORDER BY formation_blueox, il.stick_id
         """),
         p,

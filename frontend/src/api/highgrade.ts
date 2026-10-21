@@ -87,8 +87,8 @@ export interface HighgradeFilters {
   ranges?: Record<string, [number | null, number | null]>;
 }
 
-// Coverage classes, in display order (backend app/box_locations.py COVERAGE_CLASSES; the
-// Map / Highgrade class not_screened is added in api/boxMap.ts MAP_COVERAGE_LABELS).
+// Coverage classes, in display order (backend app/box_locations.py COVERAGE_CLASSES) — the
+// same classes on the Map, in Highgrade, the selection rollup and the pad workup.
 export const COVERAGE_LABELS: Record<string, string> = {
   covered: "covered — validated (BOX forecast)",
   covered_provisional: "covered — PROVISIONAL tier (BOX forecast, D105)",
@@ -99,8 +99,8 @@ export const COVERAGE_LABELS: Record<string, string> = {
   not_covered_unvalidated: "bench not yet validated (D60)",
   not_covered_emerging: "emerging bench (D2)",
   bench_not_in_box: "bench not in BOX v1",
+  not_screened: "on a BOX bench, not screened by the record run",
   realized: "realized per reconciliation",
-  no_box_row: "no BOX row (vintage drift?)",
 };
 
 // PDP-proximity layer (record run 14, D112–D116): the three Highgrade filter values over

@@ -9,8 +9,8 @@
 | 2 Remove export; Accuracy = Novi reference; pin pad vintage | merged (erebor #18) | erebor |
 | 3 Map tab BOX-first | merged (erebor #19); low-zoom tile cache + binary fetch merged (erebor #20) | erebor |
 | 4 Lasso selection on BOX | merged (erebor #22) | erebor |
-| 5 Highgrade BOX-only | this PR | erebor |
-| 6 | not started | |
+| 5 Highgrade BOX-only | merged (erebor #23) | erebor |
+| 6 Cleanup + docs | this PR | erebor + workspace `CLAUDE.md` |
 | BOX universe (D117, engineering_db) | step 1 decision (#175) + step 2 reconciliation of every Novi stick **applied live 2026-10-21** (#177, #178): realized RES now read `realized` on the map. **Step 3 PARKED (Michael 2026-10-21)** until the tops/tag and provisional-bench work settles. It resumes as an incremental run 15 (5,946 of 6,225 in-extent RES would forecast, read-only pre-measure); erebor stays on run 14 meanwhile | engineering_db `sql/68`, `docs/box/universe-2026-10-21/` |
 | 7 BOX hindcast | deferred | |
 
@@ -358,6 +358,23 @@ exists and how to verify it, then wait for Michael's go.
 - Update the erebor rows of `C:\Users\MichaelMast\Projects\CLAUDE.md`: role, test count, the
   "three NPV caveats" sentence (now moot), and the export quality bar.
 - **Gate:** stop.
+
+**As built (2026-10-21):**
+- **Removed (dead):**
+  - Backend: the `/recon_counts`, `/depletion_counts` and `/support_counts` endpoints (no caller since
+    step 3) and `settings.report_version`. The `npv*` / `pv*` paths already went in steps 3–5.
+  - Frontend: `api/recon.ts` and the recon-status / depletion / support color helpers in `map/formations.ts`.
+- **Novi tag gates removed:**
+  - The pad workup (`/box/pad`) and the single-well BOX lookup (`box.well_forecast`) read every Novi stick
+    location (`category <> 'PDP'`) instead of `category = 'PUD'`. The workup's location list now matches
+    Highgrade's pad (RES sticks included); realized sticks stay listed there as `realized`.
+  - `coverage_sql` (the workup's classifier) emits `not_screened` like the Map. The `no_box_row` class is
+    retired, so one class list (`COVERAGE_CLASSES`) now serves the Map, Highgrade, selection and workup.
+- **Docs:**
+  - `PROJECT.md` rewritten for BOX scouting: rules, architecture, endpoints, history.
+  - The `pyproject` description and the page title now say BOX scouting.
+  - Stale docstrings fixed (box_locations classes, box.py, production.py).
+  - The erebor rows of the workspace `CLAUDE.md` updated (outside this repo).
 
 ### Step 7 (deferred, own plan) — BOX hindcast on the Accuracy tab
 - Needs a warehouse BOX-accuracy matview first (cross-repo, warehouse first).

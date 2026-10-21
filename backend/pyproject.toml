@@ -1,7 +1,7 @@
 [project]
 name = "erebor-backend"
 version = "0.1.0"
-description = "erebor — Novi Intelligence deal-valuation app backend"
+description = "erebor — BOX scouting app backend (read-only vs the oilgas warehouse)"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

@@ -35,6 +35,9 @@ def test_map_coverage_classes_use_our_facts_only():
     # Novi's own PUD / RES tag never classifies a stick (Michael, 2026-10-21)
     assert "'RES'" not in sql and "'PUD'" not in sql
     assert bl.NOT_SCREENED in bl.MAP_COVERAGE_CLASSES and "no_box_row" not in bl.MAP_COVERAGE_CLASSES
+    # the pad workup classes a stick the same way (its reconciliation comes from `rec`)
+    assert bl.MAP_COVERAGE_CLASSES == bl.COVERAGE_CLASSES
+    assert f"THEN '{bl.NOT_SCREENED}'" in bl.coverage_sql("il") and "no_box_row" not in bl.coverage_sql("il")
 
 
 def test_tile_columns_per_foot_and_no_econ_by_default():
@@ -86,3 +89,13 @@ def test_econ_metric_units_and_direction():
     assert bl.ECON_METRICS["be_wti"]["better"] == "low"
     assert bl.DEFAULT_DECK == "wti70_hh3" and bl.DEFAULT_ECON_METRIC == "pv10"
     assert bl.EUR_UNITS == {"oil": "bbl/ft", "gas": "mcf/ft", "water": "bbl/ft"}
+
+
+def test_workup_and_well_lookup_never_gate_on_novi_pud_tag():
+    # the pad workup and the single-well BOX lookup read every Novi stick location
+    # (geometry only); only PDP is excluded, as on the Map and in Highgrade
+    import inspect
+
+    for fn in (box.pad, box.well_forecast):
+        src = inspect.getsource(fn)
+        assert "category = 'PUD'" not in src and "category <> 'PDP'" in src

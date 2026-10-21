@@ -11,12 +11,24 @@ opens a PDP row (rule 8); the notes state facts from the cohort, never a verdict
 import datetime as dt
 
 from app.api import workup as wk
+from fastapi.testclient import TestClient
+
 from app.box_locations import map_coverage_sql
+from app.db import get_session
 from app.main import app
 
 
 def test_route_is_registered():
-    assert any(getattr(r, "path", "") == "/api/box/location" for r in app.routes)
+    # through a request, not app.routes: newer Starlette no longer flattens included routers
+    # there. A missing stick_id is a 422 from the route (an unknown path would be a 404);
+    # the session dependency is stubbed, so nothing touches the database.
+    app.dependency_overrides[get_session] = lambda: None
+    try:
+        client = TestClient(app)
+        assert client.get("/api/box/location?basin=delaware").status_code == 422
+        assert client.get("/api/box/location?basin=delaware&stick_id=-3001547072").status_code == 422  # PDP id
+    finally:
+        app.dependency_overrides.pop(get_session, None)
 
 
 def test_build_chain_reproduces_the_stored_eur():

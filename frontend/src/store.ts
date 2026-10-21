@@ -12,6 +12,7 @@ import type {
 } from "./api/accuracy";
 import type { BoxLegend, EconMetric, EurStream, Tier } from "./api/boxMap";
 import type { BoxMeta, HighgradeFilters, ProxGroup } from "./api/highgrade";
+import type { MapRange, RangeMetric } from "./map/screen";
 import type { ColorMode } from "./map/sticksLayers";
 
 export interface BasinMeta {
@@ -209,10 +210,10 @@ interface MapState {
   mapDeck: string | null;       // color mode "econ": Steven's deck (null = default WTI 70 / HH 3)
   mapLegend: BoxLegend | null;  // ramp breaks for the active value mode (/api/box/legend)
   showPdp: boolean;             // map: producing context
-  showNotCovered: boolean;      // map: PUDs without a BOX forecast + Novi RES (grey; off by default)
+  notCoveredShown: string[];    // map: classes of locations WITHOUT a BOX forecast drawn grey (empty = hidden, the default)
   tierFilter: Tier[];           // map: forecast tiers shown
   proxFilter: ProxGroup[];      // map: PDP-proximity outcome groups (empty = all)
-  valueRange: [number | null, number | null]; // map: range on the active value (EUR or econ)
+  mapRanges: MapRange[];        // map screen: ranges on BOX EUR/ft, lateral, Steven's econ (map/screen.ts)
   production: BoxProfile | null;
   productionLoading: boolean;
   productionStale: boolean;     // culls changed since production was loaded
@@ -270,10 +271,13 @@ interface MapState {
   setMapDeck: (d: string | null) => void;
   setMapLegend: (l: BoxLegend | null) => void;
   setShowPdp: (b: boolean) => void;
-  setShowNotCovered: (b: boolean) => void;
+  setNotCoveredShown: (classes: string[]) => void;
+  toggleNotCovered: (cls: string) => void;
   toggleTier: (t: Tier) => void;
   toggleProx: (g: ProxGroup) => void;
-  setValueRange: (r: [number | null, number | null]) => void;
+  addMapRange: (m: RangeMetric) => void;
+  updateMapRange: (i: number, patch: Partial<MapRange>) => void;
+  removeMapRange: (i: number) => void;
   toggleStick: (id: number) => void;
   clearCulls: () => void;
   setProduction: (p: BoxProfile | null) => void;
@@ -333,10 +337,10 @@ export const useMapStore = create<MapState>((set, get) => ({
   mapDeck: null,
   mapLegend: null,
   showPdp: true,
-  showNotCovered: false,
+  notCoveredShown: [],
   tierFilter: ["validated", "provisional"],
   proxFilter: [],
-  valueRange: [null, null],
+  mapRanges: [],
   production: null,
   productionLoading: false,
   productionStale: false,
@@ -399,7 +403,7 @@ export const useMapStore = create<MapState>((set, get) => ({
     }),
   setAccVintages: (v) => set({ accVintages: v }),
   setBasin: (b) =>
-    set({ basin: b, highgrade: null, highgradeFilters: null, boxMeta: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWells: null, accSummary: null, accSummaryLoading: false, accTier: "all", accBench: [], accOperator: [], accWellApi10: null, accWell: null, accWellLoading: false, accSelection: null, accSelectionLoading: false, accMapView: "wells", accGrid: null, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], formationFilter: [], excludedSticks: [], unitFilter: [], mapLegend: null, valueRange: [null, null], production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
+    set({ basin: b, highgrade: null, highgradeFilters: null, boxMeta: null, hgGunbarrelPad: null, hgGunbarrel: null, hgGunbarrelLoading: false, accWells: null, accSummary: null, accSummaryLoading: false, accTier: "all", accBench: [], accOperator: [], accWellApi10: null, accWell: null, accWellLoading: false, accSelection: null, accSelectionLoading: false, accMapView: "wells", accGrid: null, selection: null, aoi: null, deals: null, dealZoom: null, excludedFormations: [], formationFilter: [], excludedSticks: [], unitFilter: [], mapLegend: null, production: null, productionStale: false, wellOverlay: null, gunbarrel: null }),
   toggleOverlay: (k) =>
     set((s) => ({ overlays: { ...s.overlays, [k]: !s.overlays[k] } })),
   loadBasins: async () => {
@@ -435,19 +439,24 @@ export const useMapStore = create<MapState>((set, get) => ({
     })),
   clearMapFormations: () => set({ formationFilter: [] }),
   setUnitFilter: (u) => set({ unitFilter: u }),
-  // A different value (mode / stream / metric / deck) invalidates the range and the legend.
-  setColorMode: (m) => set({ colorMode: m, valueRange: [null, null], mapLegend: null }),
-  setEurStream: (st) => set({ eurStream: st, valueRange: [null, null], mapLegend: null }),
-  setEconMetric: (m) => set({ econMetric: m, valueRange: [null, null], mapLegend: null }),
-  setMapDeck: (d) => set({ mapDeck: d, valueRange: [null, null], mapLegend: null }),
+  // A different color value (mode / stream / metric / deck) invalidates the legend. The
+  // ranges are a screen of their own (any metric, independent of the color) and stay.
+  setColorMode: (m) => set({ colorMode: m, mapLegend: null }),
+  setEurStream: (st) => set({ eurStream: st, mapLegend: null }),
+  setEconMetric: (m) => set({ econMetric: m, mapLegend: null }),
+  setMapDeck: (d) => set({ mapDeck: d, mapLegend: null }),
   setMapLegend: (l) => set({ mapLegend: l }),
   setShowPdp: (b) => set({ showPdp: b }),
-  setShowNotCovered: (b) => set({ showNotCovered: b }),
+  setNotCoveredShown: (classes) => set({ notCoveredShown: classes }),
+  toggleNotCovered: (cls) =>
+    set((s) => ({ notCoveredShown: s.notCoveredShown.includes(cls) ? s.notCoveredShown.filter((x) => x !== cls) : [...s.notCoveredShown, cls] })),
   toggleTier: (t) =>
     set((s) => ({ tierFilter: s.tierFilter.includes(t) ? s.tierFilter.filter((x) => x !== t) : [...s.tierFilter, t] })),
   toggleProx: (g) =>
     set((s) => ({ proxFilter: s.proxFilter.includes(g) ? s.proxFilter.filter((x) => x !== g) : [...s.proxFilter, g] })),
-  setValueRange: (r) => set({ valueRange: r }),
+  addMapRange: (m) => set((s) => ({ mapRanges: [...s.mapRanges, { metric: m, lo: null, hi: null }] })),
+  updateMapRange: (i, patch) => set((s) => ({ mapRanges: s.mapRanges.map((r, k) => (k === i ? { ...r, ...patch } : r)) })),
+  removeMapRange: (i) => set((s) => ({ mapRanges: s.mapRanges.filter((_, k) => k !== i) })),
   toggleStick: (id) =>
     set((s) => ({
       excludedSticks: s.excludedSticks.includes(id)

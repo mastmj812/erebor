@@ -107,25 +107,35 @@ def test_prewarm_order_starts_at_the_requested_zoom_and_covers_z3_to_z8():
 
 def test_cache_key_carries_record_run_and_econ_case():
     case = {"deck_id": "wti70_hh3", "assumption_set_id": "a", "built_at": dt.datetime(2026, 10, 20)}
-    base = tiles._tile_key("delaware", 7, 27, 52, 14, None, None)
-    assert base == tiles._tile_key("delaware", 7, 27, 52, 14, None, case)        # no econ: case irrelevant
-    assert base != tiles._tile_key("delaware", 7, 27, 52, 15, None, None)        # re-marked record run
-    priced = tiles._tile_key("delaware", 7, 27, 52, 14, "pv10", case)
-    assert priced != base and priced != tiles._tile_key("delaware", 7, 27, 52, 14, "irr", case)
+    base = tiles._tile_key("delaware", 7, 27, 52, 14, (), None)
+    assert base == tiles._tile_key("delaware", 7, 27, 52, 14, (), case)          # no econ: case irrelevant
+    assert base != tiles._tile_key("delaware", 7, 27, 52, 15, (), None)          # re-marked record run
+    priced = tiles._tile_key("delaware", 7, 27, 52, 14, ("pv10",), case)
+    assert priced != base and priced != tiles._tile_key("delaware", 7, 27, 52, 14, ("irr",), case)
+    assert priced != tiles._tile_key("delaware", 7, 27, 52, 14, ("irr", "pv10"), case)  # metric SET
     pushed = {**case, "built_at": dt.datetime(2026, 10, 21)}
-    assert priced != tiles._tile_key("delaware", 7, 27, 52, 14, "pv10", pushed)  # fresh econ push
+    assert priced != tiles._tile_key("delaware", 7, 27, 52, 14, ("pv10",), pushed)  # fresh econ push
+
+
+def test_econ_metric_set_is_order_free_and_whitelisted():
+    assert tiles.econ_metric_set("pv10,irr,pv10") == ("irr", "pv10") == tiles.econ_metric_set("irr,pv10")
+    assert tiles.econ_metric_set(None) == () == tiles.econ_metric_set("")
+    pat = re.compile(tiles._ECON_PATTERN)
+    assert pat.match("pv10") and pat.match("pv10,irr,be_wti")
+    assert not pat.match("pv10,") and not pat.match("pv10;drop") and not pat.match("pv10_mm")
 
 
 def test_binary_fetch_sql_uses_driver_placeholders_and_keeps_casts():
     session = SimpleNamespace(get_bind=lambda: SimpleNamespace(dialect=pg_psycopg.dialect()))
-    for kind, econ in (("points", None), ("lines", "pv10")):
+    for kind, econ in (("points", ()), ("lines", ("pv10",)), ("lines", ("irr", "pv10"))):
         params = tiles._params(7, 27, 52, "delaware", 14,
                                {"deck_id": "wti70_hh3", "assumption_set_id": "a"} if econ else None)
         stmt, args = tiles._driver_sql(session, tiles._mvt_sql(kind, econ), params)
         assert not re.search(r"(?<!:):[a-z_]+\b", stmt)                 # no SQLAlchemy binds left
         assert set(re.findall(r"%\((\w+)\)s", stmt)) <= set(args) and args["box_run"] == 14
         assert "::numeric" in stmt and "::float8" in stmt
-        assert ("box_econ.box_pud_econ" in stmt) == (econ is not None)
+        assert ("box_econ.box_pud_econ" in stmt) == bool(econ)
+        assert all(f"AS econ_{m}" in stmt for m in econ)
 
 
 def test_endpoint_serves_gzip_from_cache(monkeypatch):

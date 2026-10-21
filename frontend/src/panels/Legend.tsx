@@ -20,8 +20,9 @@ import { useMapStore } from "../store";
 const _fmt = new Intl.NumberFormat("en-US");
 
 // Map legend for the BOX-first color modes. Value modes (EUR per ft, econ) load their
-// ramp breaks (P5 / P50 / P95 over the basin's forecast-carrying PUDs) from
-// /api/box/legend into the store, which MapView paints from — one source for both.
+// ramp breaks (P5 / P50 / P95 over the forecast-carrying locations on the benches and tiers
+// the map shows) from /api/box/legend into the store, which MapView paints from — one
+// source for both.
 export function Legend() {
   const basin = useMapStore((s) => s.basin);
   const colorMode = useMapStore((s) => s.colorMode);
@@ -31,16 +32,21 @@ export function Legend() {
   const legend = useMapStore((s) => s.mapLegend);
   const setMapLegend = useMapStore((s) => s.setMapLegend);
   const boxMeta = useMapStore((s) => s.boxMeta);
+  const benches = useMapStore((s) => s.formationFilter);
+  const exclude = useMapStore((s) => s.excludedFormations);
+  const tiers = useMapStore((s) => s.tierFilter);
+  const scopeKey = JSON.stringify([benches, exclude, tiers]);
 
   useEffect(() => {
     if (colorMode !== "eur" && colorMode !== "econ") return;
     let alive = true;
     const metric = colorMode === "eur" ? `${stream}_eur_ft` : "econ";
-    fetchBoxLegend(basin, metric, colorMode === "econ" ? econ : undefined, deck)
+    const [b, x, t] = JSON.parse(scopeKey);
+    fetchBoxLegend(basin, metric, colorMode === "econ" ? econ : undefined, deck, { benches: b, exclude: x, tiers: t })
       .then((l) => { if (alive) setMapLegend(l); })
       .catch((e) => console.warn("BOX legend failed", e));
     return () => { alive = false; };
-  }, [basin, colorMode, stream, econ, deck, setMapLegend]);
+  }, [basin, colorMode, stream, econ, deck, scopeKey, setMapLegend]);
 
   if (colorMode === "bench") {
     return (
@@ -100,7 +106,9 @@ export function Legend() {
           numbers from another run are never put on these volumes.
         </div>
       ) : legend && legend.n === 0 ? (
-        <div className="count">No BOX forecast in this basin — nothing to scale.</div>
+        <div className="count">
+          No BOX forecast {benches.length || exclude.length || tiers.length < 2 ? "on the benches / tiers shown" : "in this basin"} — nothing to scale.
+        </div>
       ) : b ? (
         <>
           <div className="hg-bar" style={{ background: gradient }} />
@@ -108,8 +116,11 @@ export function Legend() {
             <span>{fmtV(b.p5)}</span><span>P50 {fmtV(b.p50)}</span><span>{fmtV(b.p95)}</span>
           </div>
           <div className="count" style={{ margin: "4px 0 0" }}>
-            P5 → P95 of {_fmt.format(legend!.n)} forecast PUDs ({_fmt.format(legend!.tier_counts?.validated ?? 0)} validated ·{" "}
-            {_fmt.format(legend!.tier_counts?.provisional ?? 0)} PROVISIONAL){lowBetter ? " · red = lower (better)" : " · red = higher"}
+            P5 → P95 of {_fmt.format(legend!.n)} forecast locations
+            {benches.length ? ` on ${benches.join(", ")}` : " on every bench"}
+            {exclude.length ? ` except ${exclude.join(", ")}` : ""} ({_fmt.format(legend!.tier_counts?.validated ?? 0)} validated ·{" "}
+            {_fmt.format(legend!.tier_counts?.provisional ?? 0)} PROVISIONAL){lowBetter ? " · red = lower (better)" : " · red = higher"}.
+            Values past either end take the end color.
           </div>
         </>
       ) : (
@@ -117,7 +128,7 @@ export function Legend() {
       )}
       <div className="item" style={{ marginTop: 6 }}><span className="swatch" style={{ background: PDP_COLOR }} /><span className="legend-label">PDP (producing context)</span></div>
       {isEcon && <div className="item"><span className="swatch" style={{ background: UNPRICED_COLOR }} /><span className="legend-label">BOX forecast, not priced</span></div>}
-      <div className="item"><span className="swatch" style={{ background: NOT_COVERED_COLOR }} /><span className="legend-label">no BOX forecast (hidden unless &ldquo;No BOX forecast&rdquo; is on)</span></div>
+      <div className="item"><span className="swatch" style={{ background: NOT_COVERED_COLOR }} /><span className="legend-label">no BOX forecast (hidden unless its class is shown under &ldquo;No BOX forecast&rdquo;)</span></div>
       {isEcon && legend?.case && (
         <div style={{ fontSize: 11, color: "#71717a", marginTop: 4 }}>
           Steven&rsquo;s econ, display only (D13): {deckLabel(legend.case.deck_id, deckRow?.wti, deckRow?.hh)} ·

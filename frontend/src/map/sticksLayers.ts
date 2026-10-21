@@ -14,12 +14,10 @@ import {
   type BoxLegend,
   type EconMetric,
   type EurStream,
-  type Tier,
 } from "../api/boxMap";
-import type { ProxGroup } from "../api/highgrade";
-import { PROX_OUTCOME_GROUP } from "../api/highgrade";
 import { HG_HIGH, HG_LOW, HG_MID } from "./highgradeColors";
 import { blueoxColorExpression } from "./formations";
+import { forecastScreenExpr, type ScreenOpts } from "./screen";
 
 export const INTEL_SOURCE = "intel";
 export const POINTS_LAYER = "intel-points";
@@ -38,9 +36,9 @@ const SELECTED = ["boolean", ["feature-state", "selected"], false];
 const IS_PDP = ["==", ["get", "category"], "PDP"];
 const IS_FORECAST = ["in", ["coalesce", ["get", "coverage"], ""], ["literal", FORECAST_COVERAGE]];
 
-// The tile property a value color mode reads: `<stream>_eur_ft` or `econ`.
-export function valueProp(mode: ColorMode, stream: EurStream): string | null {
-  return mode === "eur" ? `${stream}_eur_ft` : mode === "econ" ? "econ" : null;
+// The tile property a value color mode reads: `<stream>_eur_ft` or `econ_<metric>`.
+export function valueProp(mode: ColorMode, stream: EurStream, econ: EconMetric): string | null {
+  return mode === "eur" ? `${stream}_eur_ft` : mode === "econ" ? `econ_${econ}` : null;
 }
 
 // Ramp over the legend's P5 / P50 / P95 (blue -> amber -> red = better). A "lower is
@@ -53,7 +51,7 @@ function rampExpr(prop: string, legend: BoxLegend | null): unknown {
   return ["interpolate", ["linear"], ["to-number", ["get", prop]], b.p5, lo, mid, HG_MID, b.p95, hi];
 }
 
-export interface ColorOpts { stream: EurStream; legend: BoxLegend | null }
+export interface ColorOpts { stream: EurStream; econ: EconMetric; legend: BoxLegend | null }
 
 export function colorExpr(mode: ColorMode, opts: ColorOpts): ExpressionSpecification {
   let base: unknown;
@@ -63,7 +61,7 @@ export function colorExpr(mode: ColorMode, opts: ColorOpts): ExpressionSpecifica
     const pairs = Object.entries(COVERAGE_COLORS).flat();
     base = ["case", IS_PDP, PDP_COLOR, ["match", ["coalesce", ["get", "coverage"], ""], ...pairs, NOT_COVERED_COLOR]];
   } else {
-    const prop = valueProp(mode, opts.stream)!;
+    const prop = valueProp(mode, opts.stream, opts.econ)!;
     base = [
       "case",
       IS_PDP, PDP_COLOR,
@@ -75,44 +73,25 @@ export function colorExpr(mode: ColorMode, opts: ColorOpts): ExpressionSpecifica
   return ["case", SELECTED, "#facc15", base] as unknown as ExpressionSpecification;
 }
 
-const colorOrSelected = colorExpr("bench", { stream: "oil", legend: null }); // initial paint; MapView swaps it
+const colorOrSelected = colorExpr("bench", { stream: "oil", econ: "pv10", legend: null }); // initial paint; MapView swaps it
 
-export interface StickFilterOpts {
+export interface StickFilterOpts extends ScreenOpts {
   showPdp: boolean;            // producing context
-  showNotCovered: boolean;     // Novi stick locations without a BOX forecast (off by default)
-  tiers: Tier[];               // forecast tiers shown (validated / provisional)
-  prox: ProxGroup[];           // PDP-proximity outcome groups (empty = all)
-  valueProp: string | null;    // the active value property (EUR / econ), for the range
-  range: [number | null, number | null];
+  notCovered: string[];        // classes of locations WITHOUT a BOX forecast shown grey (empty = none)
   excludedFormations: string[];
   units: string[];
   formationFilter: string[];
 }
 
-// MapLibre filter. A forecast-carrying PUD passes the tier / proximity / value-range
-// screens; a stick with no value (unpriced) is not dropped by a range (it is grey, never
-// zero). Locations without a BOX forecast show only with `showNotCovered`; PDP only with `showPdp`.
-// Bench include (`formationFilter`), rollup exclude (`excludedFormations`) and the unit
-// filter apply to everything, as before.
+// MapLibre filter. A forecast-carrying location passes the shared screen (map/screen.ts:
+// tiers, proximity, every range; no value for an active range = fails). A location without a
+// BOX forecast shows only when its class is in `notCovered`; PDP only with `showPdp`. Bench
+// include (`formationFilter`), rollup exclude (`excludedFormations`) and the unit filter
+// apply to everything, as before.
 export function stickFilter(o: StickFilterOpts): FilterSpecification {
-  const forecast: unknown[] = [
-    "all",
-    ["in", ["get", "coverage"], ["literal", o.tiers.map((t) => (t === "validated" ? "covered" : "covered_provisional"))]],
-  ];
-  if (o.prox.length > 0) {
-    const outcomes = Object.entries(PROX_OUTCOME_GROUP).filter(([, g]) => o.prox.includes(g)).map(([k]) => k);
-    forecast.push(["in", ["coalesce", ["get", "prox_outcome"], ""], ["literal", outcomes]]);
-  }
-  const [lo, hi] = o.range;
-  if (o.valueProp && (lo != null || hi != null)) {
-    const v = ["to-number", ["get", o.valueProp]];
-    const bounds: unknown[] = ["all"];
-    if (lo != null) bounds.push([">=", v, lo]);
-    if (hi != null) bounds.push(["<=", v, hi]);
-    forecast.push(["any", ["!", ["has", o.valueProp]], bounds]);
-  }
   const clauses: unknown[] = [
-    ["case", IS_PDP, o.showPdp, IS_FORECAST, forecast, o.showNotCovered],
+    ["case", IS_PDP, o.showPdp, IS_FORECAST, forecastScreenExpr(o),
+      ["in", ["coalesce", ["get", "coverage"], ""], ["literal", o.notCovered]]],
   ];
   if (o.formationFilter.length > 0) {
     // Map-scouting INCLUDE filter: show only these formation_blueox codes.
@@ -187,12 +166,13 @@ export const linesLayer: LineLayerSpecification = {
   },
 };
 
-// Econ tiles carry ONE metric for ONE deck (record run only); every other mode shares
-// the plain URL so its tiles stay cached across mode switches.
-export function tileUrl(basin: string, econ?: EconMetric | null, deck?: string | null): string {
+// Econ tiles carry only the metrics in use (the color metric + econ ranges, sorted) for ONE
+// deck (record run only); with none in use every mode shares the plain URL, so its tiles stay
+// cached across mode switches.
+export function tileUrl(basin: string, econ: EconMetric[] = [], deck?: string | null): string {
   const q = new URLSearchParams({ basin });
-  if (econ) {
-    q.set("econ", econ);
+  if (econ.length) {
+    q.set("econ", econ.join(","));
     if (deck) q.set("deck", deck);
   }
   return `${window.location.origin}/api/tiles/{z}/{x}/{y}.mvt?${q.toString()}`;

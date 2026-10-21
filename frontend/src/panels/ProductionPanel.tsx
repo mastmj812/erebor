@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 
 import { fetchBoxProfile } from "../api/production";
 import { colorForBlueox } from "../map/formations";
+import { stickPasses } from "../map/screen";
 import { COVERAGE_LABELS, isForecastClass } from "../api/highgrade";
 import { useMapStore, type Phase, type WellSource } from "../store";
 import { LineChart, type Series } from "./LineChart";
@@ -48,6 +49,9 @@ export function ProductionView(_props: { width?: number; height?: number }) {
   const excluded = useMapStore((s) => s.excludedFormations);
   const formationFilter = useMapStore((s) => s.formationFilter);
   const tierFilter = useMapStore((s) => s.tierFilter);
+  const proxFilter = useMapStore((s) => s.proxFilter);
+  const mapRanges = useMapStore((s) => s.mapRanges);
+  const sel = useMapStore((s) => s.selection);
   const prod = useMapStore((s) => s.production);
   const loading = useMapStore((s) => s.productionLoading);
   const phase = useMapStore((s) => s.productionPhase);
@@ -58,13 +62,24 @@ export function ProductionView(_props: { width?: number; height?: number }) {
   const stale = useMapStore((s) => s.productionStale);
   const wellSource = useMapStore((s) => s.wellSource);
   const st = useMapStore;
+  // The profile's location set = the map's: the server applies the bench filter and tiers; the
+  // proximity and range screens (map/screen.ts) go as exclusions with the culls. `screenKey`
+  // marks the loaded profile stale when the screen changes after it was loaded.
+  const screenKey = JSON.stringify([formationFilter, tierFilter, proxFilter, mapRanges]);
+  const loadedKey = useRef<string | null>(null);
+  const screenStale = prod != null && loadedKey.current != null && loadedKey.current !== screenKey;
 
   const load = async () => {
     if (!aoi) return;
     st.getState().setProductionLoading(true);
     try {
-      // BOX record run, forecast-carrying locations only; culls / bench filter / tiers mirror the map.
-      const p = await fetchBoxProfile(aoi, basin, rule, excludedSticks, formationFilter, tierFilter);
+      const screened = (sel?.sticks ?? [])
+        .filter((s) => s.kind === "LOCATION" && isForecastClass(s.coverage)
+          && !stickPasses(s, { tiers: tierFilter, prox: proxFilter, ranges: mapRanges }))
+        .map((s) => s.stick_id);
+      const key = screenKey;
+      const p = await fetchBoxProfile(aoi, basin, rule, [...excludedSticks, ...screened], formationFilter, tierFilter);
+      loadedKey.current = key;
       st.getState().setProduction(p);
     } catch (e) {
       console.error(e);
@@ -152,8 +167,8 @@ export function ProductionView(_props: { width?: number; height?: number }) {
           <button className={agg === "avg" ? "active" : ""} onClick={() => st.getState().setAggMode("avg")}>mean / 1,000 ft</button>
           <button className={agg === "sum" ? "active" : ""} onClick={() => st.getState().setAggMode("sum")}>sum</button>
         </div>
-        {prod && stale && (
-          <button className="link" onClick={() => void load()}>↻ culls changed — reload</button>
+        {prod && (stale || screenStale) && (
+          <button className="link" onClick={() => void load()}>↻ {stale ? "culls" : "screen"} changed — reload</button>
         )}
         {overlay && boxCovered && (
           <div className="seg sm">

@@ -15,9 +15,10 @@ forecast; app.box_locations.map_coverage_sql), `water_tier`, `oil_eur_ft` / `gas
 `prox_outcome`, `prox_factor` (only when < 1). A not-covered stick has no EUR
 property at all (MVT omits NULLs) — never a zero.
 
-`econ` (optional, `?econ=<metric>&deck=<deck_id>`): ONE of Steven's whitelisted
-columns for the RECORD run's priced case (display-only, D13). An unpriced run
-leaves the property off every stick; the econ legend says "not yet priced".
+`econ` (optional, `?econ=<metric>[,<metric>...]&deck=<deck_id>`): the whitelisted
+columns of Steven's the map needs (the color metric + any econ range), one property
+`econ_<metric>` each, for the RECORD run's priced case (display-only, D13). An
+unpriced run leaves them off every stick; the econ legend says "not yet priced".
 
 Speed (low zoom carries the whole basin: z7 7/27/52 Delaware = 91k sticks, 6.4 MB):
   * the tile bytea is fetched in psycopg's BINARY result format — the default text
@@ -58,10 +59,17 @@ PREWARM_WORKERS = 2
 MVT_CONTENT_TYPE = "application/vnd.mapbox-vector-tile"
 
 _GEOM = {"points": "ST_StartPoint(w.wellstick_geom)", "lines": "w.wellstick_geom"}
-_ECON_PATTERN = "^(" + "|".join(ECON_METRICS) + ")$"
+_ECON_ONE = "(" + "|".join(ECON_METRICS) + ")"
+_ECON_PATTERN = f"^{_ECON_ONE}(,{_ECON_ONE})*$"
 
 
-def _mvt_sql(kind: str, econ_metric: str | None) -> str:
+def econ_metric_set(econ: str | None) -> tuple[str, ...]:
+    """`?econ=irr,pv10,irr` -> ('irr', 'pv10'): de-duplicated and sorted, so the tile SQL
+    and the cache key do not depend on the order the client listed them in."""
+    return tuple(sorted({m for m in (econ or "").split(",") if m}))
+
+
+def _mvt_sql(kind: str, econ_metrics: tuple[str, ...]) -> str:
     layer = "intel_points" if kind == "points" else "intel_lines"
     geom_expr = _GEOM[kind]
     return f"""
@@ -77,14 +85,14 @@ WITH bounds AS (SELECT ST_TileEnvelope(:z, :x, :y) AS env)
     w.basin_blueox,
     w.operator,
     w.ll_ft,
-    {tile_columns("w", econ_metric)},
+    {tile_columns("w", econ_metrics)},
     ST_AsMVTGeom(
       ST_Transform({geom_expr}, 3857),
       (SELECT env FROM bounds), 4096, 64, true
     ) AS geom
   FROM curated.erebor_locations w
   {box_joins("w", bench="w.formation_blueox")}
-  {econ_join() if econ_metric is not None else ""}
+  {econ_join() if econ_metrics else ""}
   WHERE w.basin = :basin
     AND w.wellstick_geom IS NOT NULL
     -- Intersect in the geometry's native SRID (4326) so the GiST index on
@@ -113,14 +121,15 @@ def tile(
         raise HTTPException(status_code=400, detail="tile coords out of range for z")
     kind = "points" if z <= POINTS_MAX_Z else "lines"
     run_id = record_run_id(session)
-    case = econ_case(session, run_id, deck) if (econ and run_id is not None) else None
-    econ_metric = econ if case is not None else None
+    wanted = econ_metric_set(econ)
+    case = econ_case(session, run_id, deck) if (wanted and run_id is not None) else None
+    econ_metrics = wanted if case is not None else ()
     params = _params(z, x, y, basin, run_id, case)
     gz, hit = _cache.get_or_build(
-        _tile_key(basin, z, x, y, run_id, econ_metric, case),
-        lambda: _fetch_tile(session, _mvt_sql(kind, econ_metric), params),
+        _tile_key(basin, z, x, y, run_id, econ_metrics, case),
+        lambda: _fetch_tile(session, _mvt_sql(kind, econ_metrics), params),
     )
-    if kind == "points" and econ_metric is None and settings.tile_prewarm:
+    if kind == "points" and not econ_metrics and settings.tile_prewarm:
         _start_prewarm(basin, run_id, z)
     headers = {"Cache-Control": "public, max-age=60", "Vary": "Accept-Encoding",
                "X-Tile-Cache": "hit" if hit else "miss"}
@@ -144,13 +153,13 @@ def _params(z: int, x: int, y: int, basin: str, run_id: int | None,
 
 
 def _tile_key(basin: str, z: int, x: int, y: int, run_id: int | None,
-              econ_metric: str | None, case: dict[str, Any] | None) -> tuple:
+              econ_metrics: tuple[str, ...], case: dict[str, Any] | None) -> tuple:
     """Everything a tile's bytes depend on besides the warehouse rows themselves (those
-    age out by TTL): the record run, and for an econ tile the metric + the priced case
-    incl. its build time, so a fresh econ push or a re-marked record run misses."""
+    age out by TTL): the record run, and for an econ tile the metric set + the priced
+    case incl. its build time, so a fresh econ push or a re-marked record run misses."""
     econ_part = None
-    if econ_metric is not None and case is not None:
-        econ_part = (econ_metric, case["deck_id"], case["assumption_set_id"], str(case.get("built_at")))
+    if econ_metrics and case is not None:
+        econ_part = (econ_metrics, case["deck_id"], case["assumption_set_id"], str(case.get("built_at")))
     return (basin, z, x, y, run_id, econ_part)
 
 
@@ -217,12 +226,12 @@ def _prewarm(basin: str, run_id: int | None, z_req: int) -> None:
 
         def one(t: tuple[int, int, int]) -> None:
             z, x, y = t
-            key = _tile_key(basin, z, x, y, run_id, None, None)
+            key = _tile_key(basin, z, x, y, run_id, (), None)
             if _cache.get(key) is not None:
                 return
             with SessionLocal() as s:
                 _, hit = _cache.get_or_build(
-                    key, lambda: _fetch_tile(s, _mvt_sql("points", None), _params(z, x, y, basin, run_id, None)))
+                    key, lambda: _fetch_tile(s, _mvt_sql("points", ()), _params(z, x, y, basin, run_id, None)))
             if not hit:
                 built.append(1)
 

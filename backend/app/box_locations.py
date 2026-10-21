@@ -164,11 +164,12 @@ def map_coverage_sql(a: str) -> str:
     )
 
 
-def tile_columns(a: str, econ_metric: str | None) -> str:
+def tile_columns(a: str, econ_metrics: tuple[str, ...] = ()) -> str:
     """The BOX properties a Map tile carries per stick (select-list fragment over the
     box_joins / econ_join aliases). Rounded so the MVT value pool stays small; MVT drops
     NULL properties, so a not-covered stick simply has no EUR / econ property. Econ is
-    ONE whitelisted metric for the requested deck (the color mode's), not all nine."""
+    only the whitelisted metrics the map asks for (the color metric + any econ range),
+    one property `econ_<metric>` each, for one deck — never all nine by default."""
     cols = [
         f"{map_coverage_sql(a)} AS coverage",
         "bsw.tier AS water_tier",
@@ -177,9 +178,9 @@ def tile_columns(a: str, econ_metric: str | None) -> str:
         "bpp.outcome AS prox_outcome",
         "CASE WHEN bso.prox_factor < 1 THEN round(bso.prox_factor::numeric, 3)::float8 END AS prox_factor",
     ]
-    if econ_metric is not None:
-        col = ECON_METRICS[econ_metric]["col"]  # whitelisted: KeyError before any SQL
-        cols.append(f"round(be.{col}::numeric, 2)::float8 AS econ")
+    for m in econ_metrics:
+        col = ECON_METRICS[m]["col"]  # whitelisted: KeyError before any SQL
+        cols.append(f"round(be.{col}::numeric, 2)::float8 AS econ_{m}")
     return ", ".join(cols)
 
 

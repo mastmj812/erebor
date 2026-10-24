@@ -7,13 +7,14 @@ record; this is a render). Read-only, like the rest of erebor.
 
 What it answers for the clicked location:
   * the build chain, per stream — reproduces the stored EUR exactly (verified live on all
-    42,475 run-14 forecast rows, 2026-10-21):
+    42,475 run-14 forecast rows, 2026-10-21; read from the stored row, so run 19 too):
         EUR = cohort P50 per 1,000 ft x lateral multiplier x haircut x proximity factor
         EUR per ft = EUR / lateral
-    The lateral multiplier is lateral / 1,000 except below 7,500 ft (Cui & Cross, D50).
-    The haircut is the group's walk-forward factor (D62 / D92; 1.0 on raw box_v2 groups:
-    WCXY and every PROVISIONAL bench); the proximity factor is the D113 multi-parent oil
-    factor (1.0 when as-is). The stored EUR already carries all of it.
+    The lateral multiplier is the stored one: on a D121 run (19) every cohort is Cui & Cross-
+    translated from its analogs' laterals; before, lateral / 1,000 except below 7,500 ft (D50).
+    The haircut is the group's walk-forward factor (D62 / D92): on run 19 WCA oil and BS2_S
+    oil + gas only (D121 / D122), 1.0 everywhere else; the proximity factor is the D113
+    multi-parent oil factor (1.0 when as-is). The stored EUR already carries all of it.
   * the type curve: per-stream params (qi, Di nominal AND 1-yr effective, b, Df, peak
     month) and the monthly forecast per 1,000 ft on the ANALOG basis (volume / lateral
     multiplier = cohort P50 x haircut x proximity), against each named analog's calendar

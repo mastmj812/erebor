@@ -250,3 +250,42 @@ def test_config_line_mixed_and_unexposed():
     assert line == "mixed · 5 parents (1 same / 2 topfill / 2 underfill) · flanked topfill · nearest WCC 171 ft vt / 1,165 ft hz"
     assert box.config_line({"config_class": None, "n_parents_total": 0}, []) == "no depleted parent"
     assert box.nearest_parent([]) is None
+
+
+def test_d121_run_labels_come_from_the_run_not_group_labels():
+    """Run 19 (engineering_db D121 / D122): every group carries `selection`; WCA oil is haircut and its gas is not (a per-stream
+    "none" method), BS2_S both, every other group raw. The label / spec / haircut streams are read from the run."""
+    sel = {"decision": "D121", "rules": "same bench > distance; lateral = Cui translation, analogs 5,000-15,000 ft"}
+    none_s = "none (D122: no walk-forward haircut on this stream; months = the uptime-free analog P50 x lateral)"
+
+    def hc(method, gas_none=False):
+        out = {"method": method}
+        for s in box.STREAMS:
+            f = 1.0 if method.startswith("none") or (gas_none and s == "gas") else 0.9
+            out[s] = {k: {"factor": f, "realised_median": f, "realised_p10_p90": [f, f]} for k in box.HORIZONS} | {
+                "tail_factor_median": f, "eur_factor_median": f} | ({"method": none_s} if gas_none and s == "gas" else {})
+        return out
+
+    def disc(variant):
+        hb = {s: {k: {"record_variant": variant, "box_v2_pooled_bias": -0.05, "box_v2_pooled_packages": 1283,
+                      "disclosed_bias": -0.028, "disclosed_packages": 776, "holdout_bias": None, "holdout_packages": None}
+                  for k in box.HORIZONS} for s in box.STREAMS}
+        return {"hindcast_bias": hb, "selection": sel, "tier": "validated", "label": "D121 r2 selection, validated",
+                "radius_ranges": {}, "radius_ranges_basis": "tuning packages, r2 + proximity (step 16c)"}
+
+    d92 = "D92 C1: rate factor g(k) = a + b ln(min(k, 48))"
+    raw = "none (D121 r2 selection, provisional: no walk-forward haircut; months = the uptime-free analog P50 x lateral)"
+    cf = {s: {"F": [0.9] * 48} for s in box.STREAMS}
+    groups = {"WCA": (hc(d92, gas_none=True), disc("box_v2s_r2_wf")), "BS2_S": (hc(d92), disc("box_v2s_r2_wf")),
+              "WCXY_WCA1": (hc(raw), disc("box_v2s_r2")), "BS1_S": (hc(raw), disc("box_v2s_r2") | {"tier": "provisional"})}
+    run = {"haircut": {**groups["WCA"][0], "by_bench": {g: h for g, (h, _) in groups.items()}},
+           "disclosure": {**groups["WCA"][1], "by_bench": {g: d for g, (_, d) in groups.items()}},
+           "calendar_factor": {**cf, "by_bench": {g: cf for g in groups}}}
+    g = {b["group"]: b for b in box.group_blocks(run, set(groups))}
+    assert g["WCA"]["label"] == "WCA_1 / WCA_2 — box_v2s_r2_wf, D121 r2 selection, walk-forward haircut on oil (gas none, D122)"
+    assert g["WCA"]["spec"] == "box_v2s_r2_wf" and g["WCA"]["haircut_streams"] == ["oil"] and g["WCA"]["selection"] == sel
+    assert g["WCA"]["haircut_method"]["stream_method"]["gas"] == none_s
+    assert g["BS2_S"]["label"] == "BS2_S — box_v2s_r2_wf, D121 r2 selection, walk-forward haircut on oil + gas"
+    assert g["WCXY_WCA1"]["label"] == "WCXY — box_v2s_r2, D121 r2 selection, no haircut" and g["WCXY_WCA1"]["haircut_streams"] == []
+    assert g["BS1_S"]["label"] == "BS1_S — box_v2s_r2, D121 r2 selection, no haircut" and g["BS1_S"]["tier"] == "provisional"
+    assert not any("D62" in b["label"] or "D102" in b["label"] or "D97" in b["label"] for b in g.values())

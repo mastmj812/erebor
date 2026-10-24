@@ -103,7 +103,7 @@ export const COVERAGE_LABELS: Record<string, string> = {
   realized: "realized per reconciliation",
 };
 
-// PDP-proximity layer (record run 14, D112–D116): the three Highgrade filter values over
+// PDP-proximity layer (runs 14 and 19, D112–D116): the three Highgrade filter values over
 // box.pud_proximity.outcome. A PUD BOX never measured (outside the extent, emerging, …) matches none.
 export type ProxGroup = "as_is" | "haircut" | "no_precedent";
 export const PROX_GROUP_LABELS: Record<ProxGroup, string> = {
@@ -177,6 +177,9 @@ export interface BoxGroup {
   latest_vintage_text?: string | null;
   error_convention?: string;
   water?: BoxWaterBlock | null;      // the group's water disclosure (D110); null on a run without water
+  // D121 (run 19 on): the cohort-selection rules of record; absent on earlier runs
+  selection?: { decision: string; rules: string } | null;
+  haircut_streams?: string[];        // streams carrying a walk-forward haircut ([] = raw; D122: WCA gas none)
 }
 // A group's WATER disclosure (engineering_db D107-D110): tier, and per horizon the tuning / holdout / pooled
 // package bias (actual ÷ forecast − 1, negative = forecast HIGH) — shown together, never the pooled alone.
@@ -196,6 +199,7 @@ export interface BoxHaircutMethod {
   method: string | null;
   tail: Record<string, number | null> | null;
   eur_factor: Record<string, number | null> | null;
+  stream_method?: Record<string, string | null> | null;  // a stream's own method, e.g. "none (D122 …)" on run 19 WCA gas
 }
 export interface BoxRadiusRange {
   radius_class: string; horizon: string; low: number; high: number; bias: number; packages: number;

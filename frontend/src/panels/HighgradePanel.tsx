@@ -371,6 +371,10 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
   const provisional = groups.filter((g) => g.tier === "provisional");
   const waterOk = groups.filter((g) => g.water?.tier === "validated").map((g) => g.formations.join(" / "));
   const hasWater = groups.some((g) => g.water);
+  // D121 (run 19 on): the selection rules and the haircut groups / streams come from the run
+  const sel = groups.find((g) => g.selection)?.selection ?? null;
+  const cut = groups.filter((g) => (g.haircut_streams ?? []).length > 0)
+    .map((g) => `${g.formations.join(" / ")} ${(g.haircut_streams ?? []).join(" + ")}`);
   return (
     <div className="caveat" style={{ margin: "4px 0 10px" }}>
       <div>
@@ -378,16 +382,20 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
         code {r.code_sha.slice(0, 7)}
       </div>
       <div style={{ marginTop: 4 }}>
-        Analog-workup forecasts (D57): deal-intake analog cohort <strong>P50</strong> per 1,000 ft × lateral, then a
-        stated walk-forward haircut. Uptime-free (apply F(k) or a downtime factor, never both); EUR = raw 50-yr technical
+        {sel
+          ? <>Analog-workup forecasts ({sel.decision}): analog cohort <strong>P50</strong> per 1,000 ft (same bench, then distance;
+              Cui &amp; Cross lateral translation, never a lateral band; measured spacing), then the walk-forward haircut on
+              {" "}{cut.join(" and ") || "no group"} only (D122).</>
+          : <>Analog-workup forecasts (D57): deal-intake analog cohort <strong>P50</strong> per 1,000 ft × lateral, then a
+              stated walk-forward haircut.</>} Uptime-free (apply F(k) or a downtime factor, never both); EUR = raw 50-yr technical
         integral.{" "}
         {hasWater
-          ? <>Water = WOR vs cumulative oil on MEASURED-water analogs, applied to the raw box_v2 oil (no haircut, D107 / D108);
+          ? <>Water = WOR vs cumulative oil on MEASURED-water analogs, applied to the raw BOX oil (no haircut, D107 / D108);
               water tier validated on {waterOk.join(", ") || "none"}, provisional elsewhere (D110).</>
           : "Oil + gas only on this run."} Covers Delaware {forms(validated) || "WCA_1 / WCA_2"}{" "}
         (validated)
         {provisional.length > 0 && <>, plus <span className="box-prov-badge">PROVISIONAL</span> {forms(provisional)} (D105: raw
-          box_v2, never out-of-time validated or failed its one-time holdout — counted apart from validated)</>}{" "}
+          {" "}{sel ? "r2" : "box_v2"}, no haircut, never out-of-time validated or failed its one-time holdout — counted apart from validated)</>}{" "}
         inside their extents; every other location is shown as not covered, never zero.
       </div>
       <div style={{ marginTop: 4 }}>

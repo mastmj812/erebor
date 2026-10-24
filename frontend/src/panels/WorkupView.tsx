@@ -194,6 +194,7 @@ export function WorkupView() {
           <h4>Bench group {wk.group.group}: {wk.group.tier === "provisional" ? "PROVISIONAL" : "validated"}</h4>
           <div className="count">
             {wk.group.label}. Haircut: {wk.group.haircut_method?.method ?? "D62 linear cumulative factor"}
+            {wk.group.haircut_method?.stream_method?.gas?.startsWith("none") ? "; gas none (D122)" : ""}
             {wk.group.haircut_method?.eur_factor ? ` (median EUR factor oil ${n3(wk.group.haircut_method.eur_factor.oil)}, gas ${n3(wk.group.haircut_method.eur_factor.gas)})` : ""}.
             {wk.group.tier_label ? ` ${wk.group.tier_label}.` : ""}{wk.group.holdout ? ` Holdout: ${wk.group.holdout}.` : ""}
             {wk.group.latest_vintage_text ? ` ${wk.group.latest_vintage_text}` : ""}
@@ -239,7 +240,7 @@ function Chain({ wk }: { wk: LocationWorkup }) {
               <tr key={s}>
                 <td>{s}{s === "water" && wk.streams.water?.tier === "provisional" ? " (prov.)" : ""}</td>
                 <td className="num">{n0(c.cohort_p50_per_kft)} {UNIT[s]}</td>
-                <td className="num" title={c.cui_cross ? `Cui & Cross below 7,500 ft (D50); linear would be ${n2(c.linear_mult)}` : "lateral / 1,000"}>
+                <td className="num" title={c.cui_cross ? `Cui & Cross${wk.group?.selection ? " translation from the analogs' laterals (D121)" : " below 7,500 ft (D50)"}; linear would be ${n2(c.linear_mult)}` : "≈ lateral / 1,000"}>
                   {n2(c.lateral_mult)}{c.cui_cross ? " (Cui & Cross)" : ""}
                 </td>
                 <td className="num">{n3(c.haircut)}</td><td className="num">{n3(c.prox_factor)}</td>

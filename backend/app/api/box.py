@@ -9,7 +9,14 @@ not applied); water since sql/62 (below; D72 retired); EUR = raw 50-yr technical
 limit). Run 7 covered Delaware WCA_1 / WCA_2 inside the WCA extent (D60/D61); record
 run 8 (step 9c) adds BS2_S (extent 7, its own haircut, D94/D102) and WCXY (WCA extent,
 raw box_v2 with no haircut, D93/D95/D97). Everything else is a stated not-covered
-class, never a zero. Water (engineering_db D107-D111, sql/62; D72 retired 2026-10-19):
+class, never a zero. Record run 19 (step 16d, 2026-10-24) changed the cohort selection on
+all 13 groups (D121): same bench, then distance; lateral length is a Cui & Cross
+translation (analogs 5,000-15,000 ft), never a band; at each ring give up the count
+(>= 5), then admit standalone wells; measured spacing (D119). Its walk-forward haircut is
+on WCA oil and BS2_S oil + gas only (WCA gas none, D122); every other group is raw. A
+D121 run carries `selection` in each group's disclosure; its group label, spec and
+haircut streams are read from the run (group_label), never from GROUP_LABELS.
+Water (engineering_db D107-D111, sql/62; D72 retired 2026-10-19):
 WOR vs cumulative oil fitted on MEASURED-water analogs (box.location_water_analog),
 applied to the raw box_v2 oil months, no haircut, uptime-free; its own tier on the stream
 row (validated on WCA / BS2_S covered rows, provisional elsewhere, never above the
@@ -27,7 +34,7 @@ back-compat; runs without by_bench (4, 6, 7) have the one WCA group.
                                        coverage + BOX numbers vs Novi, named analogs,
                                        forecast vs analog actuals (oil cum per 1,000 ft)
 
-PDP-proximity layer (record run 14, D112-D116, engineering_db sql/65): a PUD with 2+
+PDP-proximity layer (runs 14 and 19, D112-D116, engineering_db sql/65): a PUD with 2+
 depleted parents (>= 12 mo on production, >= 30 % alongside, inside the class envelope)
 carries an OIL factor of 0.75-0.94 from its configuration's cum-24 table when that
 configuration has drilled precedent ("validated_with_exception": the pre-registered
@@ -95,6 +102,7 @@ GROUP_FORMATIONS: dict[str, tuple[str, ...]] = {
     "BS2_S": ("BS2_S",),
     "WCXY_WCA1": ("WCXY",),
 }
+# Labels of the pre-D121 runs (8-14), whose disclosure carries no `selection`.
 GROUP_LABELS: dict[str, str] = {
     "WCA": "WCA_1 / WCA_2 — box_v2_wf, D62 walk-forward haircut",
     "BS2_S": "BS2_S — box_v2_wf on its own walk-forward haircut (D94, pooled per D102)",
@@ -160,13 +168,40 @@ def disclosure_rows(run: dict[str, Any]) -> list[dict[str, Any]]:
 def haircut_method(run: dict[str, Any]) -> dict[str, Any]:
     """How the run applied its haircut: D92 (smooth rate factor fitted to the D62 targets,
     rate factor held after month 48 — `tail` = its median per stream), D62 as built
-    (method None: linear cumulative factor, cum-48 factor held), or none (D97, WCXY)."""
+    (method None: linear cumulative factor, cum-48 factor held), or none (D97, WCXY; D121
+    groups without a haircut). `stream_method` = a stream's own method when it has one
+    (D122: "none (...)" on WCA gas of run 19 — that stream's months are raw)."""
     h = run["haircut"]
     if "method" not in h:
-        return {"method": None, "tail": None, "eur_factor": None}
+        return {"method": None, "tail": None, "eur_factor": None, "stream_method": None}
     return {"method": h["method"],
             "tail": {s: h[s].get("tail_factor_median") for s in STREAMS},
-            "eur_factor": {s: h[s].get("eur_factor_median") for s in STREAMS}}
+            "eur_factor": {s: h[s].get("eur_factor_median") for s in STREAMS},
+            "stream_method": {s: h[s].get("method") for s in STREAMS}}
+
+
+def haircut_streams(hm: dict[str, Any]) -> list[str]:
+    """The streams that carry a walk-forward haircut: none on a raw group, else every stream
+    whose own method is not "none (...)" (D122)."""
+    if str(hm["method"] or "").startswith("none"):
+        return []
+    sm = hm.get("stream_method") or {}
+    return [s for s in STREAMS if not str(sm.get(s) or "").startswith("none")]
+
+
+def group_label(group: str, v: dict[str, Any], raw: bool, hm: dict[str, Any]) -> tuple[str, str]:
+    """(label, spec) of one group. A D121 run (disclosure `selection`) states its own: the
+    record variant (box_v2s_r2 / box_v2s_r2_wf), the decision and the haircut streams. Earlier
+    runs keep GROUP_LABELS and the box_v2 / box_v2_wf spec."""
+    sel = v["disclosure"].get("selection")
+    if not sel:
+        return GROUP_LABELS.get(group, f"{group} — raw box_v2, no haircut" if raw else group), ("box_v2" if raw else "box_v2_wf")
+    hb = ((v["disclosure"].get("hindcast_bias") or {}).get("oil") or {}).get("12") or {}
+    spec = hb.get("record_variant") or ("box_v2s_r2" if raw else "box_v2s_r2_wf")
+    on = haircut_streams(hm)
+    off = [s for s in STREAMS if s not in on]
+    hc = (f"walk-forward haircut on {' + '.join(on)}" + (f" ({' + '.join(off)} none, D122)" if off else "")) if on else "no haircut"
+    return f"{' / '.join(GROUP_FORMATIONS.get(group, (group,)))} — {spec}, {sel.get('decision', 'D121')} r2 selection, {hc}", spec
 
 
 def radius_ranges(run: dict[str, Any], classes: set[str] | None = None) -> list[dict[str, Any]]:
@@ -217,10 +252,13 @@ def group_blocks(run: dict[str, Any], groups: list[str] | set[str], classes: set
         v = group_view(run, g)
         hm = haircut_method(v)
         raw = str(hm["method"] or "").startswith("none")
+        label, spec = group_label(g, v, raw, hm)
         out.append({"group": g,
-                    "label": GROUP_LABELS.get(g, f"{g} — raw box_v2, no haircut" if raw else g),
+                    "label": label,
                     "formations": list(GROUP_FORMATIONS.get(g, (g,))),
-                    "spec": "box_v2" if raw else "box_v2_wf",
+                    "spec": spec,
+                    "selection": v["disclosure"].get("selection"),
+                    "haircut_streams": haircut_streams(hm),
                     "radius_basis": v["disclosure"].get("radius_ranges_basis",
                                                         "box_v2_wf oil package errors, held-out packages (D69)"),
                     "disclosure": disclosure_rows(v), "haircut_method": hm,

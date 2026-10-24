@@ -10,7 +10,7 @@ import {
 // pages (box/production_pages.py): method statement + measured bias / haircut (D59
 // condition 3), radius-class range (D69), locations, forecast vs analog actuals, the
 // named analogs. Plus the Novi number next to each BOX one (the toggle's comparison), and the
-// PDP-proximity layer (record run 14, D112–D116): each PUD's parent configuration, its oil factor or
+// PDP-proximity layer (runs 14 and 19, D112–D116): each PUD's parent configuration, its oil factor or
 // no-precedent outcome, the precedent counts and the named parents.
 
 const n0 = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? "—" : Math.round(v).toLocaleString());
@@ -48,6 +48,25 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
   const nVal = covered.filter((l) => l.coverage === "covered").length;
   const nProv = covered.length - nVal;
   const anyProv = groups.some((g) => g.tier === "provisional");
+  // D121 (run 19 on): the run states its own selection rules and which groups / streams carry a haircut
+  const sel = groups.find((g) => g.selection)?.selection ?? null;
+  const cut = groups.filter((g) => (g.haircut_streams ?? []).length > 0)
+    .map((g) => `${g.formations.join(" / ")} ${(g.haircut_streams ?? []).join(" + ")}`);
+  const smooth = d92 ? ", applied to the rate as a smooth curve fitted to them per location — D92" : "";
+  const method = sel ? (
+    <>
+      {" "}({sel.decision} selection: same bench, then distance; at each ring the count gives way (≥ 5 wells), then standalone
+      wells are admitted; measured spacing, D119), Cui &amp; Cross-translated from the analogs&rsquo; laterals (5,000–15,000 ft)
+      to the location&rsquo;s, then the walk-forward haircut{cut.length ? ` on ${cut.join(" and ")} on this pad` : ": none on this pad"} (D62
+      factors from the r2 + proximity tuning cells{smooth}; every other group and stream none, D121 / D122)
+    </>
+  ) : (
+    <>
+      {" "}(deal-intake selection: same bench, nearest-first, lateral band, representative spacing; D57), scaled to the
+      location&rsquo;s lateral (Cui &amp; Cross below 7,500 ft, D50), then the stated walk-forward haircut (D62 factors{smooth};
+      BS2_S its own, D94 / D102; WCXY none, D97{anyProv ? "; provisional benches none, D105" : ""})
+    </>
+  );
   const hasWater = covered.some((l) => l.water_eur != null);
   const byClass = others.reduce<Record<string, number>>((a, l) => ({ ...a, [l.coverage]: (a[l.coverage] ?? 0) + 1 }), {});
   const measured = data.locations.filter((l) => l.prox_outcome != null);
@@ -72,17 +91,14 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
         <>
           <div className="caveat">
             <strong>How to read this workup.</strong> Forecast = the analog cohort's <strong>P50</strong> per 1,000 ft
-            (deal-intake selection: same bench, nearest-first, lateral band, representative spacing; D57), scaled to the
-            location's lateral (Cui &amp; Cross below 7,500 ft, D50), then the stated walk-forward haircut (D62 factors
-            {d92 ? ", applied to the rate as a smooth curve fitted to them per location — D92" : ""}; BS2_S its own, D94 / D102;
-            WCXY none, D97{anyProv ? "; provisional benches none, D105" : ""}){data.proximity
+            {method}{data.proximity
               ? <>, then for a PUD with 2+ depleted parents the PDP-proximity <strong>oil</strong> factor of its configuration
                 (D113; gas and water untouched; a configuration without drilled precedent gets no forecast, D114)</>
               : null}. Volumes
             are <strong>uptime-free</strong> (D63); EUR = raw 50-yr technical integral, no economic limit.
             {hasWater
               ? <> <strong>Water</strong> = WOR vs cumulative oil fitted on nearby same-bench wells with MEASURED water
-                  (reaching up to 50 mi; a calculated-water fallback is flagged), applied to the raw box_v2 oil before any
+                  (reaching up to 50 mi; a calculated-water fallback is flagged), applied to the raw BOX oil before any
                   haircut; it carries its own tier — validated on WCA / BS2_S, provisional elsewhere (D107–D110).</>
               : " Oil + gas only on this run."}
             {" "}Error = actual ÷ forecast − 1 (negative = the method forecast HIGH).
@@ -439,7 +455,7 @@ function GroupDisclosure({ g, multi }: { g: BoxGroup; multi: boolean }) {
       {prov && <ProvisionalDisclosure g={g} />}
       <table className="box-tbl">
         <thead>
-          <tr><th>stream</th><th>horizon</th><th>measured bias{has9c ? " (raw box_v2)" : ""}</th><th>packages</th><th>{d92 ? "D62 target" : "haircut applied"}</th>
+          <tr><th>stream</th><th>horizon</th><th>measured bias{has9c ? ` (raw ${g.spec.replace(/_wf$/, "")})` : ""}</th><th>packages</th><th>{d92 ? "D62 target" : "haircut applied"}</th>
             {d92 && <th>realised (D92, median · P10–P90)</th>}
             {has9c && <th>disclosed bias ({g.disclosure[0]?.record_variant ?? g.spec}, D100)</th>}
             <th>held-out bias{prov ? (fail ? " (one-time D99, FAILED)" : " (none, D105)") : has9c ? " (9b)" : " after"}</th>{has9c && <th>D99 interval</th>}<th>F(k) (published, not applied)</th></tr>
@@ -463,7 +479,8 @@ function GroupDisclosure({ g, multi }: { g: BoxGroup; multi: boolean }) {
       {d92 && (
         <div className="count" style={{ margin: "2px 0 0" }}>
           Realised = cumulative factor the volumes actually carry, across the group's covered PUDs (P10 = high). After month 48 the
-          rate factor holds at ×{g.haircut_method.tail?.oil?.toFixed(3) ?? "—"} oil / ×{g.haircut_method.tail?.gas?.toFixed(3) ?? "—"} gas;
+          rate factor holds at ×{g.haircut_method.tail?.oil?.toFixed(3) ?? "—"} oil / {g.haircut_method.stream_method?.gas?.startsWith("none")
+            ? "no haircut on gas (D122)" : `×${g.haircut_method.tail?.gas?.toFixed(3) ?? "—"} gas`};
           this pad's per-location EUR factor is the "EUR haircut" column below.
         </div>
       )}
@@ -514,7 +531,7 @@ function ProvisionalDisclosure({ g }: { g: BoxGroup }) {
   return (
     <div className={`box-prov${fail ? " fail" : ""}`}>
       <div className="count" style={{ margin: 0 }}>
-        <strong>{g.tier_label ?? "provisional tier (D105)"}</strong>. Holdout: {g.holdout ?? "none"}. Raw box_v2, no haircut.
+        <strong>{g.tier_label ?? "provisional tier (D105)"}</strong>. Holdout: {g.holdout ?? "none"}. Raw {g.spec}, no haircut.
         {g.lead ? ` Lead line: ${g.lead.label}, ${g.lead.scope}.` : ""}
         {g.latest_vintage_text ? ` ${g.latest_vintage_text[0].toUpperCase()}${g.latest_vintage_text.slice(1)}.` : ""}
       </div>

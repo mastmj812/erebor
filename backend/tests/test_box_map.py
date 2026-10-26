@@ -137,7 +137,7 @@ def test_record_run_is_per_basin_with_the_delaware_fallback():
         def execute(self, stmt, params):
             seen.update(params)
             return _Res({"run_id": 19, "basin": "delaware", "report_version": "2026Q3", "data_through": dt.date(2026, 7, 1),
-                         "created_at": dt.datetime(2026, 10, 24)})
+                         "created_at": dt.datetime(2026, 10, 24, tzinfo=dt.UTC)})
 
     r = bl.record_run(_Session(), "midland")
     assert seen == {"b": "midland", "fb": "delaware"} and r["run_id"] == 19 and r["data_through"] == "2026-07-01"

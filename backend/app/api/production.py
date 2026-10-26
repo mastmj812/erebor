@@ -179,7 +179,7 @@ def bench_tier(n_validated: int, n_provisional: int) -> str:
 
 @router.post("/box_profile")
 def box_profile(body: ProfileBody, session: Session = Depends(get_session)) -> dict:
-    run = record_run(session)
+    run = record_run(session, body.basin)
     coverages = [{"validated": "covered", "provisional": "covered_provisional"}[t] for t in body.tiers]
     params = {"aoi": json.dumps(body.aoi), "basin": body.basin, "box_run": run["run_id"],
               "coverages": coverages, "exclude": body.exclude_sticks, "formations": body.formations}

@@ -112,3 +112,32 @@ def test_legend_scopes_to_the_benches_and_tiers_on_screen():
     scoped = str(box.legend_sql("s.eur_per_kft / 1000.0", "", True, True))
     assert "bp.formation_blueox IN" in scoped and "bp.formation_blueox NOT IN" in scoped
     assert "BS1_S" not in scoped   # bench names are bound, never interpolated
+
+
+def test_record_run_is_per_basin_with_the_delaware_fallback():
+    """D130 / sql/70: one record run per basin. erebor reads the request's basin's record; a basin with none yet (Midland until
+    BOX step 23) reads the Delaware record, which is what it read before D130."""
+    assert bl.FALLBACK_RECORD_BASIN == "delaware"
+    sql = bl._RECORD_SQL
+    assert "WHERE is_record AND basin IN (:b, :fb)" in sql and "ORDER BY (basin = :b) DESC LIMIT 1" in sql
+
+    class _Res:
+        def __init__(self, row):
+            self.row = row
+
+        def mappings(self):
+            return self
+
+        def first(self):
+            return self.row
+
+    seen = {}
+
+    class _Session:
+        def execute(self, stmt, params):
+            seen.update(params)
+            return _Res({"run_id": 19, "basin": "delaware", "report_version": "2026Q3", "data_through": dt.date(2026, 7, 1),
+                         "created_at": dt.datetime(2026, 10, 24, tzinfo=dt.UTC)})
+
+    r = bl.record_run(_Session(), "midland")
+    assert seen == {"b": "midland", "fb": "delaware"} and r["run_id"] == 19 and r["data_through"] == "2026-07-01"

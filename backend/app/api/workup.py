@@ -271,7 +271,7 @@ def location(
     stick_id: int = Query(..., gt=0),
     session: Session = Depends(get_session),
 ) -> dict:
-    run = record_run(session)
+    run = record_run(session, basin)
     r = run["run_id"]
     row = session.execute(text(_LOC_SQL), {"basin": basin, "sid": stick_id, "box_run": r}).mappings().first()
     if row is None:

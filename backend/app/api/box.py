@@ -348,7 +348,7 @@ def water_block(run: dict[str, Any], group: str) -> dict[str, Any] | None:
 
 @router.get("/meta")
 def meta(basin: str = _BASIN, session: Session = Depends(get_session)) -> dict:
-    run = record_run(session)
+    run = record_run(session, basin)
     decks = session.execute(
         text(
             "SELECT deck_id, assumption_set_id, downtime_basis, count(*) AS n_priced, "
@@ -420,7 +420,7 @@ def legend(
     bench), `exclude` = benches dropped, `tier` = the tiers shown — so the ramp spans what
     is on screen, not the whole basin. EUR per FOOT = eur_per_kft / 1000. Econ = Steven's
     case for the record run only (display, D13); `priced: false` when it is not priced."""
-    run_id = record_run_id(session)
+    run_id = record_run_id(session, basin)
     if run_id is None:
         raise HTTPException(503, "no BOX forecast run is marked as the record")
     coverages = legend_coverages(tier)
@@ -512,7 +512,7 @@ def well_forecast(session: Session, basin: str, unique_id: str) -> dict[str, Any
     when the name is no stick location (PDP); otherwise its coverage class, and for a
     forecast location the oil + gas + water monthly series (water since sql/62, with its
     own tier). Novi's PUD / RES tag is not read (geometry only, Michael 2026-10-21)."""
-    run = record_run(session)
+    run = record_run(session, basin)
     row = session.execute(
         text(f"""
             SELECT il.stick_id, {coverage_sql('il')} AS coverage, bp.location_id, bp.lateral_ft, bp.flags,
@@ -602,7 +602,7 @@ def band(curves: list[np.ndarray], min_n: int = 3) -> dict[str, list[float | Non
 
 @router.get("/pad")
 def pad(basin: str = _BASIN, pad_key: str = Query(...), session: Session = Depends(get_session)) -> dict:
-    run = record_run(session)
+    run = record_run(session, basin)
     p = {"basin": basin, "pad_key": pad_key, "box_run": run["run_id"]}
     locs = session.execute(
         text(f"""

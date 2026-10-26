@@ -106,7 +106,7 @@ def gunbarrel_sql(rule: Rule, econ_metric: str | None) -> str:
 
 @router.post("")
 def gunbarrel(body: GbBody, session: Session = Depends(get_session)) -> dict:
-    run_id = record_run_id(session)
+    run_id = record_run_id(session, body.basin)
     case = econ_case(session, run_id, body.deck) if (body.econ and run_id is not None) else None
     econ_metric = body.econ if case is not None else None
     params = {"aoi": json.dumps(body.aoi), "basin": body.basin, "box_run": run_id}

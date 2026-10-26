@@ -120,7 +120,7 @@ def tile(
     if x >= (1 << z) or y >= (1 << z):
         raise HTTPException(status_code=400, detail="tile coords out of range for z")
     kind = "points" if z <= POINTS_MAX_Z else "lines"
-    run_id = record_run_id(session)
+    run_id = record_run_id(session, basin)
     wanted = econ_metric_set(econ)
     case = econ_case(session, run_id, deck) if (wanted and run_id is not None) else None
     econ_metrics = wanted if case is not None else ()

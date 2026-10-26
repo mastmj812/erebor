@@ -288,7 +288,7 @@ def facets(
     deck: str | None = Query(None, max_length=64),
     session: Session = Depends(get_session),
 ) -> dict:
-    run = record_run(session)
+    run = record_run(session, basin)
     case = econ_case(session, run["run_id"], deck)
     row = session.execute(
         text(facets_sql(case is not None)),
@@ -416,7 +416,7 @@ def _run_out(run: dict[str, Any]) -> dict[str, Any]:
 
 @router.post("/pads")
 def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
-    run = record_run(session)
+    run = record_run(session, body.basin)
     case = econ_case(session, run["run_id"], body.deck)
     check_metric(body.metric, case is not None)
     # the econ join only when something reads it (an econ metric or an econ bound)
@@ -507,7 +507,7 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
     azimuth (offset, ft) paired with TVD — same math as /api/gunbarrel. Nothing is hidden:
     each location carries `in_filter` (passes the current Highgrade screen) and
     `metric_value` (the screen metric; NULL = no BOX forecast / unpriced, never zero)."""
-    run = record_run(session)
+    run = record_run(session, body.basin)
     case = econ_case(session, run["run_id"], body.deck)
     check_metric(body.metric, case is not None)
     econ = case is not None and (body.metric in ECON_METRICS or has_econ_range(body.filters))

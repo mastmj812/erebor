@@ -142,7 +142,7 @@ def test_endpoint_serves_gzip_from_cache(monkeypatch):
     raw = b"\x1a\x0fmvt-bytes" * 64
     calls = []
     monkeypatch.setattr(tiles, "_cache", TileCache(1 << 20, 60))
-    monkeypatch.setattr(tiles, "record_run_id", lambda s: 14)
+    monkeypatch.setattr(tiles, "record_run_id", lambda s, b: 14)
     monkeypatch.setattr(tiles, "_fetch_tile", lambda s, sql, p: calls.append(p) or (raw if p["x"] == 27 else b""))
     monkeypatch.setattr(tiles.settings, "tile_prewarm", False)
     app.dependency_overrides[get_session] = lambda: None

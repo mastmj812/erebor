@@ -95,7 +95,7 @@ def _num(v: Any) -> Any:
 def select_in_aoi(
     session: Session, aoi_geom: dict, basin: str, rule: Rule, deck: str | None = None
 ) -> dict[str, Any]:
-    run = record_run(session)
+    run = record_run(session, basin)
     case = econ_case(session, run["run_id"], deck)
     params: dict[str, Any] = {"aoi": json.dumps(aoi_geom), "basin": basin, "box_run": run["run_id"]}
     if case is not None:

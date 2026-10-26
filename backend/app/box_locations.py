@@ -10,7 +10,10 @@ panel.
 Shared by the Map tiles (api/tiles.py), Highgrade (api/highgrade.py) and the BOX
 workup (api/box.py) so all three class every PUD the same way:
 
-  * the record run (`box.forecast_run.is_record`, at most one — sql/60);
+  * the record run of the request's basin (`box.forecast_run.is_record`, at most one PER
+    BASIN — sql/70, D130). A basin with no record of its own yet (Midland until BOX step 23)
+    reads the Delaware record: none of its sticks carries a forecast there, which is what
+    erebor showed before D130 (stated not-covered classes, the "not forecast yet" banner);
   * coverage classes: box.pud_forecast's own values + derived ones for a Novi stick
     with no row in the record run. NOT covered is a stated class, never a zero (D2/D67);
   * the econ case: Steven's box_econ.box_pud_econ for the RECORD run only — display-only
@@ -233,15 +236,20 @@ def econ_provenance(session: Session, run_id: int, case: dict[str, Any] | None) 
     return _cached(("econ_prov", run_id, case["deck_id"], case["assumption_set_id"]), q)
 
 
-def record_run(session: Session) -> dict[str, Any]:
-    """The one BOX run marked is_record (sql/60 allows at most one)."""
-    row = session.execute(
-        text(
-            "SELECT run_id, report_version, data_through, code_sha, engine_sha, dealintake_config, "
-            "created_at, haircut, calendar_factor, disclosure, counts, notes "
-            "FROM box.forecast_run WHERE is_record"
-        )
-    ).mappings().first()
+# D130: one record run per basin (sql/70). Until a basin has its own record, it reads this one's.
+FALLBACK_RECORD_BASIN = "delaware"
+_RECORD_SQL = (
+    "SELECT run_id, basin, report_version, data_through, code_sha, engine_sha, dealintake_config, "
+    "created_at, haircut, calendar_factor, disclosure, counts, notes "
+    "FROM box.forecast_run WHERE is_record AND basin IN (:b, :fb) "
+    "ORDER BY (basin = :b) DESC LIMIT 1"
+)
+
+
+def record_run(session: Session, basin: str) -> dict[str, Any]:
+    """The BOX record run of `basin` (one per basin, sql/70 / D130); a basin with no record
+    of its own reads FALLBACK_RECORD_BASIN's (see the module docstring)."""
+    row = session.execute(text(_RECORD_SQL), {"b": basin, "fb": FALLBACK_RECORD_BASIN}).mappings().first()
     if row is None:
         raise HTTPException(503, "no BOX forecast run is marked as the record")
     r = dict(row)
@@ -266,10 +274,12 @@ def _cached(key: tuple, fn):  # noqa: ANN001, ANN202
     return val
 
 
-def record_run_id(session: Session) -> int | None:
-    """run_id of the record run (None when no run is marked), cached for _TTL_S."""
-    return _cached(("record_run_id",), lambda: session.execute(
-        text("SELECT run_id FROM box.forecast_run WHERE is_record")).scalar())
+def record_run_id(session: Session, basin: str) -> int | None:
+    """run_id of `basin`'s record run (record_run's fallback; None when none is marked),
+    cached for _TTL_S."""
+    return _cached(("record_run_id", basin), lambda: session.execute(
+        text("SELECT run_id FROM box.forecast_run WHERE is_record AND basin IN (:b, :fb) ORDER BY (basin = :b) DESC LIMIT 1"),
+        {"b": basin, "fb": FALLBACK_RECORD_BASIN}).scalar())
 
 
 def pick_econ_case(cases: list[dict[str, Any]], deck: str | None) -> dict[str, Any] | None:

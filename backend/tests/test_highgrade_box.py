@@ -15,9 +15,11 @@ from app.api import box
 
 
 def test_coverage_classes_cover_the_sql_60_values():
-    # every box.pud_forecast.coverage value (sql/60 CHECK + sql/63's D105 tier + sql/65) must be a class, plus the derived three
+    # every box.pud_forecast.coverage value (sql/60 CHECK + sql/63's D105 tier + sql/65 + sql/71) must be a class,
+    # plus the derived three
     sql60 = {"covered", "covered_provisional", "not_covered_emerging", "not_covered_wcxy", "not_covered_unvalidated",
-             "not_covered_outside_extent", "not_covered_no_analogs", "not_covered_no_precedent"}  # + sql/65 (D114)
+             "not_covered_outside_extent", "not_covered_no_analogs", "not_covered_no_precedent",  # + sql/65 (D114)
+             "not_covered_conflict"}  # + sql/71 (D145)
     assert sql60 <= set(box.COVERAGE_CLASSES)
     assert set(box.COVERAGE_CLASSES) - sql60 == {"bench_not_in_box", "realized", "not_screened"}
     derived = set(re.findall(r"THEN '([a-z_]+)'", box.coverage_sql("il")))
@@ -198,7 +200,29 @@ def test_no_precedent_is_a_searched_class_without_a_forecast():
     assert "not_covered_no_precedent" not in box.FORECAST_CLASSES  # no forecast, never a zero
     assert "not_covered_no_precedent" in box.SEARCHED_CLASSES  # keeps its search provenance + bench group
     assert set(box.PROX_OUTCOMES) == {"as_is_unexposed", "as_is_single_parent", "haircut",
-                                      "no_forecast_precedent", "no_forecast_package"}  # sql/65 CHECK
+                                      "no_forecast_precedent", "no_forecast_package",  # sql/65 CHECK (D113)
+                                      "level_unexposed", "factor_single_parent", "factor_multi_parent",
+                                      "no_forecast_pattern", "no_forecast_spacing"}  # + sql/71 (D150)
+
+
+def test_conflict_is_a_stated_class_never_searched_never_forecast():
+    # D145 (sql/71): a reconciliation-conflict stick is not drillable — listed, no search, no forecast
+    assert "not_covered_conflict" in box.COVERAGE_CLASSES
+    assert "not_covered_conflict" not in box.FORECAST_CLASSES and "not_covered_conflict" not in box.SEARCHED_CLASSES
+    assert "not_covered_conflict" not in box.FORECAST_IN_SQL
+    from app.api import highgrade as hg
+    assert "not_covered_conflict" in hg.HG_COVERAGE_CLASSES  # counted per pad (nc_not_covered_conflict), never dropped
+    assert "AS nc_not_covered_conflict" in hg.pads_sql("oil_eur_per_kft", "sum", "", False)
+
+
+def test_d150_words_land_in_the_d113_filter_groups():
+    g = {o: k for k, os in box.PROX_GROUPS.items() for o in os}
+    assert set(box.PROX_GROUPS) == {"as_is", "haircut", "no_precedent"}  # the API / UI contract
+    assert g["level_unexposed"] == g["factor_single_parent"] == g["as_is_unexposed"] == g["as_is_single_parent"] == "as_is"
+    assert g["factor_multi_parent"] == g["haircut"] == "haircut"
+    assert all(g[o] == "no_precedent" for o in box.PROX_OUTCOMES if o.startswith("no_forecast_"))
+    assert len(g) == len(box.PROX_OUTCOMES) == 10  # each word in exactly one group
+    assert set(box.PROX_OUTCOME_TEXT) == set(box.PROX_OUTCOMES)  # every word has its words
 
 
 def test_box_joins_read_the_proximity_record_without_multiplying_rows():
@@ -229,6 +253,17 @@ def test_proximity_block_carries_the_basis_and_the_survivorship_caveat():
     assert b["counts"]["no_forecast_precedent"] + b["counts"]["no_forecast_package"] == 8488  # = not_covered_no_precedent
     assert b["oil_eur_change"] == pytest.approx(-0.2117, abs=1e-4)  # oil EUR -21 % overall
     assert box.proximity_block({"disclosure": {"hindcast_bias": {}}}) is None  # runs before 11
+
+
+def test_proximity_block_on_a_d150_run_borrows_no_d113_basis():
+    # scripts/box_record23 store writes decisions / table_ref / source_run / counts only
+    p = {"decisions": "D150 (step 24 rev 5), D153 (Delaware derivation)", "table_ref": "D150 delaware R2 level 1.0460",
+         "source_run": 25, "counts": {"level_unexposed": 30000, "factor_single_parent": 7000, "factor_multi_parent": 9000}}
+    b = box.proximity_block({"disclosure": {"proximity": p}})
+    assert b["label"] is None and b["verdict_as_written"] is None and b["survivorship"] is None
+    assert b["decisions"].startswith("D150") and b["source_run"] == 25
+    assert b["counts"]["factor_multi_parent"] == 9000 and b["counts"]["haircut"] == 0
+    assert b["oil_eur_change"] is None
 
 
 def _parent(api, cls, bench, dv, dh):

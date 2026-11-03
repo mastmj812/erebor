@@ -219,7 +219,7 @@ export function Controls() {
       <div style={{ marginTop: 8 }}>
         <ChipGroup
           label="PDP proximity"
-          hint="Empty = all BOX forecasts. Haircut = multi-parent oil × factor (D113). No-precedent locations carry no forecast (under No BOX forecast)."
+          hint="Empty = all BOX forecasts. ≤ 1 parent = unexposed / single parent (D113 oil × 1; D150 oil × level × distance factor, often above 1). Multi-parent = oil × factor (D113 haircut; D150). No-precedent locations carry no forecast (under No BOX forecast)."
           options={PROX_FILTER_GROUPS}
           selected={proxFilter}
           onToggle={(g) => toggleProx(g as ProxGroup)}

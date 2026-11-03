@@ -45,8 +45,15 @@ def test_tile_columns_per_foot_and_no_econ_by_default():
     for s, a in (("oil", "bso"), ("gas", "bsg"), ("water", "bsw")):
         assert f"round(({a}.eur_per_kft / 1000.0)::numeric, 1)::float8 AS {s}_eur_ft" in cols
     assert " AS econ" not in cols and "be." not in cols
-    # the haircut factor only where it bites (< 1); as-is PUDs carry no property
-    assert "CASE WHEN bso.prox_factor < 1 THEN" in cols
+    # the proximity factor whenever it is not exactly 1 (D150 levels run above 1); D113 as-is carries no property
+    assert "CASE WHEN bso.prox_factor <> 1 THEN round(bso.prox_factor::numeric, 3)::float8 END AS prox_factor" in cols
+    assert "prox_factor < 1" not in cols
+
+
+def test_selection_ships_the_factor_whenever_it_is_not_one():
+    cols = bl.selection_columns("w", with_econ=False)
+    assert "CASE WHEN bso.prox_factor <> 1 THEN bso.prox_factor END AS prox_factor" in cols
+    assert "prox_factor < 1" not in cols
 
 
 def test_tile_econ_is_whitelisted():

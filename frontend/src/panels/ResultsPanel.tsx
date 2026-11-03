@@ -183,7 +183,7 @@ export function ResultsPanel() {
       </table>
       <div className="count">
         Water {fmt(tot.water / 1e6, 2)} MMbbl. P = PROVISIONAL bench (D105). EUR = raw 50-yr technical integral incl. the
-        bench haircut and the multi-parent oil factor (D113); per-ft is lateral-weighted.
+        bench haircut and the proximity oil factor (D113 / D150); per-ft is lateral-weighted.
       </div>
 
       <h3 style={{ marginTop: 8 }}>Econ (Steven, display only)</h3>

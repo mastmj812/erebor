@@ -13,7 +13,7 @@ export interface WorkupChain {
   linear_mult: number | null; // lateral / 1,000
   cui_cross: boolean;
   haircut: number;            // walk-forward EUR factor (1.0 = none)
-  prox_factor: number;        // D113 multi-parent oil factor (1.0 = as-is)
+  prox_factor: number;        // proximity oil factor: D113 table (1.0 = as-is) or D150 level × F (often > 1)
   eur: number;
   eur_per_ft: number | null;
   check: boolean;             // the product reproduces the stored EUR (< 0.1 %)

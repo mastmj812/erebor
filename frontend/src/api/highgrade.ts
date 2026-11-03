@@ -93,32 +93,44 @@ export const COVERAGE_LABELS: Record<string, string> = {
   covered: "covered — validated (BOX forecast)",
   covered_provisional: "covered — PROVISIONAL tier (BOX forecast, D105)",
   not_covered_no_analogs: "no analogs at the 20-mi cap (D74)",
-  not_covered_no_precedent: "no forecast — configuration without drilled precedent (D114)",
+  not_covered_no_precedent: "no forecast — configuration without drilled precedent (D114; Midland 21a pattern / spacing)",
   not_covered_outside_extent: "outside the BOX extent",
   not_covered_wcxy: "WCXY target, not covered by this run (D61)",
   not_covered_unvalidated: "bench not yet validated (D60)",
   not_covered_emerging: "emerging bench (D2)",
+  not_covered_conflict: "not covered: reconciliation conflict (D145)",
   bench_not_in_box: "bench not in BOX v1",
   not_screened: "on a BOX bench, not screened by the record run",
   realized: "realized per reconciliation",
 };
 
-// PDP-proximity layer (runs 14 and 19, D112–D116): the three Highgrade filter values over
-// box.pud_proximity.outcome. A PUD BOX never measured (outside the extent, emerging, …) matches none.
+// PDP-proximity layer: the three Highgrade filter values over box.pud_proximity.outcome
+// (backend box_locations.PROX_GROUPS). Two vocabularies, both valid: D113 (runs 11–25: as_is_* = oil × 1,
+// haircut = table factor ≤ 1) and D150 (step 23 on: oil × level × F on every forecast PUD, often above 1).
+// The group keys are the API contract (named for D113); the labels say what they hold under both.
+// A PUD BOX never measured (outside the extent, emerging, …) matches none.
 export type ProxGroup = "as_is" | "haircut" | "no_precedent";
 export const PROX_GROUP_LABELS: Record<ProxGroup, string> = {
-  as_is: "as-is (unexposed / single parent)",
-  haircut: "oil haircut (multi-parent, D113)",
-  no_precedent: "no precedent — no forecast (D114)",
+  as_is: "no / single parent (D113 as-is; D150 oil × factor)",
+  haircut: "multi-parent oil factor (D113 haircut; D150)",
+  no_precedent: "no precedent — no forecast (D114; Midland 21a)",
 };
 export const PROX_OUTCOME_GROUP: Record<string, ProxGroup> = {
+  // D113
   as_is_unexposed: "as_is", as_is_single_parent: "as_is", haircut: "haircut",
+  // D150
+  level_unexposed: "as_is", factor_single_parent: "as_is", factor_multi_parent: "haircut",
+  // no forecast: D114 precedent / package, Midland 21a pattern / spacing
   no_forecast_precedent: "no_precedent", no_forecast_package: "no_precedent",
+  no_forecast_pattern: "no_precedent", no_forecast_spacing: "no_precedent",
 };
+// The proximity oil factor is worth stating whenever it is not exactly 1 (D113 factors sit ≤ 1; D150's
+// carry the basin level, 1.046 Delaware / 1.067 Midland, and run above 1 too). Null = no forecast.
+export const proxFactorShown = (f: number | null | undefined): f is number => f != null && f !== 1;
 // The run-level proximity disclosure (backend box.proximity_block; null on runs before 11).
 export interface BoxProximity {
   method: string | null; decisions: string | null; table_ref: string | null;
-  label: "validated_with_exception";
+  label: "validated_with_exception" | null; // null on a D150 run (its basis is not D113's)
   verdict_as_written: string | null; accepted_as: string | null; confirmation: string | null; prereg_commit: string | null;
   survivorship: string | null;
   counts: Record<string, number>;

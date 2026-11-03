@@ -12,7 +12,8 @@ every tile; the frontend filters client-side (no refetch). Novi supplies only th
 stick geometry: `category` is PDP | LOCATION (Novi's PUD / RES tag is not shipped).
 BOX properties per stick: `coverage` (NULL on PDP — producing context, never
 forecast; app.box_locations.map_coverage_sql), `water_tier`, `oil_eur_ft` / `gas_eur_ft` / `water_eur_ft` (per FOOT),
-`prox_outcome`, `prox_factor` (only when < 1). A not-covered stick has no EUR
+`prox_outcome`, `prox_factor` (only when it is not exactly 1: D113 factors sit <= 1,
+D150's run above 1 too — box_locations.PROX_FACTOR_SHOWN). A not-covered stick has no EUR
 property at all (MVT omits NULLs) — never a zero.
 
 `econ` (optional, `?econ=<metric>[,<metric>...]&deck=<deck_id>`): the whitelisted

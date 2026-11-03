@@ -14,8 +14,9 @@ no Novi forecast, no Novi NPV is read here.
     not match to production (recon_status realized_drift / realized_phantom drop out;
     sql/68 reconciles every stick, D117).
   * Values = the BOX record run (box.forecast_run.is_record) through app.box_locations:
-    analog-workup EUR (D57/D62, uptime-free, raw 50-yr technical integral, the D113
-    proximity factor already inside the stored oil EUR; water since sql/62). Every
+    analog-workup EUR (D57/D62, uptime-free, raw 50-yr technical integral, the
+    proximity factor (D113 table / D150 continuous) already inside the stored oil EUR;
+    water since sql/62). Every
     location gets a coverage class (box_locations.map_coverage_sql); aggregates use
     FORECAST-CARRYING rows only (covered = validated + covered_provisional, D105), with
     the validated / provisional valued counts reported apart and the not-covered count
@@ -104,14 +105,16 @@ Metric = Literal[
 ]
 Agg = Literal["sum", "avg", "per_acre"]
 
-# Range filters -> SQL ref. BOX bounds (stored units: bbl / mcf, per 1,000 ft, the D113
-# oil factor, the lateral BOX used) bound FORECAST locations only: a location without a
+# Range filters -> SQL ref. BOX bounds (stored units: bbl / mcf, per 1,000 ft, the
+# proximity oil factor, the lateral BOX used) bound FORECAST locations only: a location without a
 # BOX forecast stays in the screen, counted under its class, never dropped by a BOX bound
 # (dropping it would hide the not-covered count, D67).
 BOX_RANGES: dict[str, str] = {
     **{f"{s}_eur": f"bs{s[0]}.eur" for s in EUR_STREAMS},
     **{f"{s}_eur_per_kft": f"bs{s[0]}.eur_per_kft" for s in EUR_STREAMS},
-    "prox_factor": "bso.prox_factor",  # D113: 1 = as-is; 0.75-0.94 = multi-parent haircut
+    # D113 runs: 1 = as-is, 0.75-0.94 = multi-parent haircut; D150 runs: level x F on every
+    # forecast PUD, ~0.4-1.5 (level 1.046 Delaware / 1.067 Midland on an unexposed PUD)
+    "prox_factor": "bso.prox_factor",
     "lateral_ft": "bp.lateral_ft",
 }
 # Econ bounds, Steven's units ($MM, %, $/bbl). Same keep rule for not-covered locations;
@@ -331,10 +334,13 @@ def pads_sql(metric: str, agg: str, filt_sql: str, econ: bool) -> str:
     # value carries both tiers, so its make-up is reported, never folded into one count)
     cov_cols = "".join(f", count(*) FILTER (WHERE {cov} = '{c}') AS nc_{c}" for c in HG_COVERAGE_CLASSES)
     cov_cols += "".join(f", {n_valued_expr(metric, coverage=c)} AS nv_{t}" for t, c in _TIERS.items())
-    # PDP-proximity outcome counts per pad + the haircut factor range on the pad
+    # PDP-proximity outcome counts per pad + the oil factor range of the pad's multi-parent
+    # ("haircut" group: D113 haircut + D150 factor_multi_parent) locations — the group the
+    # range sits beside in the UI; D150 single-parent / unexposed factors are per-stick
+    hc = _in_list(PROX_GROUPS["haircut"])
     cov_cols += "".join(f", count(*) FILTER (WHERE bpp.outcome IN {_in_list(o)}) AS np_{g}" for g, o in PROX_GROUPS.items())
-    cov_cols += (", min(bpp.factor) FILTER (WHERE bpp.outcome = 'haircut') AS prox_min"
-                 ", max(bpp.factor) FILTER (WHERE bpp.outcome = 'haircut') AS prox_max")
+    cov_cols += (f", min(bpp.factor) FILTER (WHERE bpp.outcome IN {hc}) AS prox_min"
+                 f", max(bpp.factor) FILTER (WHERE bpp.outcome IN {hc}) AS prox_max")
     extra = [*(f"nc_{c}" for c in HG_COVERAGE_CLASSES), *(f"nv_{t}" for t in _TIERS),
              *(f"np_{g}" for g in PROX_GROUPS), "prox_min", "prox_max"]
     sel = "".join(f", a.{x}" for x in extra)

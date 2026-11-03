@@ -787,12 +787,12 @@ function padPopupHtml(p: Record<string, unknown>, metric: string, agg: string, e
   const tierRow = nValued > 0 && nProv > 0
     ? `<tr><td>valued locations</td><td>${fmtInt(p.nv_validated ?? 0)} validated · ${fmtInt(nProv)} PROVISIONAL</td></tr>`
     : "";
-  // the pad's PDP-proximity outcomes (D112–D116) and the oil factor range of its haircut locations
+  // the pad's PDP-proximity outcome groups (D113 / D150 words) and the oil factor range of its multi-parent locations
   const npAsIs = Number(p.np_as_is ?? 0), npHc = Number(p.np_haircut ?? 0), npNo = Number(p.np_no_precedent ?? 0);
   const hcRange = npHc > 0 && p.prox_min != null && p.prox_max != null
     ? ` ×${Number(p.prox_min).toFixed(2)}${Number(p.prox_max) !== Number(p.prox_min) ? `–${Number(p.prox_max).toFixed(2)}` : ""}` : "";
   const proxRow = npAsIs + npHc + npNo > 0
-    ? `<tr><td>PDP proximity</td><td>${fmtInt(npAsIs)} as-is · ${fmtInt(npHc)} oil haircut${hcRange} · ${fmtInt(npNo)} no precedent</td></tr>`
+    ? `<tr><td>PDP proximity</td><td>${fmtInt(npAsIs)} ≤ 1 parent · ${fmtInt(npHc)} multi-parent${hcRange} · ${fmtInt(npNo)} no precedent</td></tr>`
     : "";
   const acresRow = p.acres == null ? "" : `<tr><td>Acres</td><td>${fmtInt(p.acres)}</td></tr>`;
   const nParts = Number(p.n_parts ?? 1);

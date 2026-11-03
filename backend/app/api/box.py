@@ -322,6 +322,8 @@ PROX_OUTCOME_TEXT: dict[str, str] = {
     "no_forecast_spacing": "no forecast: within 400 ft of a same-bench producer (21a)",
 }
 
+D150_FACTOR_OUTCOMES = frozenset({"level_unexposed", "factor_single_parent", "factor_multi_parent"})
+
 
 def nearest_parent(parents: list[dict[str, Any]]) -> dict[str, Any] | None:
     """The closest named parent by straight-line gap sqrt(vt^2 + hz^2)."""
@@ -334,13 +336,22 @@ def config_line(prox: dict[str, Any], parents: list[dict[str, Any]]) -> str:
     box.pud_proximity_parent rows. "flanked" = parents of that class on both sides."""
     cls = prox.get("config_class")
     n = int(prox.get("n_parents_total") or 0)
+    counts = {c: int(prox.get(f"n_{c}") or 0) for c in ("same", "topfill", "underfill")}
+    d150 = prox.get("outcome") in D150_FACTOR_OUTCOMES
+    if d150:
+        # a D150 forecast stick (engineering_db step 23): its named parents are the D150 counting parents the factor used
+        # (younger producers included) while the configuration columns are D113's, so the counts differ on most kept sticks.
+        # The named parents win. A refused stick (no_forecast_*) has none named and reads the D113 configuration that refused it.
+        counts = {c: sum(1 for p in parents if p.get("cls") == c) for c in counts}
+        kinds = [c for c, k in counts.items() if k]
+        cls, n = (kinds[0] if len(kinds) == 1 else "mixed"), len(parents)
     if cls is None or n == 0:
         return "no depleted parent"
     parts = [cls, f"{n} parent{'s' if n != 1 else ''}"]
     if cls == "mixed":
-        parts[1] += " (" + " / ".join(f"{prox[f'n_{c}']} {c}" for c in ("same", "topfill", "underfill")
-                                      if prox.get(f"n_{c}")) + ")"
-    flanked = [c for c in ("same", "topfill", "underfill") if prox.get(f"flanked_{c}")]
+        parts[1] += " (" + " / ".join(f"{counts[c]} {c}" for c in ("same", "topfill", "underfill") if counts[c]) + ")"
+    # "flanked" is a D113 configuration fact: not claimed for a D150 parent set
+    flanked = [] if d150 else [c for c in ("same", "topfill", "underfill") if prox.get(f"flanked_{c}")]
     if flanked:
         parts.append("flanked" if flanked == [cls] else "flanked " + " + ".join(flanked))
     near = nearest_parent(parents)

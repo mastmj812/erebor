@@ -30,9 +30,9 @@ from fastapi import HTTPException
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-# Every screened PUD lands in exactly one class. The first eight are box.pud_forecast's
-# own coverage values (sql/60 + sql/63 + sql/65, D67 / D105 / D114); the last three are
-# derived for a PUD with no row in the record run:
+# Every screened PUD lands in exactly one class. The first nine are box.pud_forecast's
+# own coverage values (sql/60 + sql/63 + sql/65 + sql/71, D67 / D105 / D114 / D145); the
+# last three are derived for a PUD with no row in the record run:
 #   covered              VALIDATED tier: the bench passed its out-of-time test
 #   covered_provisional  PROVISIONAL tier (D105): forecast-carrying exactly like covered,
 #                        but the bench was never out-of-time tested (AVA_0/1/2, BS2_C) or
@@ -40,7 +40,11 @@ from sqlalchemy.orm import Session
 #                        apart from covered everywhere, never silently summed into it
 #   not_covered_no_precedent  (D114, sql/65) a searched, in-extent PUD whose PDP-proximity
 #                        configuration has no drilled precedent: no forecast, search
-#                        provenance kept (like not_covered_no_analogs)
+#                        provenance kept (like not_covered_no_analogs). Under D150 (step 23)
+#                        the Midland 21a gates (pattern / spacing) land here too
+#   not_covered_conflict  (D145, sql/71) our reconciliation calls the stick a CONFLICT: not a
+#                        drillable location — no search, no forecast (a stated class, never
+#                        a zero). Only on runs stored with D145 (step 23 on)
 #   bench_not_in_box  its bench is in no box.bench_scope pool (not part of BOX v1)
 #   not_screened      on a BOX bench, not reconciled away, yet no row in the record run:
 #                     Novi-RES sticks inside a BOX pool (D117 step 3 parked), and any
@@ -57,6 +61,7 @@ COVERAGE_CLASSES: tuple[str, ...] = (
     "not_covered_wcxy",
     "not_covered_unvalidated",
     "not_covered_emerging",
+    "not_covered_conflict",
     NOT_SCREENED,
     "bench_not_in_box",
     "realized",
@@ -76,21 +81,35 @@ FORECAST_IN_SQL = "('covered', 'covered_provisional')"
 # bench's disclosure group (the "screen identity" of a PUD BOX looked at and declined).
 SEARCHED_CLASSES: tuple[str, ...] = (*FORECAST_CLASSES, "not_covered_no_analogs", "not_covered_no_precedent")
 
-# PDP-proximity outcomes (box.pud_proximity.outcome, sql/65) grouped into the three
-# filter values. A PUD with no box.pud_proximity row (outside the extent, emerging, ...
-# — never measured) matches none of them.
+# PDP-proximity outcomes (box.pud_proximity.outcome, sql/65 + sql/71) grouped into the
+# three filter values. The group NAMES are the API / UI contract; the words under them are
+# two vocabularies, both valid (runs keep the words they were stored with):
+#   D113 (runs 11-25): as_is_* carry oil x 1; haircut = the table factor (<= 1)
+#   D150 (step 23 on): every forecast stick carries oil x level x F (Delaware level 1.046,
+#     Midland 1.067), so level_unexposed / factor_single_parent often sit ABOVE 1 and
+#     factor_multi_parent can too (range ~0.4-1.5)
+#   no_forecast_*: D114 precedent / package; Midland 21a pattern / spacing (D150 runs)
+# "as_is" = no / single parent, "haircut" = multi-parent — named for D113, kept for the
+# contract. A PUD with no box.pud_proximity row (outside the extent, emerging, ... — never
+# measured) matches none of them.
 PROX_GROUPS: dict[str, tuple[str, ...]] = {
-    "as_is": ("as_is_unexposed", "as_is_single_parent"),
-    "haircut": ("haircut",),
-    "no_precedent": ("no_forecast_precedent", "no_forecast_package"),
+    "as_is": ("as_is_unexposed", "as_is_single_parent", "level_unexposed", "factor_single_parent"),
+    "haircut": ("haircut", "factor_multi_parent"),
+    "no_precedent": ("no_forecast_precedent", "no_forecast_package", "no_forecast_pattern", "no_forecast_spacing"),
 }
 PROX_OUTCOMES: tuple[str, ...] = tuple(o for g in PROX_GROUPS.values() for o in g)
 
 # Map color / range metrics. EUR per FOOT = stored eur_per_kft / 1000 (bbl/ft oil + water,
-# mcf/ft gas), the raw 50-yr technical integral incl. the D62/D102 haircut and the D113
-# proximity factor (stored EUR already carries both; nothing here re-applies them).
+# mcf/ft gas), the raw 50-yr technical integral incl. the D62/D102 haircut and the
+# proximity factor (D113 table or D150 continuous; stored EUR already carries both;
+# nothing here re-applies them).
 EUR_STREAMS: tuple[str, ...] = ("oil", "gas", "water")
 EUR_UNITS: dict[str, str] = {"oil": "bbl/ft", "gas": "mcf/ft", "water": "bbl/ft"}
+
+# The proximity oil factor is shipped whenever it is not exactly 1: D113 factors sit <= 1,
+# D150's carry the basin level and run above 1 too. 1 (D113 as-is, gas / water) and NULL
+# (no forecast) ship nothing (MVT drops NULL properties).
+PROX_FACTOR_SHOWN = "CASE WHEN bso.prox_factor <> 1 THEN {v} END AS prox_factor"
 
 # Steven's econ columns erebor may DISPLAY (whitelist -> box_econ.box_pud_econ column,
 # unit, and which end is "better" for the color ramp). Display only (D13).
@@ -179,7 +198,7 @@ def tile_columns(a: str, econ_metrics: tuple[str, ...] = ()) -> str:
         *(f"round((bs{s[0]}.eur_per_kft / 1000.0)::numeric, 1)::float8 AS {s}_eur_ft"
           for s in EUR_STREAMS),
         "bpp.outcome AS prox_outcome",
-        "CASE WHEN bso.prox_factor < 1 THEN round(bso.prox_factor::numeric, 3)::float8 END AS prox_factor",
+        PROX_FACTOR_SHOWN.format(v="round(bso.prox_factor::numeric, 3)::float8"),
     ]
     for m in econ_metrics:
         col = ECON_METRICS[m]["col"]  # whitelisted: KeyError before any SQL
@@ -196,7 +215,7 @@ def kind_sql(a: str) -> str:
 def selection_columns(a: str, with_econ: bool) -> str:
     """Per-stick BOX values for an AOI selection / gunbarrel (select-list fragment over
     the box_joins / econ_join aliases). Units as stored: EUR bbl / mcf (raw 50-yr technical
-    integral incl. the bench haircut and the D113 proximity factor), eur_per_kft per
+    integral incl. the bench haircut and the proximity factor), eur_per_kft per
     1,000 ft, `lat_basis_kft` = the lateral the stored per-kft used (eur / eur_per_kft), so
     a bench's per-ft is lateral-weighted: sum(eur) / sum(lat_basis). Econ = Steven's
     columns for the record run's case, $MM / % / $ per bbl, display only (D13). A location
@@ -209,7 +228,7 @@ def selection_columns(a: str, with_econ: bool) -> str:
         *(f"bs{s[0]}.eur_per_kft AS {s}_eur_per_kft" for s in EUR_STREAMS),
         "bso.eur / NULLIF(bso.eur_per_kft, 0) AS lat_basis_kft",
         "bpp.outcome AS prox_outcome",
-        "CASE WHEN bso.prox_factor < 1 THEN bso.prox_factor END AS prox_factor",
+        PROX_FACTOR_SHOWN.format(v="bso.prox_factor"),
     ]
     if with_econ:
         cols += [f"be.{m['col']} AS econ_{k}" for k, m in ECON_METRICS.items()]

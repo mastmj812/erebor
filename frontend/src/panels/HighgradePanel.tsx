@@ -46,7 +46,7 @@ const RANGE_FIELDS: { col: string; label: string; scale?: number; econ?: boolean
   { col: "water_eur_per_kft", label: "Water EUR (bbl/ft)", scale: 1000 },
   { col: "oil_eur", label: "Oil EUR (bbl)" },
   { col: "prox_factor", label: "PDP-proximity oil factor (×)",
-    hint: "D113 oil factor: 1 = as-is (unexposed / single parent), 0.75–0.94 = multi-parent haircut." },
+    hint: "Oil factor inside the stored EUR. D113 runs: 1 = as-is (unexposed / single parent), 0.75–0.94 = multi-parent haircut. D150 runs: level × distance factor on every forecast location, ~0.4–1.5 (unexposed = the level, 1.046 Delaware / 1.067 Midland)." },
   { col: "lateral_ft", label: "BOX lateral (ft)" },
   { col: "econ_pv10", label: "PV10 ($MM)", econ: true },
   { col: "econ_pv20", label: "PV20 ($MM)", econ: true },
@@ -61,8 +61,8 @@ type RangeMap = Record<string, [number | null, number | null]>;
 // PDP-proximity screen (D112–D116): empty = all. An explicit outcome screen, so it drops every
 // location outside the selection — including those BOX never measured (outside the extent, …).
 const PROX_OPTIONS: ProxGroup[] = ["as_is", "haircut", "no_precedent"];
-const PROX_SHORT: Record<ProxGroup, string> = { as_is: "as-is", haircut: "haircut", no_precedent: "no precedent" };
-const PROX_HINT = "as-is = unexposed or single parent (BOX unchanged) · haircut = 2+ depleted parents with drilled precedent, oil × 0.75–0.94 (D113) · no precedent = no forecast (D114). Selecting any drops the locations BOX never measured (outside the extent, emerging, …).";
+const PROX_SHORT: Record<ProxGroup, string> = { as_is: "≤ 1 parent", haircut: "multi-parent", no_precedent: "no precedent" };
+const PROX_HINT = "≤ 1 parent = unexposed or single parent (D113: BOX unchanged; D150: oil × level × distance factor, often above 1) · multi-parent = 2+ parents with drilled precedent (D113: oil × 0.75–0.94 haircut; D150: oil × level × distance factor) · no precedent = no forecast (D114; Midland 21a pattern / spacing). Selecting any drops the locations BOX never measured (outside the extent, emerging, …).";
 
 export function HighgradePanel() {
   const basin = useMapStore((s) => s.basin);
@@ -399,8 +399,9 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
         inside their extents; every other location is shown as not covered, never zero.
       </div>
       <div style={{ marginTop: 4 }}>
-        Offset depletion enters BOX two ways: through the named analogs, and for multi-parent PUDs as an explicit oil
-        haircut (D113). Unprecedented configurations get no forecast (D114).
+        Offset depletion enters BOX two ways: through the named analogs, and as an explicit oil factor — D113 runs:
+        a haircut on multi-parent PUDs; D150 runs: level × distance factor on every forecast PUD (often above 1).
+        Unprecedented configurations get no forecast (D114).
       </div>
       <table className="hg-box-tbl">
         <thead><tr><th>WCA oil</th><th>measured bias</th><th>{d92 ? "D62 target" : "haircut"}</th>{d92 && <th>realised (D92)</th>}<th>held-out after</th></tr></thead>
@@ -534,8 +535,9 @@ function ProximitySummary({ pc }: { pc: HighgradeResult["proximity_counts"] }) {
         </tbody>
       </table>
       <div className="count" style={{ margin: "2px 0 0" }}>
-        BOX EUR already carries the oil factor (gas / water untouched). The haircut is validated with exception and,
-        measured on operator-selected infills, an upper bound for undrilled locations — see the BOX note above.
+        BOX EUR already carries the oil factor (gas / water untouched); the range is the multi-parent group&rsquo;s.
+        On D113 runs the haircut is validated with exception and, measured on operator-selected infills, an upper
+        bound for undrilled locations — see the BOX note above.
       </div>
     </div>
   );

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { MAP_COVERAGE_LABELS } from "../api/boxMap";
+import { proxFactorShown } from "../api/highgrade";
 import { fetchWellProduction } from "../api/production";
 import { fetchLocationWorkup, type LocationWorkup, type WorkupStream } from "../api/workup";
 import { useMapStore } from "../store";
@@ -183,7 +184,9 @@ export function WorkupView() {
         <>
           <h4>PDP proximity</h4>
           <div className="count">
-            {wk.proximity.outcome_text}{wk.proximity.factor != null && wk.proximity.factor < 1 ? ` · oil × ${n3(wk.proximity.factor)}` : ""} · {wk.proximity.config_line}
+            {wk.proximity.outcome_text}{proxFactorShown(wk.proximity.factor)
+              ? (wk.proximity.outcome.startsWith("no_forecast_") ? ` · factor × ${n3(wk.proximity.factor)}, not applied` : ` · oil × ${n3(wk.proximity.factor)}`)
+              : ""} · {wk.proximity.config_line}
             {wk.proximity.parents.length ? ` · parents: ${wk.proximity.parents.map((p) => `${p.well_name ?? p.api10} (${p.parent_bench}, ${n0(p.dh_ft)} ft hz)`).join("; ")}` : ""}
           </div>
         </>

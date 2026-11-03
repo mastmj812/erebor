@@ -140,8 +140,8 @@ export function Legend() {
       )}
       {!isEcon && (
         <div style={{ fontSize: 11, color: "#71717a", marginTop: 4 }}>
-          Raw 50-yr technical EUR ÷ lateral, per foot; includes the bench haircut and the multi-parent oil
-          factor (D113). Provisional-tier PUDs are on the same ramp — check the tier in the popup.
+          Raw 50-yr technical EUR ÷ lateral, per foot; includes the bench haircut and the proximity oil
+          factor (D113 / D150). Provisional-tier PUDs are on the same ramp — check the tier in the popup.
         </div>
       )}
     </div>

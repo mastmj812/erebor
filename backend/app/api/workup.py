@@ -13,8 +13,10 @@ What it answers for the clicked location:
     The lateral multiplier is the stored one: on a D121 run (19) every cohort is Cui & Cross-
     translated from its analogs' laterals; before, lateral / 1,000 except below 7,500 ft (D50).
     The haircut is the group's walk-forward factor (D62 / D92): on run 19 WCA oil and BS2_S
-    oil + gas only (D121 / D122), 1.0 everywhere else; the proximity factor is the D113
-    multi-parent oil factor (1.0 when as-is). The stored EUR already carries all of it.
+    oil + gas only (D121 / D122), 1.0 everywhere else; the proximity factor is the oil
+    factor of the run's proximity method — D113: the multi-parent table factor (1.0 when
+    as-is); D150 (step 23 on): level x F on every forecast PUD, often above 1. The stored
+    EUR already carries all of it.
   * the type curve: per-stream params (qi, Di nominal AND 1-yr effective, b, Df, peak
     month) and the monthly forecast per 1,000 ft on the ANALOG basis (volume / lateral
     multiplier = cohort P50 x haircut x proximity), against each named analog's calendar

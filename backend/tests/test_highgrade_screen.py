@@ -95,7 +95,8 @@ def test_bench_and_prox_filters():
     f = HighgradeFilters(formation_blueox=["WCA_1"], prox=["haircut", "no_precedent"])
     clauses, params, expanding = hg.build_filters(f, econ=False)
     assert clauses == ["COALESCE(el.formation_blueox, '(unmapped)') IN :formation_blueox", "bpp.outcome IN :prox"]
-    assert params["prox"] == ["haircut", "no_forecast_precedent", "no_forecast_package"]
+    assert params["prox"] == ["haircut", "factor_multi_parent", "no_forecast_precedent", "no_forecast_package",
+                              "no_forecast_pattern", "no_forecast_spacing"]  # D113 + D150 words
     assert [b.key for b in expanding] == ["formation_blueox", "prox"]
     with pytest.raises(ValidationError):
         HighgradeFilters(prox=["bogus"])
@@ -154,3 +155,12 @@ def test_pads_return_the_color_scale_percentiles_over_valued_drawn_pads():
     assert hg._VALUED_PAD == "geom IS NOT NULL AND value IS NOT NULL AND n_valued > 0"
     # the true range stays alongside (the legend states it)
     assert "'value_min'" in sql and "'value_max'" in sql
+
+
+def test_pad_factor_range_spans_the_multi_parent_group_both_vocabularies():
+    # D113 haircut + D150 factor_multi_parent; the range sits beside the "haircut" group's count
+    sql = hg.pads_sql("oil_eur_per_kft", "sum", "", False)
+    hc = "('haircut', 'factor_multi_parent')"
+    assert f"min(bpp.factor) FILTER (WHERE bpp.outcome IN {hc}) AS prox_min" in sql
+    assert f"max(bpp.factor) FILTER (WHERE bpp.outcome IN {hc}) AS prox_max" in sql
+    assert "bpp.outcome = 'haircut'" not in sql

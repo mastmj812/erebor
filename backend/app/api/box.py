@@ -44,6 +44,13 @@ Single-parent / unexposed PUDs are BOX as-is; gas and water are untouched. Store
 already carries it (eur = eur_raw x eur_haircut x prox_factor), so every BOX EUR here
 picks it up; box.pud_proximity (alias `bpp`) is read only to SHOW the configuration.
 
+D150 (step 23 record runs on, sql/71) replaces the class table with a continuous oil
+factor = basin level x F(distance) on EVERY forecast PUD (level Delaware 1.046 / Midland
+1.067, so factors run ~0.4-1.5, often above 1): outcomes level_unexposed /
+factor_single_parent / factor_multi_parent, plus the Midland 21a no-forecast gates
+no_forecast_pattern / no_forecast_spacing. Both vocabularies stay valid (older runs keep
+D113's words); box_locations.PROX_GROUPS folds them into the same three filter groups.
+
 The shared fragments (box_joins / coverage_sql / econ_join, the coverage classes,
 record_run) live in app.box_locations — the one location_id-keyed BOX module — so the
 Map tiles, the Highgrade choropleth, the gunbarrel and this workup class every PUD the
@@ -273,7 +280,10 @@ def proximity_block(run: dict[str, Any]) -> dict[str, Any] | None:
     sql/65 / D112-D116), or None on a run that did not measure proximity (before 11).
     Keeps the run's own sentences: method, the "validated with exception" basis
     (verdict as written + what it was accepted as + the prospective confirmation), the
-    survivorship caveat, the outcome counts and the oil EUR before / after (MMbbl)."""
+    survivorship caveat, the outcome counts and the oil EUR before / after (MMbbl).
+    A D150 run (step 23) stores only decisions / table_ref / source_run / counts: its
+    label is None (the D113 "validated with exception" basis is not its basis) and the
+    absent sentences stay None — never borrowed from the D113 record."""
     p = (run.get("disclosure") or {}).get("proximity")
     if not p:
         return None
@@ -284,14 +294,14 @@ def proximity_block(run: dict[str, Any]) -> dict[str, Any] | None:
         "method": p.get("method"),
         "decisions": p.get("decisions"),
         "table_ref": p.get("table_ref"),
-        "label": "validated_with_exception",
+        "label": "validated_with_exception" if v else None,
         "verdict_as_written": v.get("verdict_as_written"),
         "accepted_as": v.get("accepted_as"),
         "confirmation": v.get("confirmation"),
         "prereg_commit": v.get("prereg_commit"),
         "survivorship": p.get("survivorship"),
         "counts": {o: int((p.get("counts") or {}).get(o, 0)) for o in PROX_OUTCOMES},
-        "source_run": (p.get("inputs") or {}).get("source_run"),
+        "source_run": (p.get("inputs") or {}).get("source_run", p.get("source_run")),
         "oil_eur_mmbbl_before": before,
         "oil_eur_mmbbl_after": after,
         "oil_eur_change": (after / before - 1.0) if before and after is not None else None,
@@ -304,6 +314,12 @@ PROX_OUTCOME_TEXT: dict[str, str] = {
     "haircut": "oil × configuration factor (D113)",
     "no_forecast_precedent": "no forecast: < 30 drilled multi-parent wells of the bench pair (D114)",
     "no_forecast_package": "no forecast: factor <= 0.80 and < 30 drilled packages (D114)",
+    # D150 (step 23 record runs on, sql/71)
+    "level_unexposed": "oil × level (no parent; D150)",
+    "factor_single_parent": "oil × distance factor, single parent (D150)",
+    "factor_multi_parent": "oil × distance factor, multi parent (D150)",
+    "no_forecast_pattern": "no forecast: neighbour-pattern precedent missing (21a)",
+    "no_forecast_spacing": "no forecast: within 400 ft of a same-bench producer (21a)",
 }
 
 

@@ -40,7 +40,7 @@ export const MAP_COVERAGE_LABELS: Record<string, string> = COVERAGE_LABELS;
 export const MAP_COVERAGE_ORDER = [
   "covered", "covered_provisional",
   "not_covered_no_precedent", "not_covered_no_analogs", "not_covered_outside_extent",
-  "not_covered_emerging", "not_covered_wcxy", "not_covered_unvalidated",
+  "not_covered_emerging", "not_covered_wcxy", "not_covered_unvalidated", "not_covered_conflict",
   NOT_SCREENED, "bench_not_in_box", "realized",
 ];
 
@@ -55,6 +55,7 @@ export const COVERAGE_COLORS: Record<string, string> = {
   not_covered_emerging: "#94a3b8",
   not_covered_wcxy: "#cbd5e1",
   not_covered_unvalidated: "#cbd5e1",
+  not_covered_conflict: "#fca5a5", // D145: reconciliation conflict, not drillable
   bench_not_in_box: "#d4d4d8",
   realized: "#e7e5e4",
   [NOT_SCREENED]: "#e4e4e7",

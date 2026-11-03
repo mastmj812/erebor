@@ -92,3 +92,15 @@ def test_location_sql_reads_box_through_the_shared_module_and_never_a_pdp_row():
     assert ":bench" in wk._NEARBY_PDP_SQL and ":bench" in wk._NEIGHBOURS_SQL
     # a geometry prefilter (GiST on wellstick_geom) before any geography distance
     assert "ST_DWithin(el.wellstick_geom, me.g, :deg)" in wk._NEARBY_PDP_SQL
+
+
+def test_cohort_notes_not_covered_location_says_why():
+    """engineering_db step 23 (gate 23b): a searched location that ships no forecast never reads 'kept the forecast', and the
+    run's not-covered flag becomes a note."""
+    flags = ["under_count: 6 < min_wells 10 (extend radius / strike-biased — reviewer)",
+             "not covered (gate 23b): the water WOR fit found 0 eligible water analogs at the 20-mi cap; no oil / gas / water forecast ships"]
+    notes = wk.cohort_notes({"coverage": "not_covered_no_analogs", "flags": flags}, [], [], [], None)
+    assert notes[0] == "Thin cohort: 6 analogs where the run wants at least 10 (the run flagged it under_count)."
+    assert notes[1].startswith("Not covered (gate 23b): the water WOR fit found 0") and notes[1].endswith("ships.")
+    kept = wk.cohort_notes({"coverage": "covered", "flags": flags[:1]}, [], [], [], None)
+    assert kept == ["Thin cohort: 6 analogs where the run wants at least 10 (the run flagged it under_count and kept the forecast)."]

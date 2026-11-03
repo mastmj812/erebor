@@ -142,11 +142,14 @@ def cohort_notes(loc: dict[str, Any], analogs: list[dict[str, Any]], nearby: lis
                  neighbours: list[dict[str, Any]], oil_per_ft: float | None) -> list[str]:
     """Plain sentences on what shapes this location's cohort — facts, no verdicts."""
     notes: list[str] = []
+    shipped = loc.get("coverage") in FORECAST_CLASSES
     for f in loc.get("flags") or []:
         m = _UNDER_COUNT.search(f)
         if m:
             notes.append(f"Thin cohort: {m.group(1)} analogs where the run wants at least {m.group(2)} "
-                         f"(the run flagged it under_count and kept the forecast).")
+                         f"(the run flagged it under_count{' and kept the forecast' if shipped else ''}).")
+        elif f.startswith("not covered"):  # engineering_db step 23: why a searched location ships no forecast
+            notes.append(f[0].upper() + f[1:] + ("" if f.endswith(".") else "."))
     if analogs:
         near = min(a["dist_ft"] for a in analogs) / FT_PER_MI
         far = max(a["dist_ft"] for a in analogs) / FT_PER_MI

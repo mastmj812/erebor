@@ -287,6 +287,23 @@ def test_config_line_mixed_and_unexposed():
     assert box.nearest_parent([]) is None
 
 
+def test_config_line_d150_parents_with_no_d113_configuration():
+    """engineering_db step 23b: a D150 factor_single_parent stick whose D113 configuration counts 0 parents (its parent is a
+    younger producer D113 did not count) reads from its named D150 parents, never "no depleted parent"."""
+    prox = {"outcome": "factor_single_parent", "config_class": None, "n_same": 0, "n_topfill": 0, "n_underfill": 0,
+            "n_parents_total": 0, "flanked_same": False, "flanked_topfill": False, "flanked_underfill": False}
+    assert box.config_line(prox, [_parent("1", "topfill", "WCB_1", 210.0, 700.0)]) == "topfill · 1 parent · nearest WCB_1 210 ft vt / 700 ft hz"
+    two = [_parent("1", "topfill", "WCB_1", 210.0, 700.0), _parent("2", "same", "WCA_1", 0.0, 900.0)]
+    assert box.config_line(prox, two) == "mixed · 2 parents (1 same / 1 topfill) · nearest WCB_1 210 ft vt / 700 ft hz"
+    # D150 counted more parents than D113's configuration: the named set wins, and D113's "flanked" is not claimed for it
+    d113 = {"outcome": "factor_multi_parent", "config_class": "topfill", "n_same": 0, "n_topfill": 1, "n_underfill": 0, "n_parents_total": 1,
+            "flanked_same": False, "flanked_topfill": True, "flanked_underfill": False}
+    assert box.config_line(d113, two) == "mixed · 2 parents (1 same / 1 topfill) · nearest WCB_1 210 ft vt / 700 ft hz"
+    # a refused stick: no named parents, its D113 configuration reads as before
+    assert box.config_line(d113 | {"outcome": "no_forecast_precedent"}, []) == "topfill · 1 parent · flanked"
+    assert box.config_line({"outcome": "level_unexposed", "config_class": None, "n_parents_total": 0}, []) == "no depleted parent"
+
+
 def test_d121_run_labels_come_from_the_run_not_group_labels():
     """Run 19 (engineering_db D121 / D122): every group carries `selection`; WCA oil is haircut and its gas is not (a per-stream
     "none" method), BS2_S both, every other group raw. The label / spec / haircut streams are read from the run."""

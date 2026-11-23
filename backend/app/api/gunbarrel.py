@@ -20,6 +20,12 @@ EUR per stream and — with `econ` + `deck` — ONE of Steven's econ columns for
 run's case (display only, D13), all through app.box_locations. Novi supplies only the
 geometry: `category` is PDP | LOCATION, and Novi's recon / depletion / support screens
 are gone (the client hides no-BOX-forecast locations like the map does).
+
+BOX sticks PREVIEW (`box_sticks: true`; engineering_db docs/box_sticks_plan.md, phase 5e): the
+basin's record BOX stick set in the same AOI, one point per leg at its landing TVD, in a
+separate `box_sticks` list on the pad. They are projected onto the frame the existing rows
+define — they never move the axis, the centroid, `wells` or `well_count` — and carry no
+forecast and no econ. Without the flag the response is exactly what it was.
 """
 
 from __future__ import annotations
@@ -37,6 +43,7 @@ from app.box_locations import (
     ECON_METRICS,
     EUR_STREAMS,
     box_joins,
+    box_stick_gunbarrel_sql,
     econ_case,
     econ_join,
     kind_sql,
@@ -79,6 +86,7 @@ class GbBody(BaseModel):
     rule: Rule = "intersects"
     econ: str | None = Field(None, pattern="^(" + "|".join(ECON_METRICS) + ")$")
     deck: str | None = Field(None, max_length=64)
+    box_sticks: bool = False  # preview: also return the record BOX stick set (geometry only)
 
 
 def gunbarrel_sql(rule: Rule, econ_metric: str | None) -> str:
@@ -113,36 +121,18 @@ def gunbarrel(body: GbBody, session: Session = Depends(get_session)) -> dict:
     if case is not None:
         params |= {"econ_deck": case["deck_id"], "econ_aset": case["assumption_set_id"]}
     rows = session.execute(text(gunbarrel_sql(body.rule, econ_metric)), params).mappings().all()
+    box_rows = (session.execute(text(box_stick_gunbarrel_sql(body.rule)),
+                                {"aoi": params["aoi"], "basin": body.basin}).mappings().all()
+                if body.box_sticks else [])
 
-    if not rows:
+    if not rows and not box_rows:
         return {"pad_count": 0, "pads": []}
 
     # One frame for the whole selection: shared centroid + a single offset axis
-    # perpendicular to the mean heel->toe azimuth.
-    lat0 = sum(r["my"] for r in rows) / len(rows)
-    lon0 = sum(r["mx"] for r in rows) / len(rows)
-    k = math.cos(math.radians(lat0))
-
-    def to_m(lon, lat):
-        return ((lon - lon0) * M_PER_DEG_LON * k, (lat - lat0) * M_PER_DEG_LAT)
-
-    dx = dy = 0.0
-    mids = []
-    for r in rows:
-        sxm, sym = to_m(r["sx"], r["sy"])
-        exm, eym = to_m(r["ex"], r["ey"])
-        dx += exm - sxm
-        dy += eym - sym
-        mids.append(to_m(r["mx"], r["my"]))
-    norm = math.hypot(dx, dy)
-    if norm < 1e-9:
-        perp = (1.0, 0.0)
-    else:
-        ux, uy = dx / norm, dy / norm
-        perp = (-uy, ux)  # rotate the mean lateral direction 90deg
-    perp, axis_left, axis_right = _canonical_axis(perp)
-    cx = sum(m[0] for m in mids) / len(mids)
-    cy = sum(m[1] for m in mids) / len(mids)
+    # perpendicular to the mean heel->toe azimuth. The existing rows define it; BOX sticks
+    # only do when the selection holds nothing else (their legs are then summed axially,
+    # because the two legs of a U-turn stick run opposite ways).
+    to_m, perp, axis_left, axis_right, cx, cy, mids = _frame(rows) if rows else _frame(box_rows, axial=True)
 
     wells = []
     for r, (mxm, mym) in zip(rows, mids):
@@ -169,4 +159,70 @@ def gunbarrel(body: GbBody, session: Session = Depends(get_session)) -> dict:
         "axis_left": axis_left, "axis_right": axis_right,
         "wells": wells,
     }
+    if body.box_sticks:
+        pad["box_sticks"] = box_stick_points(box_rows, to_m, perp, cx, cy)
+        pad["box_stick_count"] = len({b["stick_id"] for b in pad["box_sticks"]})
+        pad["frame_from"] = "selection" if rows else "box_sticks"
     return {"pad_count": 1, "pads": [pad]}
+
+
+def _frame(rows, axial: bool = False):  # noqa: ANN001, ANN202
+    """The selection's frame from rows carrying sx/sy, ex/ey, mx/my (lon/lat): a local
+    metre projection, the canonical offset axis, the centroid of the midpoints, and each
+    row's midpoint in metres. `axial` sums the heel->toe vectors as undirected lines."""
+    lat0 = sum(r["my"] for r in rows) / len(rows)
+    lon0 = sum(r["mx"] for r in rows) / len(rows)
+    k = math.cos(math.radians(lat0))
+
+    def to_m(lon, lat):
+        return ((lon - lon0) * M_PER_DEG_LON * k, (lat - lat0) * M_PER_DEG_LAT)
+
+    dx = dy = 0.0
+    mids = []
+    ref = None
+    for r in rows:
+        sxm, sym = to_m(r["sx"], r["sy"])
+        exm, eym = to_m(r["ex"], r["ey"])
+        vx, vy = exm - sxm, eym - sym
+        if axial:
+            if ref is None:
+                ref = (vx, vy)
+            elif vx * ref[0] + vy * ref[1] < 0:
+                vx, vy = -vx, -vy
+        dx += vx
+        dy += vy
+        mids.append(to_m(r["mx"], r["my"]))
+    norm = math.hypot(dx, dy)
+    if norm < 1e-9:
+        perp = (1.0, 0.0)
+    else:
+        ux, uy = dx / norm, dy / norm
+        perp = (-uy, ux)  # rotate the mean lateral direction 90deg
+    perp, axis_left, axis_right = _canonical_axis(perp)
+    cx = sum(m[0] for m in mids) / len(mids)
+    cy = sum(m[1] for m in mids) / len(mids)
+    return to_m, perp, axis_left, axis_right, cx, cy, mids
+
+
+def box_stick_points(box_rows, to_m, perp, cx, cy) -> list[dict]:  # noqa: ANN001
+    """BOX stick legs as gunbarrel points in an existing frame: offset of the leg's midpoint,
+    landing TVD, how the landing was derived and the nightly status. No forecast fields."""
+    out = []
+    for r in box_rows:
+        mxm, mym = to_m(r["mx"], r["my"])
+        out.append({
+            "stick_id": r["stick_id"], "well_name": r["well_name"], "category": "BOX",
+            "formation_blueox": r["formation_blueox"], "pad_id": r["pad_id"],
+            "leg_no": r["leg_no"], "n_legs": r["n_legs"],
+            "tvd": float(r["target_tvd_ft"]), "tvd_rung": r["tvd_rung"],
+            "tvd_err_median_ft": float(r["tvd_err_median_ft"]) if r["tvd_err_median_ft"] is not None else None,
+            "spacing_ft": float(r["spacing_ft"]),
+            "ll_ft": float(r["ll_ft"]),
+            "flags": list(r["flags"] or []),
+            "status": r["status"],  # NULL = not judged by the nightly yet
+            "crowded": bool(r["crowded"]) if r["crowded"] is not None else None,
+            "matched_api10": r["matched_api10"],
+            "offset_ft": round(((mxm - cx) * perp[0] + (mym - cy) * perp[1]) * FT_PER_M, 1),
+        })
+    out.sort(key=lambda b: (b["offset_ft"], b["tvd"], b["stick_id"], b["leg_no"]))
+    return out

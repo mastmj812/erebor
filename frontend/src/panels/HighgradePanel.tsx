@@ -25,8 +25,9 @@ import { useMapStore, type HighgradeResult, type OverlayKey } from "../store";
 import { BoxProximityNote } from "./BoxWorkup";
 import { ChipGroup } from "./ChipGroup";
 
-// Highgrade on BOX (overhaul step 5). Novi supplies the stick geometry and the DSU polygons
-// only (Michael, 2026-10-21): no Novi tag, tier, forecast or NPV is screened or shown here.
+// Highgrade on BOX (overhaul step 5). The locations are BOX sticks, grouped by the DSU each was
+// generated in; Novi supplies the DSU polygons only: no Novi stick, tag, tier, forecast or NPV is
+// screened or shown here.
 
 // map overlays surfaced on the Highgrade tab (same toggle mechanism as the Map tab's
 // Controls panel; the layers are mode-agnostic so they render in Highgrade mode too).
@@ -182,8 +183,9 @@ export function HighgradePanel() {
         <button className={basin === "midland" ? "active" : ""} onClick={() => setBasin("midland")}>Midland</button>
       </div>
       <div className="count">
-        Screen the remaining stick locations on BOX → highlight target DSUs. Locations = every Novi stick (geometry
-        only; Novi's PUD / RES tags are not used) that our reconciliation did not match to a producing well.
+        Screen the remaining stick locations on BOX → highlight target DSUs. Locations = every BOX stick (our own
+        sticks, generated per Novi DSU and bench) that the nightly reconciliation has not matched to a producing well;
+        a conflict or crowded stick is counted as not drillable, never valued.
       </div>
       {noForecast && (
         <div className="caveat">
@@ -312,7 +314,7 @@ function ResultSummary({ hg }: { hg: HighgradeResult }) {
       )}
       {hg.pad_count > 0 && (
         <div className="count" style={{ margin: "2px 0 0" }}>
-          Pad outlines = Novi 2026Q3 DSU polygons
+          Pad outlines = the Novi DSU polygons the BOX sticks were generated in
           {hg.pads_hull > 0 ? `; ${hg.pads_hull.toLocaleString()} pads (strays of a reused name, or no polygon) are the member-stick hull + 330 ft` : ""}
           {hg.names_split > 0 ? `; ${hg.names_split.toLocaleString()} names split into [k/n] parts` : ""}. Stacked-bench DSUs overlap.
         </div>
@@ -378,7 +380,7 @@ function BoxRunNote({ meta }: { meta: BoxMeta | null }) {
   return (
     <div className="caveat" style={{ margin: "4px 0 10px" }}>
       <div>
-        <strong>BOX run {r.run_id}</strong> (record) · Novi {r.report_version} sticks · production through {r.data_through} ·
+        <strong>BOX run {r.run_id}</strong> (record) · BOX sticks, Novi {r.report_version} DSUs · production through {r.data_through} ·
         code {r.code_sha.slice(0, 7)}
       </div>
       <div style={{ marginTop: 4 }}>

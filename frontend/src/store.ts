@@ -51,7 +51,7 @@ export interface WellProduction {
   forecast_end_day: number;
   arps_tail: { ip_day: number[]; oil: number[]; gas: number[]; water: number[] };
   has_forecast?: boolean;
-  box?: WellBoxForecast | null; // BOX record run for this PUD (null = not a Novi PUD)
+  box?: WellBoxForecast | null; // BOX record run for this location (null = not a stick location, e.g. PDP)
 }
 // BOX forecast for one PUD (backend app/api/box.well_forecast). Series only when forecast-carrying
 // (covered = validated, covered_provisional = provisional tier, D105).
@@ -72,7 +72,7 @@ export type WellSource = "novi" | "box" | "both";
 export type BottomTab = "production" | "gunbarrel" | "workup";
 export interface GunbarrelWell {
   stick_id: number; unique_id: string;
-  category: string;                       // Map-tab gunbarrel: PDP | LOCATION (Novi's own tag is not shipped)
+  category: string;                       // Map-tab gunbarrel: PDP | LOCATION (a location = a BOX stick)
   formation: string;
   formation_blueox: string | null;        // Blue Ox bench code (intel_formation_blueox)
   basin_blueox: string | null;            // delaware | midland
@@ -83,25 +83,16 @@ export interface GunbarrelWell {
   prox_outcome?: string | null;
   econ?: number | null;                   // Steven's econ for the requested metric + deck (display only)
   tvd: number; ll_ft: number | null; offset_ft: number;
+  // One point per producing LEG: a U-turn BOX stick is two points with the same stick_id
+  // (leg_no 1 and 2 of n_legs 2) at the stick's landing TVD. Absent on the Accuracy modals' payloads.
+  leg_no?: number; n_legs?: number;
   in_filter?: boolean;          // set only by the Highgrade per-DSU gunbarrel
   metric_value?: number | null; // value of the selected screen metric (Highgrade)
 }
-// BOX sticks PREVIEW (engineering_db box_sticks_plan.md, phase 5e): one point per LEG of a record
-// BOX stick, at its landing TVD, projected onto the pad's own frame. Geometry + landing + nightly
-// status only: a BOX stick has no forecast and no econ, and is never culled or opened.
-export interface BoxStickPoint {
-  stick_id: number; well_name: string; category: "BOX";
-  formation_blueox: string; pad_id: number; leg_no: number; n_legs: number;
-  tvd: number; tvd_rung: string; tvd_err_median_ft: number | null;
-  spacing_ft: number; ll_ft: number; flags: string[];
-  status: string | null;        // open | permitted | pending | producing | conflict; null = not judged yet
-  crowded: boolean | null; matched_api10: string | null;
-  offset_ft: number;
-}
 export interface GunbarrelPad {
   pad_name: string; well_count: number;
-  box_sticks?: BoxStickPoint[]; box_stick_count?: number;   // only when requested (preview switch on)
-  frame_from?: "selection" | "box_sticks";
+  stick_count?: number;   // distinct sticks / wells (well_count counts points: one per leg)
+  pad_key?: string;       // Highgrade per-DSU gunbarrel: the DSU's pad_id (pad_name = its Novi DSU name)
   // Compass letters for the offset axis ends (suite-wide read: W→E for
   // ~N-S lateral sets, N→S for ~E-W). Absent on pre-axis payloads.
   axis_left?: string; axis_right?: string;
@@ -109,7 +100,7 @@ export interface GunbarrelPad {
 }
 export interface GunbarrelData { pad_count: number; pads: GunbarrelPad[] }
 
-// One stick of an AOI selection (POST /select): BOX record-run values, Novi geometry only.
+// One stick of an AOI selection (POST /select): a BOX stick (or a producing well) with its BOX record-run values.
 // NULL values = no BOX forecast (or unpriced) — never a zero. Econ = Steven's, display only (D13).
 export interface SelectionStick {
   stick_id: number;
@@ -156,8 +147,8 @@ export interface HighgradeResult {
   agg: string;               // applied: sum | avg | per_acre | median | lateral_weighted | count
   pad_count: number;
   pads_missing_geom: number;
-  names_split: number;       // Novi pad names spanning >1 separate stick group, drawn as [k/n] pads (sql/67)
-  pads_hull: number;         // drawn pads on a stick hull + 330 ft (stray / no Novi polygon), not Novi's DSU
+  names_split: number;       // always 0 since the BOX sticks cutover (one Novi polygon per DSU); kept for the shape
+  pads_hull: number;         // always 0 since the BOX sticks cutover (no stick-hull pads)
   well_count: number;        // screened locations on a pad
   wells_without_pad: number; // screened locations with no pad assignment (not drawable)
   value_min: number | null;
@@ -225,7 +216,6 @@ interface MapState {
   mapDeck: string | null;       // color mode "econ": Steven's deck (null = default WTI 70 / HH 3)
   mapLegend: BoxLegend | null;  // ramp breaks for the active value mode (/api/box/legend)
   showPdp: boolean;             // map: producing context
-  showBoxSticks: boolean;       // PREVIEW: the record BOX stick set on the map (zoom 10+) and in the gunbarrel
   notCoveredShown: string[];    // map: classes of locations WITHOUT a BOX forecast drawn grey (empty = hidden, the default)
   tierFilter: Tier[];           // map: forecast tiers shown
   proxFilter: ProxGroup[];      // map: PDP-proximity outcome groups (empty = all)
@@ -241,7 +231,7 @@ interface MapState {
   bottomTab: BottomTab;
   gunbarrel: GunbarrelData | null;
   gunbarrelLoading: boolean;
-  // Single-location BOX workup (bottom window "Workup"): the clicked Novi stick location
+  // Single-location BOX workup (bottom window "Workup"): the clicked BOX stick location
   // (stick_id > 0), its loaded workup, the stick it was opened from (one step back), whether
   // the cohort is drawn on the map, and a zoom-to-cohort request (a fresh object re-fires).
   workupStickId: number | null;
@@ -280,7 +270,6 @@ interface MapState {
   setAccVintages: (v: AccVintages | null) => void;
   setBasin: (b: "delaware" | "midland") => void;
   toggleOverlay: (k: OverlayKey) => void;
-  setShowBoxSticks: (b: boolean) => void;
   loadBasins: () => Promise<void>;
   setDrawMode: (m: DrawMode) => void;
   setSelectionRule: (r: SelectionRule) => void;
@@ -369,7 +358,6 @@ export const useMapStore = create<MapState>((set, get) => ({
   mapDeck: null,
   mapLegend: null,
   showPdp: true,
-  showBoxSticks: false,
   notCoveredShown: [],
   tierFilter: ["validated", "provisional"],
   proxFilter: [],
@@ -487,7 +475,6 @@ export const useMapStore = create<MapState>((set, get) => ({
   setMapDeck: (d) => set({ mapDeck: d, mapLegend: null }),
   setMapLegend: (l) => set({ mapLegend: l }),
   setShowPdp: (b) => set({ showPdp: b }),
-  setShowBoxSticks: (b) => set({ showBoxSticks: b }),
   setNotCoveredShown: (classes) => set({ notCoveredShown: classes }),
   toggleNotCovered: (cls) =>
     set((s) => ({ notCoveredShown: s.notCoveredShown.includes(cls) ? s.notCoveredShown.filter((x) => x !== cls) : [...s.notCoveredShown, cls] })),

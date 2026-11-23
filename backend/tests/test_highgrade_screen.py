@@ -1,9 +1,9 @@
 """Highgrade on BOX (overhaul step 5) — the pad screen, its filters and the per-DSU
 gunbarrel SQL, DB-free.
 
-Pins: Novi supplies only the geometry (no Novi tag, forecast, NPV or tier column is read;
-the population is every non-PDP stick minus OUR realized reconciliation, not Novi's PUD
-tag), a location without a BOX forecast is never a zero (its value is NULL and a BOX /
+Pins: the locations are BOX sticks and Novi supplies only the DSU polygons (no Novi tag,
+forecast, NPV or tier column is read; the population is every non-PDP stick minus a realized
+reconciliation, never a category tag), a location without a BOX forecast is never a zero (its value is NULL and a BOX /
 econ bound never drops it), per-ft pad values are lateral-weighted, IRR and breakeven
 aggregate as a median, and econ needs a priced record run.
 """
@@ -119,7 +119,10 @@ def test_pads_sql_reads_box_not_novi(metric, econ):
     assert "FROM curated.erebor_locations el" in sql and hg.POPULATION in sql
     assert "LEFT JOIN box.pud_forecast bp ON bp.run_id = :box_run AND bp.stick_id = el.stick_id" in sql
     assert ("box_econ.box_pud_econ be" in sql) == econ
-    assert "curated.intel_pad_geom p ON p.basin = :basin" in sql and "'geom_source', geom_source" in sql
+    # pads = the sticks' own DSUs, drawn from Novi's DSU polygons at the record stick set's vintage
+    assert "GROUP BY el.pad_id" in sql and "LEFT JOIN dsu p ON p.pad_id::text = a.pad_key" in sql
+    assert f"dsu AS ({bl.dsu_polygons_sql()})" in sql and "'geom_source', geom_source" in sql
+    assert "intel_pad_geom" not in sql and "intel_pad_member" not in sql
     for c in hg.HG_COVERAGE_CLASSES:
         assert f"AS nc_{c}" in sql
 
@@ -135,7 +138,7 @@ def test_gunbarrel_sql_box_only_two_arms():
         assert novi not in sql, novi
     loc, pdp = sql.split("UNION ALL")
     assert "(bpp.outcome IN :prox) AS in_filter" in loc and hg.POPULATION in loc
-    assert "intel_pad_member pm ON pm.stick_id = el.stick_id AND pm.pad_key = :pad_key" in loc
+    assert "el.pad_id::text = :pad_key" in loc and "intel_pad_member" not in sql and "intel_pad_geom" not in sql
     assert "AS coverage" in loc and "AS kind" not in loc and "AS category" in loc
     assert "'PDP' AS category" in pdp and "false AS in_filter" in pdp and "box." not in pdp
     assert "true AS in_filter" in hg.gunbarrel_sql("well_count", [], econ=False)

@@ -19,14 +19,14 @@ import {
 } from "../map/formations";
 import { HG_GRADIENT_CSS, rampColor } from "../map/highgradeColors";
 import { stickPasses } from "../map/screen";
-import { boxStickOut } from "../map/sticksLayers";
-import { useMapStore, type BoxStickPoint, type GunbarrelPad, type GunbarrelWell } from "../store";
+import { useMapStore, type GunbarrelPad, type GunbarrelWell } from "../store";
 
 const M = { l: 46, r: 10, t: 18, b: 26 };
 const MUTED_GREY = "#9ca3af";
 
-// Shape = category: a location (BOX-first gunbarrel: LOCATION; Highgrade / Accuracy modals:
-// PUD) = outline circle, PDP = solid circle, RES (those modals only) = outline triangle.
+// Shape = category: a location (a BOX stick: LOCATION; the Accuracy modals: PUD) = outline
+// circle, PDP = solid circle, RES (Accuracy modals only) = outline triangle. One marker per
+// producing LEG: a U-turn BOX stick is two markers with the same stick_id.
 // Color = formation. A muted well (culled in the Map tab, or off the active screen
 // in the Highgrade per-DSU view) renders grey, dimmed, with a dashed stroke.
 function Marker({ cat, cx, cy, color, muted, onClick, onHover, onLeave }: {
@@ -62,53 +62,6 @@ function Marker({ cat, cx, cy, color, muted, onClick, onHover, onLeave }: {
   );
 }
 
-// BOX sticks PREVIEW: a diamond in the bench color at the stick's landing TVD, one per leg.
-// Faded when the nightly has taken the stick out. Hover only: never culled, never opened.
-function BoxMarker({ cx, cy, color, out, onHover, onLeave }: {
-  cx: number; cy: number; color: string; out: boolean;
-  onHover: (e: React.MouseEvent) => void; onLeave: () => void;
-}) {
-  const r = 5.5;
-  const handlers = { onMouseEnter: onHover, onMouseMove: onHover, onMouseLeave: onLeave };
-  return (
-    <g className="gb-box-stick" opacity={out ? 0.35 : 1}>
-      <circle cx={cx} cy={cy} r={r + 4} fill="transparent" stroke="none" {...handlers} />
-      <polygon points={`${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`}
-        fill="#fff" stroke={color} strokeWidth={1.8} {...handlers} />
-    </g>
-  );
-}
-
-function BoxTip({ b, x, y }: { b: BoxStickPoint; x: number; y: number }) {
-  const flipX = x > window.innerWidth - 240;
-  const flipY = y > window.innerHeight - 170;
-  const PAD = 14;
-  const style: React.CSSProperties = {
-    ...(flipX ? { right: window.innerWidth - x + PAD } : { left: x + PAD }),
-    ...(flipY ? { bottom: window.innerHeight - y + PAD } : { top: y + PAD }),
-  };
-  const out = boxStickOut(b.status, b.crowded);
-  return (
-    <div className="gb-tip" style={style}>
-      <div className="gb-tip-name">BOX stick {b.well_name}</div>
-      <table className="gb-tip-tbl">
-        <tbody>
-          <tr><td>Type</td><td>BOX stick, PREVIEW (no forecast)</td></tr>
-          <tr><td>Bench</td><td>{b.formation_blueox}</td></tr>
-          <tr><td>Landing</td><td>{Math.round(b.tvd).toLocaleString()} ft TVD</td></tr>
-          <tr><td>Depth from</td><td>{b.tvd_rung}{b.tvd_err_median_ft != null ? ` (±${Math.round(b.tvd_err_median_ft)} ft expected)` : ""}</td></tr>
-          <tr><td>Spacing</td><td>{Math.round(b.spacing_ft).toLocaleString()} ft</td></tr>
-          <tr><td>Lateral</td><td>{Math.round(b.ll_ft).toLocaleString()} ft{b.n_legs > 1 ? ` (U-turn, leg ${b.leg_no} of ${b.n_legs})` : ""}</td></tr>
-          <tr><td>Nightly</td><td>{b.status ?? "not judged yet"}{b.crowded ? " · crowded" : ""}{b.matched_api10 ? ` (well ${b.matched_api10})` : ""}</td></tr>
-          {b.flags.length > 0 && <tr><td>Flags</td><td>{b.flags.join(", ").replaceAll("_", " ")}</td></tr>}
-          <tr><td>Id</td><td>{b.stick_id} · DSU {b.pad_id}</td></tr>
-        </tbody>
-      </table>
-      {out && <div className="gb-tip-status">taken out by the nightly</div>}
-    </div>
-  );
-}
-
 // Styled tooltip pinned to the cursor in VIEWPORT space (position: fixed). Fixed
 // positioning keeps it out of the chart's scroll box, so a tooltip near the edge
 // can't expand win-body's scrollable area (which would flicker a scrollbar and
@@ -135,7 +88,9 @@ function GbTooltip({ w, x, y, muted, interactive, metricLabel, formatMetric }: {
       <div className="gb-tip-name">{w.unique_id}</div>
       <table className="gb-tip-tbl">
         <tbody>
-          <tr><td>Type</td><td>{w.category === "PDP" ? "producing well (PDP)" : "Novi stick location"}</td></tr>
+          <tr><td>Type</td><td>{w.category === "PDP" ? "producing well (PDP)"
+            : w.category === "LOCATION" ? "BOX stick location" : "Novi stick location"}</td></tr>
+          {(w.n_legs ?? 1) > 1 && <tr><td>U-turn</td><td>leg {w.leg_no} of {w.n_legs}</td></tr>}
           <tr><td>Formation</td><td>{w.formation}</td></tr>
           <tr><td>Blue Ox</td><td>
             {w.formation_blueox ?? "—"}
@@ -162,11 +117,8 @@ function GbTooltip({ w, x, y, muted, interactive, metricLabel, formatMetric }: {
 // Reusable single-pad cross-section. `isMuted` decides which wells render greyed;
 // `onToggle` (optional) makes markers clickable (Map-tab culling). `exForm` drops
 // formation-excluded wells entirely (Map-tab rollup); pass an empty set to keep all.
-export function PadChart({ pad, exForm, isMuted, onToggle, width, height, metricLabel, formatMetric, colorOf, boxSticks, boxColorOf }: {
+export function PadChart({ pad, exForm, isMuted, onToggle, width, height, metricLabel, formatMetric, colorOf }: {
   pad: GunbarrelPad; exForm: Set<string>;
-  // BOX sticks PREVIEW (Map-tab gunbarrel only): extra hover-only points; they widen the axes
-  // but never change a well's offset or TVD.
-  boxSticks?: BoxStickPoint[]; boxColorOf?: (b: BoxStickPoint) => string;
   isMuted: (w: GunbarrelWell) => boolean;
   onToggle?: (id: number) => void; width: number; height: number;
   metricLabel?: string; formatMetric?: (v: number) => string;
@@ -176,12 +128,12 @@ export function PadChart({ pad, exForm, isMuted, onToggle, width, height, metric
 }) {
   const colorFn = colorOf ?? ((w: GunbarrelWell) => colorForFormation(w.formation));
   const [hover, setHover] = useState<{ w: GunbarrelWell; x: number; y: number } | null>(null);
-  const [boxHover, setBoxHover] = useState<{ b: BoxStickPoint; x: number; y: number } | null>(null);
   const wells = pad.wells.filter((w) => !exForm.has(w.formation_blueox ?? "(unmapped)"));
-  const box = (boxSticks ?? []).filter((b) => !exForm.has(b.formation_blueox));
-  if (!wells.length && !box.length) return null;
-  const offs = [...wells.map((w) => w.offset_ft), ...box.map((b) => b.offset_ft)];
-  const tvds = [...wells.map((w) => w.tvd), ...box.map((b) => b.tvd)];
+  if (!wells.length) return null;
+  // the title counts sticks / wells; a U-turn stick's two legs are one
+  const nSticks = new Set(wells.map((w) => w.stick_id)).size;
+  const offs = wells.map((w) => w.offset_ft);
+  const tvds = wells.map((w) => w.tvd);
   const xmin = Math.min(...offs), xmax = Math.max(...offs);
   const ymin = Math.min(...tvds), ymax = Math.max(...tvds);
   const xr = xmax - xmin || 1, yr = ymax - ymin || 1;
@@ -193,7 +145,7 @@ export function PadChart({ pad, exForm, isMuted, onToggle, width, height, metric
     <div className="gb-chart" style={{ position: "relative", width, height }}>
       <svg width={width} height={height} style={{ background: "#fafafa", borderRadius: 4 }}>
         <text x={width / 2} y={12} textAnchor="middle" fontSize="11" fontWeight="600" fill="#27272a">
-          {pad.pad_name} ({wells.length}){box.length ? ` + ${new Set(box.map((b) => b.stick_id)).size} BOX sticks (preview)` : ""}
+          {pad.pad_name} ({nSticks})
         </text>
         <text x={M.l - 5} y={M.t + 4} textAnchor="end" fontSize="9" fill="#71717a">{Math.round(ymin)}</text>
         <text x={M.l - 5} y={height - M.b} textAnchor="end" fontSize="9" fill="#71717a">{Math.round(ymax)}</text>
@@ -208,16 +160,10 @@ export function PadChart({ pad, exForm, isMuted, onToggle, width, height, metric
         {pad.axis_right && (
           <text x={width - M.r - 4} y={height - 6} textAnchor="end" fontSize="9" fill="#52525b">{pad.axis_right} →</text>
         )}
-        {box.map((b) => (
-          <BoxMarker key={`box-${b.stick_id}-${b.leg_no}`} cx={sx(b.offset_ft)} cy={sy(b.tvd)}
-            color={boxColorOf ? boxColorOf(b) : "#52525b"} out={boxStickOut(b.status, b.crowded)}
-            onHover={(e) => setBoxHover({ b, x: e.clientX, y: e.clientY })}
-            onLeave={() => setBoxHover(null)} />
-        ))}
         {wells.map((w) => {
           const cx = sx(w.offset_ft), cy = sy(w.tvd);
           return (
-            <Marker key={w.stick_id} cat={w.category} cx={cx} cy={cy}
+            <Marker key={`${w.stick_id}-${w.leg_no ?? 1}`} cat={w.category} cx={cx} cy={cy}
               color={colorFn(w)} muted={isMuted(w)}
               onClick={onToggle ? () => onToggle(w.stick_id) : undefined}
               onHover={(e) => setHover({ w, x: e.clientX, y: e.clientY })}
@@ -230,7 +176,6 @@ export function PadChart({ pad, exForm, isMuted, onToggle, width, height, metric
           muted={isMuted(hover.w)} interactive={!!onToggle}
           metricLabel={metricLabel} formatMetric={formatMetric} />
       )}
-      {boxHover && !hover && <BoxTip b={boxHover.b} x={boxHover.x} y={boxHover.y} />}
     </div>
   );
 }
@@ -250,7 +195,6 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
   const excludedSticks = useMapStore((s) => s.excludedSticks);
   const toggleStick = useMapStore((s) => s.toggleStick);
   const showPdp = useMapStore((s) => s.showPdp);
-  const showBoxSticks = useMapStore((s) => s.showBoxSticks);
   const notCoveredShown = useMapStore((s) => s.notCoveredShown);
   const tierFilter = useMapStore((s) => s.tierFilter);
   const proxFilter = useMapStore((s) => s.proxFilter);
@@ -268,19 +212,18 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
     if (!aoi) return;
     st.getState().setGunbarrelLoading(true);
     try {
-      st.getState().setGunbarrel(await fetchGunbarrel(aoi, basin, rule, econMetric, mapDeck, st.getState().showBoxSticks));
+      st.getState().setGunbarrel(await fetchGunbarrel(aoi, basin, rule, econMetric, mapDeck));
     } catch (e) {
       console.error(e);
     } finally {
       st.getState().setGunbarrelLoading(false);
     }
   };
-  // The econ values belong to one metric + deck: reload a loaded gunbarrel when either changes,
-  // and when the BOX sticks preview is switched (the sticks ride in the same answer).
+  // The econ values belong to one metric + deck: reload a loaded gunbarrel when either changes.
   useEffect(() => {
     if (st.getState().gunbarrel) void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [econMetric, mapDeck, showBoxSticks]);
+  }, [econMetric, mapDeck]);
 
   if (!sel || !aoi) return <div className="count">Draw an AOI (Lasso / Box) to see the gunbarrel.</div>;
 
@@ -314,9 +257,7 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
     const s = selById.get(w.stick_id);
     return s ? stickPasses(s, screen) : tierFilter.includes(t);
   };
-  // BOX sticks preview: the bench include filter applies; the forecast screens do not (no forecast).
-  const boxVisible = (b: BoxStickPoint) => showBoxSticks && (!formInc.size || formInc.has(b.formation_blueox));
-  const pads = gb.pads.map((p) => ({ ...p, wells: p.wells.filter(visible), box_sticks: (p.box_sticks ?? []).filter(boxVisible) }));
+  const pads = gb.pads.map((p) => ({ ...p, wells: p.wells.filter(visible) }));
   const n = pads.length;
   const cols = Math.max(1, Math.min(n, Math.floor(W / 380)));
   const chartW = Math.floor((W - (cols - 1) * GAP) / cols) - 1;
@@ -325,7 +266,10 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
     ? Math.max(220, H - FOOTER - LEGEND_H - 4)
     : Math.min(360, Math.max(220, Math.round(chartW * 0.8)));
 
-  const allWells = pads.flatMap((p) => p.wells);
+  // allPoints = one per leg (what is drawn); allWells = one per stick / well (what is counted and
+  // ranked: a U-turn stick's value must not weigh twice in the AOI percentiles).
+  const allPoints = pads.flatMap((p) => p.wells);
+  const allWells = [...new Map(allPoints.map((w) => [w.stick_id, w])).values()];
   const valueOf = (w: GunbarrelWell): number | null =>
     colorMode === "eur" ? (w[`${eurStream}_eur_ft` as const] ?? null) : colorMode === "econ" ? (w.econ ?? null) : null;
   const vals = allWells.map(valueOf).filter((v): v is number => v != null).sort((a, b) => a - b);
@@ -368,9 +312,7 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
   });
   const nForecast = allWells.filter((w) => w.coverage && TIER_OF_COVERAGE[w.coverage]).length;
   const nPdp = allWells.filter((w) => w.category === "PDP").length;
-  const allBox = pads.flatMap((p) => p.box_sticks).filter((b) => !exForm.has(b.formation_blueox));
-  const nBox = new Set(allBox.map((b) => b.stick_id)).size;
-  const nBoxOut = new Set(allBox.filter((b) => boxStickOut(b.status, b.crowded)).map((b) => b.stick_id)).size;
+  const nUturn = allWells.filter((w) => (w.n_legs ?? 1) > 1).length;
 
   return (
     <div className="gb-wrap">
@@ -378,18 +320,13 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
         {pads.map((pad) => (
           <PadChart key={pad.pad_name} pad={pad} exForm={exForm}
             isMuted={(w) => exStick.has(w.stick_id)} onToggle={toggleStick}
-            boxSticks={pad.box_sticks} boxColorOf={(b) => colorForBlueox(basin, b.formation_blueox)}
             colorOf={colorOf} width={chartW} height={chartH} />
         ))}
       </div>
       <div className="count">
         {allWells.length} shown ({nForecast} BOX forecast · {nPdp} PDP · {allWells.length - nForecast - nPdp} no BOX forecast)
+        {nUturn > 0 ? ` · ${nUturn} U-turn stick${nUturn === 1 ? "" : "s"} drawn as 2 legs` : ""}
         · click a marker to cull / restore
-        {showBoxSticks && (
-          <span id="gb-box-count" style={{ marginLeft: 8, color: "#3f3f46" }}>
-            · <b>{nBox} BOX sticks</b> (preview, bench color, no forecast{nBoxOut ? `; ${nBoxOut} taken out by the nightly, faded` : ""})
-          </span>
-        )}
         <span style={{ marginLeft: 10 }}>
           color:
           <button style={modeBtn(colorMode === "eur")} onClick={() => setColorMode("eur")}>BOX EUR/ft</button>
@@ -399,7 +336,7 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
           <button style={modeBtn(colorMode === "source")} onClick={() => setColorMode("source")}>bench source</button>
         </span>
         <span className="gb-legend">
-          <span>○ location</span> <span>● PDP</span> <span>dashed = culled</span>{showBoxSticks && <span> ◇ BOX stick</span>}
+          <span>○ BOX stick (one per leg)</span> <span>● PDP</span> <span>dashed = culled</span>
         </span>
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 10px", padding: "4px 6px", fontSize: 10, color: "#52525b" }}>

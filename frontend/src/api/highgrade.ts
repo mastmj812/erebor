@@ -98,7 +98,7 @@ export const COVERAGE_LABELS: Record<string, string> = {
   not_covered_wcxy: "WCXY target, not covered by this run (D61)",
   not_covered_unvalidated: "bench not yet validated (D60)",
   not_covered_emerging: "emerging bench (D2)",
-  not_covered_conflict: "not covered: reconciliation conflict (D145)",
+  not_covered_conflict: "conflict or crowded (not drillable, D145)",
   bench_not_in_box: "bench not in BOX v1",
   not_screened: "on a BOX bench, not screened by the record run",
   realized: "realized per reconciliation",
@@ -327,7 +327,7 @@ export async function fetchHighgradePads(body: {
 // in_filter against the (last-applied) screen so off-screen locations and all PDP render muted.
 export async function fetchHighgradeGunbarrel(body: {
   basin: string;
-  pad_key: string; // curated.intel_pad_geom key (Novi 2026Q3 DSU, or a [k/n] stray split — sql/67)
+  pad_key: string; // the DSU's pad_id as text (the pad feature's `pad_key`; raw_novi_intel.pads.pad_id)
   filters: HighgradeFilters;
   metric: HighgradeMetric;
   deck: string | null;

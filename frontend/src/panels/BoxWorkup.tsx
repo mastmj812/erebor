@@ -118,7 +118,7 @@ export function BoxWorkup({ basin, padKey }: { basin: string; padKey: string }) 
         </>
       )}
 
-      <h4>Locations — BOX vs Novi</h4>
+      <h4>Locations — BOX sticks (the Novi columns are blank: Novi does not forecast a BOX stick)</h4>
       <LocationsTable rows={[...covered, ...others]} />
 
       {measured.length > 0 && (

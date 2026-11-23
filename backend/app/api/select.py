@@ -2,10 +2,11 @@
 
 Reads curated.erebor_locations — the SAME spine the map tiles render — so the
 selection matches what's on screen, with the BOX projection joined through
-app.box_locations (the one module that reads BOX attributes). Novi supplies only
-the stick geometry (Michael 2026-10-21): `kind` is PDP | LOCATION, never Novi's
-PUD / RES tag, and no Novi forecast or econ value is returned. A location without a
-BOX forecast carries its coverage class and NULL values — never a zero.
+app.box_locations (the one module that reads BOX attributes). `kind` is
+PDP | LOCATION (a location = a BOX stick since the BOX sticks cutover; keyed by
+stick_id, one row per stick whatever its leg count), and no Novi forecast or econ
+value is returned. A location without a BOX forecast carries its coverage class and
+NULL values — never a zero.
 
 Econ = Steven's box_econ.box_pud_econ for the RECORD run's case (`deck`, default
 WTI 70 / HH 3), display only with provenance (D13); NULL everywhere when the record
@@ -16,6 +17,9 @@ Selection rule (toggleable — materially changes counts on depth-limited deals)
   * intersects : the lateral LINESTRING intersects the AOI  (ST_Intersects)
   * midpoint   : the lateral's midpoint falls inside the AOI (ST_Contains of
                  ST_LineInterpolatePoint(geom, 0.5))
+                 (a U-turn BOX stick is one line, leg + turn arc + leg, so its
+                 midpoint lies on the arc; the gunbarrel's midpoint rule tests
+                 each leg's own midpoint instead)
 
 Deal upload (/select/deals) accepts a zipped shapefile (pyshp + the .prj) or a
 GeoPackage (app.gpkg_reader — land-department deliverable with Type=DSU/Tract

@@ -16,7 +16,7 @@ import {
   type EurStream,
 } from "../api/boxMap";
 import { HG_HIGH, HG_LOW, HG_MID } from "./highgradeColors";
-import { BLUEOX_COLORS, OTHER_COLOR, blueoxColorExpression, type BasinBlueox } from "./formations";
+import { blueoxColorExpression } from "./formations";
 import { forecastScreenExpr, type ScreenOpts } from "./screen";
 
 export const INTEL_SOURCE = "intel";
@@ -165,56 +165,6 @@ export const linesLayer: LineLayerSpecification = {
     ] as unknown as ExpressionSpecification,
   },
 };
-
-// ---- BOX sticks PREVIEW (engineering_db box_sticks_plan.md, phase 5e) ----------------------
-// The record BOX stick set as its own source + line layer: geometry, landing and nightly status,
-// no forecast and no econ. Dashed so it never reads as a Novi stick; a stick the nightly has taken
-// out (producing / conflict / crowded) is faded. The tile endpoint answers nothing below zoom 10.
-export const BOX_SOURCE = "box-sticks";
-export const BOX_LINES_LAYER = "box-sticks-lines";
-export const BOX_SRC_LAYER = "box_sticks";
-export const BOX_MIN_ZOOM = 10;
-export const BOX_OUT_STATUSES = ["producing", "conflict"];
-
-export function boxStickOut(status: string | null | undefined, crowded: boolean | null | undefined): boolean {
-  return BOX_OUT_STATUSES.includes(status ?? "") || crowded === true;
-}
-
-// The tile has no basin property (one basin per URL), so the bench colors are matched for it.
-export function boxColorExpr(basin: string): ExpressionSpecification {
-  const pairs: unknown[] = [];
-  for (const [code, color] of Object.entries(BLUEOX_COLORS[basin as BasinBlueox] ?? {})) pairs.push(code, color);
-  return ["match", ["get", "formation_blueox"], ...pairs, OTHER_COLOR] as unknown as ExpressionSpecification;
-}
-
-export function boxLinesLayer(basin: string): LineLayerSpecification {
-  return {
-    id: BOX_LINES_LAYER,
-    type: "line",
-    source: BOX_SOURCE,
-    "source-layer": BOX_SRC_LAYER,
-    minzoom: BOX_MIN_ZOOM,
-    layout: { visibility: "none" },
-    paint: {
-      "line-color": boxColorExpr(basin),
-      // MVT omits NULL properties: coalesce before comparing.
-      "line-opacity": [
-        "case",
-        ["any",
-          ["in", ["coalesce", ["get", "status"], ""], ["literal", BOX_OUT_STATUSES]],
-          ["==", ["coalesce", ["get", "crowded"], false], true]],
-        0.28, 0.95,
-      ] as unknown as ExpressionSpecification,
-      "line-dasharray": [2.5, 1.5],
-      // zoom interpolation outermost (see linesLayer)
-      "line-width": ["interpolate", ["linear"], ["zoom"], BOX_MIN_ZOOM, 1.1, 14, 2.8] as unknown as ExpressionSpecification,
-    },
-  };
-}
-
-export function boxTileUrl(basin: string): string {
-  return `${window.location.origin}/api/tiles/box/{z}/{x}/{y}.mvt?${new URLSearchParams({ basin }).toString()}`;
-}
 
 // Econ tiles carry only the metrics in use (the color metric + econ ranges, sorted) for ONE
 // deck (record run only); with none in use every mode shares the plain URL, so its tiles stay

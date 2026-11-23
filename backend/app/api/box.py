@@ -30,9 +30,10 @@ back-compat; runs without by_bench (4, 6, 7) have the one WCA group.
 
   GET /api/box/meta?basin=            record run + provenance + haircut / disclosure
                                        + Steven's priced decks for that run + scope
-  GET /api/box/pad?basin=&pad_key=    one Highgrade pad: every Novi stick location's
-                                       coverage + BOX numbers vs Novi, named analogs,
-                                       forecast vs analog actuals (oil cum per 1,000 ft)
+  GET /api/box/pad?basin=&pad_key=    one Highgrade pad (pad_key = the DSU's pad_id): every
+                                       BOX stick location's coverage + BOX numbers, named
+                                       analogs, forecast vs analog actuals (oil cum per
+                                       1,000 ft). The Novi EUR columns are NULL on a BOX stick
 
 PDP-proximity layer (runs 14 and 19, D112-D116, engineering_db sql/65): a PUD with 2+
 depleted parents (>= 12 mo on production, >= 30 % alongside, inside the class envelope)
@@ -78,6 +79,7 @@ from app.box_locations import (  # noqa: F401 — re-exported: the tests import 
     box_joins,
     coverage_sql,
     econ_join,
+    map_coverage_sql,
     record_run,
 )
 from app.box_locations import (
@@ -535,25 +537,23 @@ def monthly_series(months: list[int], volumes: list[float]) -> dict[str, list[fl
 
 
 def well_forecast(session: Session, basin: str, unique_id: str) -> dict[str, Any] | None:
-    """The record run's BOX forecast for one Novi stick location (by its Novi name). None
-    when the name is no stick location (PDP); otherwise its coverage class, and for a
-    forecast location the oil + gas + water monthly series (water since sql/62, with its
-    own tier). Novi's PUD / RES tag is not read (geometry only, Michael 2026-10-21)."""
+    """The record run's BOX forecast for one stick location, by its name
+    (curated.erebor_locations.unique_id: a BOX stick's name, e.g. 10701-WCC-03). None when
+    the name is no stick location (PDP); otherwise its coverage class, and for a forecast
+    location the oil + gas + water monthly series (water since sql/62, with its own tier)."""
     run = record_run(session, basin)
     row = session.execute(
         text(f"""
-            SELECT il.stick_id, {coverage_sql('il')} AS coverage, bp.location_id, bp.lateral_ft, bp.flags,
-                   COALESCE(fb.formation_blueox, '(unmapped)') AS formation_blueox,
+            SELECT el.stick_id, {map_coverage_sql('el')} AS coverage, bp.location_id, bp.lateral_ft, bp.flags,
+                   COALESCE(el.formation_blueox, '(unmapped)') AS formation_blueox,
                    bso.eur AS oil_eur, bso.eur_per_kft AS oil_eur_per_kft,
                    bsg.eur AS gas_eur, bsg.eur_per_kft AS gas_eur_per_kft,
                    bsw.eur AS water_eur, bsw.eur_per_kft AS water_eur_per_kft, bsw.tier AS water_tier,
                    bsw.params->>'source' AS water_source
-            FROM curated.intel_locations il
-            LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = il.stick_id
-            LEFT JOIN curated.reconciled_inventory rec ON rec.stick_id = il.stick_id
-            {box_joins('il')}
-            WHERE il.basin = :basin AND il.unique_id = :name AND il.category <> 'PDP'
-            ORDER BY il.stick_id LIMIT 1
+            FROM curated.erebor_locations el
+            {box_joins('el', bench='el.formation_blueox')}
+            WHERE el.basin = :basin AND el.unique_id = :name AND el.category <> 'PDP'
+            ORDER BY el.stick_id LIMIT 1
         """),
         {"basin": basin, "name": unique_id, "box_run": run["run_id"]},
     ).mappings().first()
@@ -633,9 +633,9 @@ def pad(basin: str = _BASIN, pad_key: str = Query(...), session: Session = Depen
     p = {"basin": basin, "pad_key": pad_key, "box_run": run["run_id"]}
     locs = session.execute(
         text(f"""
-            SELECT il.stick_id, il.unique_id, COALESCE(fb.formation_blueox, '(unmapped)') AS formation_blueox,
-                   il.ll_ft, il.oil_eur AS novi_oil_eur, il.gas_eur AS novi_gas_eur, rec.status AS recon_status,
-                   {coverage_sql('il')} AS coverage,
+            SELECT el.stick_id, el.unique_id, COALESCE(el.formation_blueox, '(unmapped)') AS formation_blueox,
+                   el.ll_ft, el.oil_eur AS novi_oil_eur, el.gas_eur AS novi_gas_eur, el.recon_status,
+                   {map_coverage_sql('el')} AS coverage,
                    bp.location_id, bp.lateral_ft, bp.completed_lateral_ft, bp.planned_spacing_ft,
                    bp.spacing_source, bp.search_mode, bp.radius_mi, bp.radius_class, bp.n_analogs, bp.flags,
                    bso.eur AS oil_eur, bso.eur_raw AS oil_eur_raw, bso.eur_haircut AS oil_haircut,
@@ -651,13 +651,10 @@ def pad(basin: str = _BASIN, pad_key: str = Query(...), session: Session = Depen
                    bpp.n_parents_total AS prox_n_parents, bpp.flanked_same AS prox_flanked_same,
                    bpp.flanked_topfill AS prox_flanked_topfill, bpp.flanked_underfill AS prox_flanked_underfill,
                    bpp.n_permit_parents AS prox_n_permit_parents, bpp.n_recent_producers AS prox_n_recent_producers
-            FROM curated.intel_locations il
-            JOIN curated.intel_pad_member pm ON pm.stick_id = il.stick_id AND pm.pad_key = :pad_key
-            LEFT JOIN curated.intel_formation_blueox fb ON fb.stick_id = il.stick_id
-            LEFT JOIN curated.reconciled_inventory rec ON rec.stick_id = il.stick_id
-            {box_joins('il')}
-            WHERE il.basin = :basin AND il.category <> 'PDP'
-            ORDER BY formation_blueox, il.stick_id
+            FROM curated.erebor_locations el
+            {box_joins('el', bench='el.formation_blueox')}
+            WHERE el.basin = :basin AND el.category <> 'PDP' AND el.pad_id::text = :pad_key
+            ORDER BY formation_blueox, el.stick_id
         """),
         p,
     ).mappings().all()

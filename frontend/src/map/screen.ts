@@ -33,7 +33,7 @@ export const rangeMetricInfo = (m: RangeMetric) => RANGE_METRICS.find((x) => x.v
 export const isEconMetric = (m: RangeMetric): m is EconMetric => ECON_METRICS.some((x) => x.value === m);
 export const activeRanges = (rs: MapRange[]) => rs.filter((r) => r.lo != null || r.hi != null);
 
-// Every class a Novi stick location without a BOX forecast can carry (shown grey by class).
+// Every class a BOX stick location without a BOX forecast can carry (shown grey by class).
 export const NOT_COVERED_CLASSES = MAP_COVERAGE_ORDER.filter((k) => !FORECAST_COVERAGE.includes(k));
 
 // The tile property of a range metric (api/tiles: EUR per ft rounded to 0.1, econ to 0.01).

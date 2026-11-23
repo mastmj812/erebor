@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { fetchHighgradeGunbarrel, fmtHgValue, hgMetricLabel, type HighgradeMetric } from "../api/highgrade";
-import { useMapStore } from "../store";
+import { useMapStore , type GunbarrelWell } from "../store";
 import { BoxWorkup } from "./BoxWorkup";
 import { PadChart } from "./GunbarrelView";
 
@@ -102,13 +102,16 @@ export function HighgradeGunbarrelModal() {
     e.preventDefault();
   };
 
-  const colored = data?.wells.filter((w) => w.in_filter).length ?? 0;
+  // counts are sticks / wells, not points: a U-turn BOX stick is drawn as two legs
+  const ids = (ws: GunbarrelWell[]) => new Set(ws.map((w) => w.stick_id)).size;
+  const total = data ? ids(data.wells) : 0;
+  const colored = data ? ids(data.wells.filter((w) => w.in_filter)) : 0;
 
   return (
     <div className="floatwin hg-gb-win" style={{ left: pos.x, top: pos.y }}>
       <div className="win-head" onMouseDown={onHeadDown}>
         <span className="win-title">
-          ⠿ {pad}{data ? ` · ${data.well_count} well${data.well_count === 1 ? "" : "s"}` : ""}
+          ⠿ {data && data.pad_name !== pad ? `${data.pad_name} (DSU ${pad})` : `DSU ${pad}`}{data ? ` · ${total} well${total === 1 ? "" : "s"} / location${total === 1 ? "" : "s"}` : ""}
         </span>
         <button className="hg-gb-close" aria-label="Close"
           onMouseDown={(e) => e.stopPropagation()} onClick={close}>×</button>
@@ -134,10 +137,10 @@ export function HighgradeGunbarrelModal() {
         )}
       </div>
       <div className="hg-gb-foot">
-        ○ location &nbsp; ● PDP &nbsp; color = bench &nbsp;·&nbsp; grey/dashed = PDP or off the current screen
+        ○ BOX stick (one per leg of a U-turn) &nbsp; ● PDP &nbsp; color = bench &nbsp;·&nbsp; grey/dashed = PDP or off the current screen
         &nbsp;·&nbsp; BOX value blank = no BOX forecast (never zero)
         {data && data.wells.length > 0 && (
-          <> &nbsp;·&nbsp; {colored} of {data.well_count} match the screen</>
+          <> &nbsp;·&nbsp; {colored} of {total} match the screen</>
         )}
       </div>
     </div>

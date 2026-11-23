@@ -11,10 +11,12 @@
   * GET  /production/well        : one well's Novi forecast stream + Arps tail to 50 yr
     (the comparison curve), plus its BOX record-run forecast under `box`.
 
-Forecast/Arps are keyed by novi_wellname (= PUD/RES Unique ID). /well also carries the
-BOX record run's forecast for that PUD when one exists (app/api/box.well_forecast). PDP sticks are
-API-keyed and absent from the Novi forecast, so they don't contribute here (their
-actuals live in curated.production — a later addition if wanted).
+Novi's forecast / Arps are keyed by novi_wellname (a NOVI stick's Unique ID). Since the BOX
+sticks cutover a location is a BOX stick, whose name (e.g. 10701-WCC-03) is no Novi well
+name: /well then returns an EMPTY Novi comparison (`has_forecast` false, empty series —
+not an error) and the BOX record run's forecast for that stick under `box`
+(app/api/box.well_forecast). PDP sticks are API-keyed and absent from both (their actuals
+live in curated.production — a later addition if wanted).
 """
 
 from __future__ import annotations
@@ -215,9 +217,11 @@ def well(
     basin: Literal["delaware", "midland"] = Query(...),
     session: Session = Depends(get_session),
 ) -> dict:
-    """One well's forecast stream + the Arps tail evaluated to 50 yr, plus the BOX
-    record run's forecast for the same PUD under `box` (None for a non-PUD; for a PUD
-    BOX does not cover, just its coverage class — shown, never zero)."""
+    """One well's Novi forecast stream + the Arps tail evaluated to 50 yr, plus the BOX
+    record run's forecast for the same location under `box` (None for a name that is no
+    stick location; for a location BOX does not cover, just its coverage class — shown,
+    never zero). A BOX stick has no Novi curve: `has_forecast` is false and every Novi
+    series is empty."""
     fc = session.execute(
         text("""
             SELECT ip_day, oil, gas, water FROM curated.intel_forecast

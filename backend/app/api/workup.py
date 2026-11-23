@@ -2,8 +2,9 @@
 record-run forecast was built, rendered on demand from box.* (D80: the database is the
 record; this is a render). Read-only, like the rest of erebor.
 
-  GET /api/box/location?basin=&stick_id=   (stick_id > 0: a Novi stick location; PDP rows
-                                            carry -(api10) and have no BOX forecast, rule 8)
+  GET /api/box/location?basin=&stick_id=   (stick_id > 0: a BOX stick location, its BOX
+                                            location id; PDP rows carry -(api10) and have
+                                            no BOX forecast, rule 8)
 
 What it answers for the clicked location:
   * the build chain, per stream — reproduces the stored EUR exactly (verified live on all
@@ -187,6 +188,7 @@ def _clean(v: Any) -> Any:
 # ---------------------------------------------------------------------------
 _LOC_SQL = f"""
 SELECT w.stick_id, w.unique_id, w.formation_blueox, w.operator, w.ll_ft, w.tvd, w.pad_name,
+       w.pad_id, w.recon_status,
        {map_coverage_sql('w')} AS coverage,
        bp.location_id, bp.lateral_ft, bp.completed_lateral_ft, bp.planned_spacing_ft, bp.spacing_source,
        bp.search_mode, bp.radius_mi, bp.radius_class, bp.n_analogs, bp.short_lateral, bp.flags, bp.extent_id,
@@ -280,7 +282,7 @@ def location(
     r = run["run_id"]
     row = session.execute(text(_LOC_SQL), {"basin": basin, "sid": stick_id, "box_run": r}).mappings().first()
     if row is None:
-        raise HTTPException(404, "no Novi stick location with that id in this basin")
+        raise HTTPException(404, "no BOX stick location with that id in this basin")
     loc = {k: v for k, v in dict(row).items() if not k.startswith("prox_") and k != "geom"}
     loc["tier"] = TIER_OF.get(loc["coverage"])
     groups = run_groups(run)

@@ -10,18 +10,11 @@ import layers from "protomaps-themes-base";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import {
-  BOX_LINES_LAYER,
-  BOX_MIN_ZOOM,
-  BOX_SOURCE,
   INTEL_SOURCE,
   LINES_LAYER,
   LINES_SRC_LAYER,
   POINTS_LAYER,
   POINTS_SRC_LAYER,
-  boxColorExpr,
-  boxLinesLayer,
-  boxStickOut,
-  boxTileUrl,
   colorExpr,
   linesLayer,
   pointsLayer,
@@ -29,7 +22,10 @@ import {
   tileUrl,
 } from "./map/sticksLayers";
 import { tileEconMetrics } from "./map/screen";
-import { ECON_METRICS, EUR_UNIT, MAP_COVERAGE_LABELS, MAP_COVERAGE_ORDER, TIER_OF_COVERAGE, deckLabel, type EconMetric } from "./api/boxMap";
+import {
+  BOX_STICK_OUT, BOX_STICK_STATUSES, ECON_METRICS, EUR_UNIT, MAP_COVERAGE_LABELS, MAP_COVERAGE_ORDER, TIER_OF_COVERAGE, deckLabel,
+  type EconMetric,
+} from "./api/boxMap";
 import { DrawingController, bboxToPolygon, type GeoJsonPolygon } from "./map/drawing";
 import { choroplethFillColor, padScale } from "./map/highgradeColors";
 import { accuracyGridFill, accuracyLineColor } from "./map/accuracyColors";
@@ -178,7 +174,6 @@ export function MapView() {
   const popupRef = useRef<maplibregl.Popup | null>(null);
   const drawerRef = useRef<DrawingController | null>(null);
   const [styleLoaded, setStyleLoaded] = useState(false);
-  const boxBasinRef = useRef<string | null>(null);   // basin the BOX sticks source was built for
 
   const basin = useMapStore((s) => s.basin);
   const overlays = useMapStore((s) => s.overlays);
@@ -200,7 +195,6 @@ export function MapView() {
   const mapDeck = useMapStore((s) => s.mapDeck);
   const mapLegend = useMapStore((s) => s.mapLegend);
   const showPdp = useMapStore((s) => s.showPdp);
-  const showBoxSticks = useMapStore((s) => s.showBoxSticks);
   const notCoveredShown = useMapStore((s) => s.notCoveredShown);
   const tierFilter = useMapStore((s) => s.tierFilter);
   const proxFilter = useMapStore((s) => s.proxFilter);
@@ -276,17 +270,6 @@ export function MapView() {
       });
       map.addLayer(linesLayer);
       map.addLayer(pointsLayer);
-
-      // BOX sticks preview: own source, hidden until the switch is on (no tile is requested
-      // for a hidden layer). Its own promoteId space: nothing here shares feature state.
-      map.addSource(BOX_SOURCE, {
-        type: "vector",
-        tiles: [boxTileUrl(useMapStore.getState().basin)],
-        minzoom: BOX_MIN_ZOOM,
-        maxzoom: 14,
-      });
-      map.addLayer(boxLinesLayer(useMapStore.getState().basin));
-      boxBasinRef.current = useMapStore.getState().basin;
 
       // Committed AOI (drawn) outline.
       map.addSource(AOI_SOURCE, { type: "geojson", data: EMPTY_FC });
@@ -474,13 +457,6 @@ export function MapView() {
         map.on("mousemove", id, onMove);
         map.on("mouseleave", id, onLeave);
       }
-      // BOX sticks preview: hover only. Never in the click query below (no workup, no profile).
-      map.on("mousemove", BOX_LINES_LAYER, (e: MapMouseEvent & { features?: MapGeoJSONFeature[] }) => {
-        const f = e.features?.[0];
-        if (!f) return;
-        popupRef.current!.setLngLat(e.lngLat).setHTML(boxPopupHtml(f.properties)).addTo(map);
-      });
-      map.on("mouseleave", BOX_LINES_LAYER, () => popupRef.current?.remove());
       // Click a stick (when not drawing) -> overlay its production profile.
       // Query a ±6px box so thin laterals / tiny points are easy to hit.
       const onMapClick = async (e: MapMouseEvent) => {
@@ -492,7 +468,7 @@ export function MapView() {
         );
         const name = feats[0]?.properties?.unique_id as string | undefined;
         if (!name) return;
-        // A Novi stick location (stick_id > 0) opens its BOX workup; PDP (-(api10)) has none.
+        // A BOX stick location (stick_id > 0) opens its BOX workup; PDP (-(api10)) has none.
         const sid = Number(feats[0]?.properties?.stick_id);
         useMapStore.getState().openWorkup(sid > 0 ? sid : null);
         try {
@@ -626,26 +602,6 @@ export function MapView() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (src as any)?.setTiles?.([tileUrl(basin, econ, econ.length ? mapDeck : null)]);
   }, [basin, econKey, mapDeck, styleLoaded]);
-
-  // -------- BOX sticks preview: tiles + bench colors follow the basin; shown on the Map tab only --------
-  useEffect(() => {
-    if (!styleLoaded) return;
-    const map = mapRef.current;
-    if (!map) return;
-    // The source is created for the basin of the moment: only a CHANGE of basin swaps its tiles
-    // (setTiles aborts whatever is in flight, so it is not called on mount).
-    if (boxBasinRef.current === basin) return;
-    boxBasinRef.current = basin;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (map.getSource(BOX_SOURCE) as any)?.setTiles?.([boxTileUrl(basin)]);
-    if (map.getLayer(BOX_LINES_LAYER)) map.setPaintProperty(BOX_LINES_LAYER, "line-color", boxColorExpr(basin));
-  }, [basin, styleLoaded]);
-  useEffect(() => {
-    if (!styleLoaded) return;
-    const map = mapRef.current;
-    if (!map || !map.getLayer(BOX_LINES_LAYER)) return;
-    map.setLayoutProperty(BOX_LINES_LAYER, "visibility", showBoxSticks && appMode === "map" ? "visible" : "none");
-  }, [showBoxSticks, appMode, styleLoaded]);
 
   // -------- BOX visibility filters on both layers --------
   useEffect(() => {
@@ -848,7 +804,7 @@ function padPopupHtml(p: Record<string, unknown>, metric: string, agg: string, e
     : "";
   return `
     <div>
-      <div class="mtt-name">${esc(p.pad_key)}</div>
+      <div class="mtt-name">${esc(p.pad_name ?? p.pad_key)}</div>
       <table class="mtt-table">
         <tr><td>${esc(metricLabel)}</td><td>${esc(valStr)}</td></tr>
         ${tierRow}
@@ -899,31 +855,6 @@ function accPopupHtml(p: Record<string, unknown>, horizon: number, stream: strin
 // Stick hover: BOX record-run view of one location (app.box_locations tile props).
 // Not covered reads "Not covered: <reason>" with no EUR rows — never a zero. Econ rows:
 // every one of Steven's metrics the tile carries (the color metric + econ ranges).
-// BOX sticks preview hover: what the generator stored for the stick and what the nightly says.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function boxPopupHtml(p: Record<string, any>): string {
-  const out = boxStickOut(p.status, p.crowded === true || p.crowded === "true");
-  const status = p.status
-    ? `${esc(String(p.status))}${p.crowded === true || p.crowded === "true" ? " · crowded" : ""}${p.matched_api10 ? ` (well ${esc(String(p.matched_api10))})` : ""}`
-    : "not judged yet";
-  const err = p.tvd_err_median_ft != null ? ` · expected error ±${fmtInt(p.tvd_err_median_ft)} ft` : "";
-  return `
-    <div>
-      <div class="mtt-name">BOX stick ${esc(String(p.stick_id))}</div>
-      <table class="mtt-table">
-        <tr><td>Type</td><td>BOX stick — PREVIEW, no forecast</td></tr>
-        <tr><td>Bench</td><td>${esc(p.formation_blueox ?? "(unmapped)")}</td></tr>
-        <tr><td>Landing</td><td>${fmtInt(p.target_tvd_ft)} ft TVD</td></tr>
-        <tr><td>Depth from</td><td>${esc(String(p.tvd_rung ?? "—"))}${err}</td></tr>
-        <tr><td>Spacing</td><td>${fmtInt(p.spacing_ft)} ft</td></tr>
-        <tr><td>Lateral</td><td>${fmtInt(p.ll_ft)} ft</td></tr>
-        <tr><td>Nightly</td><td>${status}${out ? " — taken out" : ""}</td></tr>
-        ${p.flags ? `<tr><td>Flags</td><td>${esc(String(p.flags).replaceAll(",", ", ").replaceAll("_", " "))}</td></tr>` : ""}
-        <tr><td>DSU</td><td>${esc(String(p.pad_id))}</td></tr>
-      </table>
-    </div>`;
-}
-
 function popupHtml(
   p: Record<string, unknown>,
   st: { mapLegend: { case?: { deck_id: string } | null } | null; mapDeck: string | null },
@@ -948,17 +879,28 @@ function popupHtml(
     econ = econShown.map((m) => `<tr><td>${esc(m.label)}</td><td>${Number(p[`econ_${m.value}`]).toFixed(2)} ${esc(m.unit)}</td></tr>`).join("")
       + `<tr><td></td><td style="color:#71717a">Steven${deck ? `, ${esc(deckLabel(deck))}` : ""} · display only</td></tr>`;
   }
+  // MVT omits NULL properties: a BOX stick has no operator, a stick the nightly has not judged
+  // (and every PDP) has no recon_status. Print a row only for what the tile carries.
+  const isPdp = p.category === "PDP";
+  const operator = p.operator == null || p.operator === "" ? "" : `<tr><td>Operator</td><td>${esc(p.operator)}</td></tr>`;
+  const landing = p.tvd == null ? "" : `<tr><td>Landing TVD</td><td>${fmtInt(p.tvd)} ft</td></tr>`;
+  const status = typeof p.recon_status === "string" ? p.recon_status : "";
+  const nightly = !isPdp && BOX_STICK_STATUSES.includes(status)
+    ? `<tr><td>Nightly status</td><td>${esc(status)}${BOX_STICK_OUT.includes(status) ? " — not drillable" : ""}</td></tr>`
+    : "";
   return `
     <div>
       <div class="mtt-name">${esc(p.unique_id)}</div>
       <table class="mtt-table">
-        <tr><td>Type</td><td>${p.category === "PDP" ? "producing well (PDP)" : "Novi stick location"}</td></tr>
+        <tr><td>Type</td><td>${isPdp ? "producing well (PDP)" : "BOX stick location"}</td></tr>
         <tr><td>Bench</td><td>${esc(p.formation_blueox ?? "(unmapped)")}</td></tr>
         ${boxRow}
         ${tier ? perFt("oil") + perFt("gas") + perFt("water") : ""}
         ${prox}
         ${econ}
-        <tr><td>Operator</td><td>${esc(p.operator)}</td></tr>
+        ${nightly}
+        ${operator}
+        ${landing}
         <tr><td>Lateral</td><td>${fmtInt(p.ll_ft)} ft</td></tr>
       </table>
     </div>`;

@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     tile_cache_ttl_s: int = Field(default=3600, alias="TILE_CACHE_TTL_S")
     tile_prewarm: bool = Field(default=True, alias="TILE_PREWARM")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    # SSL to the warehouse. `require` for hosted Postgres (Supabase). Only a local rehearsal
+    # database (engineering_db scripts.box_rehearsal: a throwaway container with no TLS) sets
+    # DB_SSLMODE=disable in its backend/.env.
+    db_sslmode: str = Field(default="require", alias="DB_SSLMODE")
 
 
 settings = Settings()

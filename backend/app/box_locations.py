@@ -352,6 +352,12 @@ _BOX_STICK_TILE_COLS = """k.location_id AS stick_id, k.formation_blueox, k.pad_i
          round(k.target_tvd_ft)::int AS target_tvd_ft, k.tvd_rung, round(k.tvd_err_median_ft)::int AS tvd_err_median_ft,
          round(k.spacing_ft)::int AS spacing_ft, round(k.completed_lateral_ft)::int AS ll_ft,
          s.status, s.crowded, s.matched_api10"""
+# What the map draws for a stick: its producing legs plus, on a U-turn stick, the non-producing
+# turn arc between them (box.location_stick.turn_geom; NULL on a single). One feature, every part
+# a line. The tile's spatial filter stays on legs_geom (the indexed column): a tile that holds
+# only the arc of a stick, and neither leg, does not draw it.
+_BOX_STICK_DRAWN = ("CASE WHEN k.turn_geom IS NULL THEN k.legs_geom "
+                    "ELSE ST_CollectionExtract(ST_Collect(k.legs_geom, k.turn_geom), 2) END")
 _BOX_STICK_PRED = {
     "intersects": "ST_Intersects(k.legs_geom, aoi.g)",
     "midpoint": "ST_Intersects(k.legs_geom, aoi.g) AND ST_Contains(aoi.g, ST_LineInterpolatePoint(g.geom, 0.5))",
@@ -365,14 +371,15 @@ def record_set_id(session: Session, basin: str) -> int | None:
 
 
 def box_stick_tile_sql() -> str:
-    """One MVT layer (BOX_STICK_LAYER) of the basin's record sticks: every leg, every status
-    (the client fades what the nightly took out). Binds :z :x :y :basin."""
+    """One MVT layer (BOX_STICK_LAYER) of the basin's record sticks: every leg, the turn arc of
+    a U-turn stick, every status (the client fades what the nightly took out).
+    Binds :z :x :y :basin."""
     return f"""
 WITH bounds AS (SELECT ST_TileEnvelope(:z, :x, :y) AS env)
 , mvtgeom AS (
   SELECT {_BOX_STICK_TILE_COLS},
          NULLIF(array_to_string(k.flags, ','), '') AS flags,
-         ST_AsMVTGeom(ST_Transform(k.legs_geom, 3857), (SELECT env FROM bounds), 4096, 64, true) AS geom{_BOX_STICK_FROM}
+         ST_AsMVTGeom(ST_Transform({_BOX_STICK_DRAWN}, 3857), (SELECT env FROM bounds), 4096, 64, true) AS geom{_BOX_STICK_FROM}
   -- the envelope goes to 4326, not the column to 3857: keeps the GiST index on legs_geom in play
   WHERE ST_Intersects(k.legs_geom, ST_Transform((SELECT env FROM bounds), 4326))
 )

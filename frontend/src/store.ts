@@ -86,8 +86,22 @@ export interface GunbarrelWell {
   in_filter?: boolean;          // set only by the Highgrade per-DSU gunbarrel
   metric_value?: number | null; // value of the selected screen metric (Highgrade)
 }
+// BOX sticks PREVIEW (engineering_db box_sticks_plan.md, phase 5e): one point per LEG of a record
+// BOX stick, at its landing TVD, projected onto the pad's own frame. Geometry + landing + nightly
+// status only: a BOX stick has no forecast and no econ, and is never culled or opened.
+export interface BoxStickPoint {
+  stick_id: number; well_name: string; category: "BOX";
+  formation_blueox: string; pad_id: number; leg_no: number; n_legs: number;
+  tvd: number; tvd_rung: string; tvd_err_median_ft: number | null;
+  spacing_ft: number; ll_ft: number; flags: string[];
+  status: string | null;        // open | permitted | pending | producing | conflict; null = not judged yet
+  crowded: boolean | null; matched_api10: string | null;
+  offset_ft: number;
+}
 export interface GunbarrelPad {
   pad_name: string; well_count: number;
+  box_sticks?: BoxStickPoint[]; box_stick_count?: number;   // only when requested (preview switch on)
+  frame_from?: "selection" | "box_sticks";
   // Compass letters for the offset axis ends (suite-wide read: W→E for
   // ~N-S lateral sets, N→S for ~E-W). Absent on pre-axis payloads.
   axis_left?: string; axis_right?: string;
@@ -211,6 +225,7 @@ interface MapState {
   mapDeck: string | null;       // color mode "econ": Steven's deck (null = default WTI 70 / HH 3)
   mapLegend: BoxLegend | null;  // ramp breaks for the active value mode (/api/box/legend)
   showPdp: boolean;             // map: producing context
+  showBoxSticks: boolean;       // PREVIEW: the record BOX stick set on the map (zoom 10+) and in the gunbarrel
   notCoveredShown: string[];    // map: classes of locations WITHOUT a BOX forecast drawn grey (empty = hidden, the default)
   tierFilter: Tier[];           // map: forecast tiers shown
   proxFilter: ProxGroup[];      // map: PDP-proximity outcome groups (empty = all)
@@ -265,6 +280,7 @@ interface MapState {
   setAccVintages: (v: AccVintages | null) => void;
   setBasin: (b: "delaware" | "midland") => void;
   toggleOverlay: (k: OverlayKey) => void;
+  setShowBoxSticks: (b: boolean) => void;
   loadBasins: () => Promise<void>;
   setDrawMode: (m: DrawMode) => void;
   setSelectionRule: (r: SelectionRule) => void;
@@ -353,6 +369,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   mapDeck: null,
   mapLegend: null,
   showPdp: true,
+  showBoxSticks: false,
   notCoveredShown: [],
   tierFilter: ["validated", "provisional"],
   proxFilter: [],
@@ -470,6 +487,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   setMapDeck: (d) => set({ mapDeck: d, mapLegend: null }),
   setMapLegend: (l) => set({ mapLegend: l }),
   setShowPdp: (b) => set({ showPdp: b }),
+  setShowBoxSticks: (b) => set({ showBoxSticks: b }),
   setNotCoveredShown: (classes) => set({ notCoveredShown: classes }),
   toggleNotCovered: (cls) =>
     set((s) => ({ notCoveredShown: s.notCoveredShown.includes(cls) ? s.notCoveredShown.filter((x) => x !== cls) : [...s.notCoveredShown, cls] })),

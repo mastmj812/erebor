@@ -325,3 +325,74 @@ def econ_cases(session: Session, run_id: int) -> list[dict[str, Any]]:
 def econ_case(session: Session, run_id: int, deck: str | None) -> dict[str, Any] | None:
     """The record run's econ case for `deck` (see pick_econ_case); None = not priced."""
     return pick_econ_case(econ_cases(session, run_id), deck)
+
+
+# --- BOX sticks preview (engineering_db docs/box_sticks_plan.md, phase 5e) ------------------
+# Geometry only. The record BOX stick set of a basin (box.location_set.is_record, engineering_db
+# sql/73) with the nightly reconciliation status (curated.box_location_status, sql/74). A BOX
+# stick is NOT a location of the record forecast run: it has no forecast and no econ, and
+# nothing above this line reads it. Ids are box.location.location_id (>= 10,000,001): they
+# never collide with a Novi stick_id (about 1.5 to 1.8 million) or a PDP row (negative).
+BOX_STICK_MIN_Z = 10          # below this a tile carries the whole basin: > 1 MB for an unreadable picture
+BOX_STICK_LAYER = "box_sticks"
+BOX_STICK_STATUSES: tuple[str, ...] = ("open", "permitted", "pending", "producing", "conflict")
+
+# k = box.location_stick, s = curated.box_location_status (LEFT: a stick the nightly has not
+# judged yet carries NULL status, never a guessed one).
+_BOX_STICK_FROM = """
+  FROM box.location_stick k
+  JOIN box.location_set t ON t.set_id = k.set_id AND t.is_record AND t.basin = :basin
+  LEFT JOIN curated.box_location_status s ON s.location_id = k.location_id AND s.set_id = k.set_id"""
+_BOX_STICK_COLS = """k.location_id AS stick_id, k.well_name, k.formation_blueox, k.pad_id, k.n_legs,
+         k.target_tvd_ft, k.tvd_rung, k.tvd_err_median_ft, k.spacing_ft, k.completed_lateral_ft AS ll_ft,
+         s.status, s.crowded, s.matched_api10"""
+# The tile carries what the layer paints and the hover shows, in whole feet: a worst-case zoom-10
+# tile holds ~7,000 sticks, and names + full-precision doubles put it past 500 KiB.
+_BOX_STICK_TILE_COLS = """k.location_id AS stick_id, k.formation_blueox, k.pad_id,
+         round(k.target_tvd_ft)::int AS target_tvd_ft, k.tvd_rung, round(k.tvd_err_median_ft)::int AS tvd_err_median_ft,
+         round(k.spacing_ft)::int AS spacing_ft, round(k.completed_lateral_ft)::int AS ll_ft,
+         s.status, s.crowded, s.matched_api10"""
+_BOX_STICK_PRED = {
+    "intersects": "ST_Intersects(k.legs_geom, aoi.g)",
+    "midpoint": "ST_Intersects(k.legs_geom, aoi.g) AND ST_Contains(aoi.g, ST_LineInterpolatePoint(g.geom, 0.5))",
+}
+
+
+def record_set_id(session: Session, basin: str) -> int | None:
+    """set_id of `basin`'s record BOX stick set (None when none is marked), cached for _TTL_S."""
+    return _cached(("record_set_id", basin), lambda: session.execute(
+        text("SELECT set_id FROM box.location_set WHERE is_record AND basin = :b"), {"b": basin}).scalar())
+
+
+def box_stick_tile_sql() -> str:
+    """One MVT layer (BOX_STICK_LAYER) of the basin's record sticks: every leg, every status
+    (the client fades what the nightly took out). Binds :z :x :y :basin."""
+    return f"""
+WITH bounds AS (SELECT ST_TileEnvelope(:z, :x, :y) AS env)
+, mvtgeom AS (
+  SELECT {_BOX_STICK_TILE_COLS},
+         NULLIF(array_to_string(k.flags, ','), '') AS flags,
+         ST_AsMVTGeom(ST_Transform(k.legs_geom, 3857), (SELECT env FROM bounds), 4096, 64, true) AS geom{_BOX_STICK_FROM}
+  -- the envelope goes to 4326, not the column to 3857: keeps the GiST index on legs_geom in play
+  WHERE ST_Intersects(k.legs_geom, ST_Transform((SELECT env FROM bounds), 4326))
+)
+SELECT ST_AsMVT(mvtgeom.*, '{BOX_STICK_LAYER}', 4096, 'geom')
+FROM mvtgeom WHERE geom IS NOT NULL
+"""
+
+
+def box_stick_gunbarrel_sql(rule: str) -> str:
+    """The basin's record sticks in an AOI, ONE ROW PER LEG (a U-turn stick has two, running
+    opposite ways), with the leg's ends and midpoint for the caller's projection.
+    Binds :aoi :basin. `rule` is the selection rule of api/gunbarrel.py."""
+    return f"""
+            WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g)
+            SELECT {_BOX_STICK_COLS}, k.flags, g.path[1] AS leg_no,
+                   ST_X(ST_LineInterpolatePoint(g.geom, 0.5)) AS mx, ST_Y(ST_LineInterpolatePoint(g.geom, 0.5)) AS my,
+                   ST_X(ST_StartPoint(g.geom)) AS sx, ST_Y(ST_StartPoint(g.geom)) AS sy,
+                   ST_X(ST_EndPoint(g.geom))   AS ex, ST_Y(ST_EndPoint(g.geom))   AS ey{_BOX_STICK_FROM}
+            CROSS JOIN aoi
+            CROSS JOIN LATERAL ST_Dump(k.legs_geom) g
+            WHERE {_BOX_STICK_PRED[rule]}
+            ORDER BY k.location_id, g.path[1]
+        """

@@ -44,7 +44,17 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Res
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.box_locations import ECON_METRICS, box_joins, econ_case, econ_join, record_run_id, tile_columns
+from app.box_locations import (
+    BOX_STICK_MIN_Z,
+    ECON_METRICS,
+    box_joins,
+    box_stick_tile_sql,
+    econ_case,
+    econ_join,
+    record_run_id,
+    record_set_id,
+    tile_columns,
+)
 from app.config import settings
 from app.db import SessionLocal, get_session
 from app.tile_cache import TileCache, tiles_covering
@@ -140,6 +150,47 @@ def tile(
         headers["Content-Encoding"] = "gzip"
         return Response(content=gz, media_type=MVT_CONTENT_TYPE, headers=headers)
     return Response(content=gzip.decompress(gz), media_type=MVT_CONTENT_TYPE, headers=headers)
+
+
+@router.get("/box/{z}/{x}/{y}.mvt")
+def box_stick_tile(
+    request: Request,
+    z: int = Path(ge=0, le=22),
+    x: int = Path(ge=0),
+    y: int = Path(ge=0),
+    basin: str = Query(..., pattern="^(delaware|midland)$"),
+    session: Session = Depends(get_session),
+) -> Response:
+    """BOX sticks PREVIEW (app.box_locations, phase 5e): the basin's record stick set as one
+    line layer `box_sticks`, geometry + landing + nightly status, no forecast and no econ.
+    Below BOX_STICK_MIN_Z the answer is an empty tile and no query runs. Shares the tile
+    cache under its own key namespace; never prewarmed."""
+    if x >= (1 << z) or y >= (1 << z):
+        raise HTTPException(status_code=400, detail="tile coords out of range for z")
+    headers = {"Cache-Control": "public, max-age=60", "Vary": "Accept-Encoding"}
+    if z < BOX_STICK_MIN_Z:
+        return Response(status_code=204, headers=headers)
+    set_id = record_set_id(session, basin)
+    if set_id is None:
+        return Response(status_code=204, headers=headers)
+    gz, hit = _cache.get_or_build(
+        box_stick_tile_key(basin, z, x, y, set_id),
+        lambda: _fetch_tile(session, box_stick_tile_sql(), {"z": z, "x": x, "y": y, "basin": basin}),
+    )
+    headers["X-Tile-Cache"] = "hit" if hit else "miss"
+    if not gz:
+        return Response(status_code=204, headers=headers)
+    if "gzip" in request.headers.get("accept-encoding", "").lower():
+        headers["Content-Encoding"] = "gzip"
+        return Response(content=gz, media_type=MVT_CONTENT_TYPE, headers=headers)
+    return Response(content=gzip.decompress(gz), media_type=MVT_CONTENT_TYPE, headers=headers)
+
+
+def box_stick_tile_key(basin: str, z: int, x: int, y: int, set_id: int) -> tuple:
+    """Cache key of a BOX stick tile. The leading literal keeps it apart from _tile_key's
+    tuples (those start with the basin name); the record set id makes a record flip miss.
+    The nightly status ages out by the cache TTL, like the warehouse rows of every tile."""
+    return ("box_sticks", basin, z, x, y, set_id)
 
 
 # --- tile bytes, cache key, prewarm -------------------------------------------------

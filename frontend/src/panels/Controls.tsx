@@ -32,6 +32,8 @@ export function Controls() {
   const setBasin = useMapStore((s) => s.setBasin);
   const showPdp = useMapStore((s) => s.showPdp);
   const setShowPdp = useMapStore((s) => s.setShowPdp);
+  const showBoxSticks = useMapStore((s) => s.showBoxSticks);
+  const setShowBoxSticks = useMapStore((s) => s.setShowBoxSticks);
   const notCoveredShown = useMapStore((s) => s.notCoveredShown);
   const setNotCoveredShown = useMapStore((s) => s.setNotCoveredShown);
   const toggleNotCovered = useMapStore((s) => s.toggleNotCovered);
@@ -195,6 +197,20 @@ export function Controls() {
         <input id="show-pdp" type="checkbox" checked={showPdp} onChange={() => setShowPdp(!showPdp)} />
         <label htmlFor="show-pdp">PDP (producing context)</label>
       </div>
+      <div className="row">
+        <input id="show-box-sticks" type="checkbox" checked={showBoxSticks} onChange={() => setShowBoxSticks(!showBoxSticks)} />
+        <label htmlFor="show-box-sticks">BOX sticks — PREVIEW (zoom 10+)</label>
+      </div>
+      {showBoxSticks && (
+        <div id="box-sticks-legend" style={{ fontSize: 11, color: "#71717a", margin: "0 0 6px 22px", lineHeight: 1.35 }}>
+          <svg width="34" height="8" style={{ verticalAlign: "middle", marginRight: 4 }}>
+            <line x1="1" y1="4" x2="33" y2="4" stroke="#52525b" strokeWidth="2" strokeDasharray="5 3" />
+          </svg>
+          dashed, bench color = a generated BOX stick. Faded = taken out by the nightly
+          (producing, conflict or crowded). Geometry and landing depth only: no forecast, no econ.
+          Counts, Highgrade and the workup still read the Novi sticks.
+        </div>
+      )}
       <div className="row">
         <input
           id="show-nc" type="checkbox" checked={notCoveredShown.length > 0}

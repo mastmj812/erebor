@@ -10,11 +10,18 @@ import layers from "protomaps-themes-base";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import {
+  BOX_LINES_LAYER,
+  BOX_MIN_ZOOM,
+  BOX_SOURCE,
   INTEL_SOURCE,
   LINES_LAYER,
   LINES_SRC_LAYER,
   POINTS_LAYER,
   POINTS_SRC_LAYER,
+  boxColorExpr,
+  boxLinesLayer,
+  boxStickOut,
+  boxTileUrl,
   colorExpr,
   linesLayer,
   pointsLayer,
@@ -171,6 +178,7 @@ export function MapView() {
   const popupRef = useRef<maplibregl.Popup | null>(null);
   const drawerRef = useRef<DrawingController | null>(null);
   const [styleLoaded, setStyleLoaded] = useState(false);
+  const boxBasinRef = useRef<string | null>(null);   // basin the BOX sticks source was built for
 
   const basin = useMapStore((s) => s.basin);
   const overlays = useMapStore((s) => s.overlays);
@@ -192,6 +200,7 @@ export function MapView() {
   const mapDeck = useMapStore((s) => s.mapDeck);
   const mapLegend = useMapStore((s) => s.mapLegend);
   const showPdp = useMapStore((s) => s.showPdp);
+  const showBoxSticks = useMapStore((s) => s.showBoxSticks);
   const notCoveredShown = useMapStore((s) => s.notCoveredShown);
   const tierFilter = useMapStore((s) => s.tierFilter);
   const proxFilter = useMapStore((s) => s.proxFilter);
@@ -267,6 +276,17 @@ export function MapView() {
       });
       map.addLayer(linesLayer);
       map.addLayer(pointsLayer);
+
+      // BOX sticks preview: own source, hidden until the switch is on (no tile is requested
+      // for a hidden layer). Its own promoteId space: nothing here shares feature state.
+      map.addSource(BOX_SOURCE, {
+        type: "vector",
+        tiles: [boxTileUrl(useMapStore.getState().basin)],
+        minzoom: BOX_MIN_ZOOM,
+        maxzoom: 14,
+      });
+      map.addLayer(boxLinesLayer(useMapStore.getState().basin));
+      boxBasinRef.current = useMapStore.getState().basin;
 
       // Committed AOI (drawn) outline.
       map.addSource(AOI_SOURCE, { type: "geojson", data: EMPTY_FC });
@@ -454,6 +474,13 @@ export function MapView() {
         map.on("mousemove", id, onMove);
         map.on("mouseleave", id, onLeave);
       }
+      // BOX sticks preview: hover only. Never in the click query below (no workup, no profile).
+      map.on("mousemove", BOX_LINES_LAYER, (e: MapMouseEvent & { features?: MapGeoJSONFeature[] }) => {
+        const f = e.features?.[0];
+        if (!f) return;
+        popupRef.current!.setLngLat(e.lngLat).setHTML(boxPopupHtml(f.properties)).addTo(map);
+      });
+      map.on("mouseleave", BOX_LINES_LAYER, () => popupRef.current?.remove());
       // Click a stick (when not drawing) -> overlay its production profile.
       // Query a ±6px box so thin laterals / tiny points are easy to hit.
       const onMapClick = async (e: MapMouseEvent) => {
@@ -599,6 +626,26 @@ export function MapView() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (src as any)?.setTiles?.([tileUrl(basin, econ, econ.length ? mapDeck : null)]);
   }, [basin, econKey, mapDeck, styleLoaded]);
+
+  // -------- BOX sticks preview: tiles + bench colors follow the basin; shown on the Map tab only --------
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    // The source is created for the basin of the moment: only a CHANGE of basin swaps its tiles
+    // (setTiles aborts whatever is in flight, so it is not called on mount).
+    if (boxBasinRef.current === basin) return;
+    boxBasinRef.current = basin;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (map.getSource(BOX_SOURCE) as any)?.setTiles?.([boxTileUrl(basin)]);
+    if (map.getLayer(BOX_LINES_LAYER)) map.setPaintProperty(BOX_LINES_LAYER, "line-color", boxColorExpr(basin));
+  }, [basin, styleLoaded]);
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map || !map.getLayer(BOX_LINES_LAYER)) return;
+    map.setLayoutProperty(BOX_LINES_LAYER, "visibility", showBoxSticks && appMode === "map" ? "visible" : "none");
+  }, [showBoxSticks, appMode, styleLoaded]);
 
   // -------- BOX visibility filters on both layers --------
   useEffect(() => {
@@ -852,6 +899,31 @@ function accPopupHtml(p: Record<string, unknown>, horizon: number, stream: strin
 // Stick hover: BOX record-run view of one location (app.box_locations tile props).
 // Not covered reads "Not covered: <reason>" with no EUR rows — never a zero. Econ rows:
 // every one of Steven's metrics the tile carries (the color metric + econ ranges).
+// BOX sticks preview hover: what the generator stored for the stick and what the nightly says.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function boxPopupHtml(p: Record<string, any>): string {
+  const out = boxStickOut(p.status, p.crowded === true || p.crowded === "true");
+  const status = p.status
+    ? `${esc(String(p.status))}${p.crowded === true || p.crowded === "true" ? " · crowded" : ""}${p.matched_api10 ? ` (well ${esc(String(p.matched_api10))})` : ""}`
+    : "not judged yet";
+  const err = p.tvd_err_median_ft != null ? ` · expected error ±${fmtInt(p.tvd_err_median_ft)} ft` : "";
+  return `
+    <div>
+      <div class="mtt-name">BOX stick ${esc(String(p.stick_id))}</div>
+      <table class="mtt-table">
+        <tr><td>Type</td><td>BOX stick — PREVIEW, no forecast</td></tr>
+        <tr><td>Bench</td><td>${esc(p.formation_blueox ?? "(unmapped)")}</td></tr>
+        <tr><td>Landing</td><td>${fmtInt(p.target_tvd_ft)} ft TVD</td></tr>
+        <tr><td>Depth from</td><td>${esc(String(p.tvd_rung ?? "—"))}${err}</td></tr>
+        <tr><td>Spacing</td><td>${fmtInt(p.spacing_ft)} ft</td></tr>
+        <tr><td>Lateral</td><td>${fmtInt(p.ll_ft)} ft</td></tr>
+        <tr><td>Nightly</td><td>${status}${out ? " — taken out" : ""}</td></tr>
+        ${p.flags ? `<tr><td>Flags</td><td>${esc(String(p.flags).replaceAll(",", ", ").replaceAll("_", " "))}</td></tr>` : ""}
+        <tr><td>DSU</td><td>${esc(String(p.pad_id))}</td></tr>
+      </table>
+    </div>`;
+}
+
 function popupHtml(
   p: Record<string, unknown>,
   st: { mapLegend: { case?: { deck_id: string } | null } | null; mapDeck: string | null },

@@ -40,6 +40,9 @@ def test_tile_sql_keeps_the_index_in_play_and_binds_only_the_tile_and_basin():
     sql = bl.box_stick_tile_sql()
     assert "ST_Intersects(k.legs_geom, ST_Transform((SELECT env FROM bounds), 4326))" in sql
     assert f"'{bl.BOX_STICK_LAYER}'" in sql and bl.BOX_STICK_LAYER == "box_sticks"
+    # a U-turn stick is drawn with its turn arc; the index filter stays on the legs
+    assert "CASE WHEN k.turn_geom IS NULL THEN k.legs_geom ELSE ST_CollectionExtract(ST_Collect(k.legs_geom, k.turn_geom), 2) END" in sql
+    assert "turn_geom" not in bl.box_stick_gunbarrel_sql("intersects")   # the gunbarrel is the producing legs only
     session = SimpleNamespace(get_bind=lambda: SimpleNamespace(dialect=pg_psycopg.dialect()))
     stmt, args = tiles._driver_sql(session, sql, {"z": 11, "x": 434, "y": 831, "basin": "delaware"})
     assert set(args) == {"z", "x", "y", "basin"} and not re.search(r"(?<!:):[a-z_]+\b", stmt)

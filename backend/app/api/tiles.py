@@ -1,6 +1,7 @@
 """Vector tiles for the erebor map, rendered server-side by PostGIS from
-curated.erebor_locations (PUD/RES = the Novi location universe; PDP = curated
-producing horizontals — see sql/22 in engineering_db) with the BOX record run's
+curated.erebor_locations (undrilled = the record BOX stick set, one line per stick,
+a U-turn stick with its turn arc; PDP = curated producing horizontals — see sql/22
+in engineering_db) with the BOX record run's
 per-location projection joined on (app.box_locations — the one module that reads
 BOX attributes).
 
@@ -8,8 +9,10 @@ BOX attributes).
   * z >= 9  -> intel_lines   (full wellstick LINESTRING)
 
 basin is required (the map shows one basin at a time). Every category ships in
-every tile; the frontend filters client-side (no refetch). Novi supplies only the
-stick geometry: `category` is PDP | LOCATION (Novi's PUD / RES tag is not shipped).
+every tile; the frontend filters client-side (no refetch). `category` is
+PDP | LOCATION (a location = a BOX stick). Every row carries its landing `tvd` (whole
+feet) and, when the nightly reconciliation has judged the stick, `recon_status`
+(open / permitted / pending / conflict / crowded; MVT omits it when NULL).
 BOX properties per stick: `coverage` (NULL on PDP — producing context, never
 forecast; app.box_locations.map_coverage_sql), `water_tier`, `oil_eur_ft` / `gas_eur_ft` / `water_eur_ft` (per FOOT),
 `prox_outcome`, `prox_factor` (only when it is not exactly 1: D113 factors sit <= 1,
@@ -45,14 +48,11 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.box_locations import (
-    BOX_STICK_MIN_Z,
     ECON_METRICS,
     box_joins,
-    box_stick_tile_sql,
     econ_case,
     econ_join,
     record_run_id,
-    record_set_id,
     tile_columns,
 )
 from app.config import settings
@@ -89,13 +89,17 @@ WITH bounds AS (SELECT ST_TileEnvelope(:z, :x, :y) AS env)
   SELECT
     w.stick_id,
     w.unique_id,
-    -- PDP vs a Novi stick location; Novi's own PUD / RES tag is not shipped (only the
-    -- stick geometry comes from Novi — classification is BOX's `coverage`).
+    -- PDP vs a BOX stick location; the warehouse category itself is not shipped
+    -- (classification is BOX's `coverage`).
     CASE WHEN w.category = 'PDP' THEN 'PDP' ELSE 'LOCATION' END AS category,
     w.formation_blueox,
     w.basin_blueox,
     w.operator,
     w.ll_ft,
+    -- for the hover: landing TVD in whole feet (keeps the MVT value pool small) and the
+    -- nightly reconciliation status (NULL = not judged yet / PDP; MVT then omits it)
+    round(w.tvd)::int AS tvd,
+    w.recon_status,
     {tile_columns("w", econ_metrics)},
     ST_AsMVTGeom(
       ST_Transform({geom_expr}, 3857),
@@ -150,47 +154,6 @@ def tile(
         headers["Content-Encoding"] = "gzip"
         return Response(content=gz, media_type=MVT_CONTENT_TYPE, headers=headers)
     return Response(content=gzip.decompress(gz), media_type=MVT_CONTENT_TYPE, headers=headers)
-
-
-@router.get("/box/{z}/{x}/{y}.mvt")
-def box_stick_tile(
-    request: Request,
-    z: int = Path(ge=0, le=22),
-    x: int = Path(ge=0),
-    y: int = Path(ge=0),
-    basin: str = Query(..., pattern="^(delaware|midland)$"),
-    session: Session = Depends(get_session),
-) -> Response:
-    """BOX sticks PREVIEW (app.box_locations, phase 5e): the basin's record stick set as one
-    line layer `box_sticks`, geometry + landing + nightly status, no forecast and no econ.
-    Below BOX_STICK_MIN_Z the answer is an empty tile and no query runs. Shares the tile
-    cache under its own key namespace; never prewarmed."""
-    if x >= (1 << z) or y >= (1 << z):
-        raise HTTPException(status_code=400, detail="tile coords out of range for z")
-    headers = {"Cache-Control": "public, max-age=60", "Vary": "Accept-Encoding"}
-    if z < BOX_STICK_MIN_Z:
-        return Response(status_code=204, headers=headers)
-    set_id = record_set_id(session, basin)
-    if set_id is None:
-        return Response(status_code=204, headers=headers)
-    gz, hit = _cache.get_or_build(
-        box_stick_tile_key(basin, z, x, y, set_id),
-        lambda: _fetch_tile(session, box_stick_tile_sql(), {"z": z, "x": x, "y": y, "basin": basin}),
-    )
-    headers["X-Tile-Cache"] = "hit" if hit else "miss"
-    if not gz:
-        return Response(status_code=204, headers=headers)
-    if "gzip" in request.headers.get("accept-encoding", "").lower():
-        headers["Content-Encoding"] = "gzip"
-        return Response(content=gz, media_type=MVT_CONTENT_TYPE, headers=headers)
-    return Response(content=gzip.decompress(gz), media_type=MVT_CONTENT_TYPE, headers=headers)
-
-
-def box_stick_tile_key(basin: str, z: int, x: int, y: int, set_id: int) -> tuple:
-    """Cache key of a BOX stick tile. The leading literal keeps it apart from _tile_key's
-    tuples (those start with the basin name); the record set id makes a record flip miss.
-    The nightly status ages out by the cache TTL, like the warehouse rows of every tile."""
-    return ("box_sticks", basin, z, x, y, set_id)
 
 
 # --- tile bytes, cache key, prewarm -------------------------------------------------

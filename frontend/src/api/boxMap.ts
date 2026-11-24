@@ -31,12 +31,17 @@ export type Tier = "validated" | "provisional";
 export const TIER_OF_COVERAGE: Record<string, Tier> = { covered: "validated", covered_provisional: "provisional" };
 export const FORECAST_COVERAGE = ["covered", "covered_provisional"];
 
-// Novi supplies only the stick geometry; its own PUD / RES and tier tags are not used
-// (Michael, 2026-10-21). A stick with no row in the BOX record run is classed by our facts:
-// realized (our reconciliation), on a BOX bench but never screened by the run, or on a
-// bench BOX does not cover (backend box_locations.map_coverage_sql / coverage_sql).
+// A location is a BOX stick (the record BOX stick set, since the BOX sticks cutover). A stick
+// with no row in the BOX record run is classed by our facts: on a BOX bench but never screened
+// by the run, or on a bench BOX does not cover (backend box_locations.map_coverage_sql). A
+// stick the nightly reconciliation calls conflict or crowded is not drillable: the run stores
+// it as not_covered_conflict.
 export const NOT_SCREENED = "not_screened";
 export const MAP_COVERAGE_LABELS: Record<string, string> = COVERAGE_LABELS;
+// The nightly reconciliation's word on a BOX stick (tile property `recon_status`; absent = not
+// judged yet). A producing stick is not on the map at all. Mirrors backend BOX_STICK_STATUSES.
+export const BOX_STICK_STATUSES = ["open", "permitted", "pending", "conflict", "crowded"];
+export const BOX_STICK_OUT = ["conflict", "crowded"]; // not drillable -> coverage not_covered_conflict
 export const MAP_COVERAGE_ORDER = [
   "covered", "covered_provisional",
   "not_covered_no_precedent", "not_covered_no_analogs", "not_covered_outside_extent",
@@ -55,7 +60,7 @@ export const COVERAGE_COLORS: Record<string, string> = {
   not_covered_emerging: "#94a3b8",
   not_covered_wcxy: "#cbd5e1",
   not_covered_unvalidated: "#cbd5e1",
-  not_covered_conflict: "#fca5a5", // D145: reconciliation conflict, not drillable
+  not_covered_conflict: "#fca5a5", // D145: conflict or crowded per the nightly reconciliation, not drillable
   bench_not_in_box: "#d4d4d8",
   realized: "#e7e5e4",
   [NOT_SCREENED]: "#e4e4e7",

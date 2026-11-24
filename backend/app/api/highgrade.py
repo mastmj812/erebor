@@ -2,17 +2,22 @@
 
 The inverse of /select's AOI rollup. The user filters the remaining locations by bench,
 BOX value ranges, Steven's econ ranges and the PDP-proximity outcome, aggregates ONE
-metric per pad (Novi's 2026Q3 DSU polygons, curated.intel_pad_geom v3), and the pads are
-colored low -> high so the best units matching the screen stand out.
+metric per pad (the Novi DSU polygons the record BOX stick set was generated in), and the
+pads are colored low -> high so the best units matching the screen stand out.
 
-Overhaul step 5 (docs/overhaul_plan.md): BOX-only. Novi supplies the stick geometry and
-the pad polygons, nothing else (Michael, 2026-10-21) — no Novi tag (PUD / RES, tiers),
-no Novi forecast, no Novi NPV is read here.
+Overhaul step 5 (docs/overhaul_plan.md): BOX-only. Since the BOX sticks cutover the
+locations are BOX sticks; Novi supplies the DSU polygons, nothing else — no Novi stick,
+tag (PUD / RES, tiers), forecast or NPV is read here.
 
-  * Population = every Novi stick location in the basin (curated.erebor_locations,
-    category <> 'PDP' — Novi's PUD / RES split is not used) that OUR reconciliation did
-    not match to production (recon_status realized_drift / realized_phantom drop out;
-    sql/68 reconciles every stick, D117).
+  * Population = every BOX stick location in the basin (curated.erebor_locations,
+    category <> 'PDP'). A stick the nightly reconciliation matched to production is not
+    a row there; the realized_drift / realized_phantom exclusion is kept from the Novi
+    sticks and matches nothing on BOX sticks. A conflict / crowded stick stays in the
+    screen under its class (not_covered_conflict), never valued.
+  * Pad = the stick's own DSU: curated.erebor_locations.pad_id (pad_key = its text), drawn
+    from raw_novi_intel.pads at the record stick set's vintage
+    (app.box_locations.dsu_polygons_sql). curated.intel_pad_member / intel_pad_geom knew
+    only DSUs that held a Novi stick and are not read any more.
   * Values = the BOX record run (box.forecast_run.is_record) through app.box_locations:
     analog-workup EUR (D57/D62, uptime-free, raw 50-yr technical integral, the
     proximity factor (D113 table / D150 continuous) already inside the stored oil EUR;
@@ -45,8 +50,9 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.box_locations import (
-    ECON_METRICS, EUR_STREAMS, FORECAST_IN_SQL, MAP_COVERAGE_CLASSES, PROX_GROUPS, box_joins, econ_case, econ_join,
-    econ_provenance, kind_sql, map_coverage_sql, record_run,
+    ECON_METRICS, EUR_STREAMS, FORECAST_IN_SQL, LEG_COLUMNS, MAP_COVERAGE_CLASSES, PROX_GROUPS, box_joins,
+    dsu_polygons_sql, econ_case, econ_join, econ_provenance, kind_sql, leg_join, line_columns, map_coverage_sql,
+    record_run,
 )
 from app.db import get_session
 
@@ -80,7 +86,9 @@ def _canonical_axis(perp: tuple[float, float]) -> tuple[tuple[float, float], str
 # population, metrics, whitelists
 # ---------------------------------------------------------------------------
 # `el` aliases curated.erebor_locations in every query below. PDP rows are producing
-# context (rule 8), never screened; realized = OUR reconciliation (sql/20 + sql/68).
+# context (rule 8), never screened. The realized_* statuses were the Novi sticks'
+# reconciliation (sql/20 + sql/68); a BOX stick matched to production is not a row at all,
+# so those two tests are a no-op kept for a pre-cutover warehouse.
 POPULATION = (
     "el.basin = :basin AND el.category <> 'PDP' "
     "AND el.recon_status IS DISTINCT FROM 'realized_drift' "
@@ -356,30 +364,33 @@ def pads_sql(metric: str, agg: str, filt_sql: str, econ: bool) -> str:
     )
     return f"""
         WITH agg AS (
-            -- per SPATIAL pad (pad_key, sql/67): Novi's DSU polygon when the stick lies in
-            -- its named polygon, else a [k/n] stick-hull split of a reused name. A stick
-            -- with no pad_name / geometry has no member row -> pad_key NULL -> wells_without_pad.
-            SELECT pm.pad_key,
+            -- per DSU: the Novi DSU the BOX stick was generated in (el.pad_id; pad_key = its
+            -- text). A row without one -> pad_key NULL -> wells_without_pad.
+            SELECT el.pad_id::text AS pad_key, max(el.pad_name) AS stick_pad_name,
                    {v_expr}   AS value,
                    {n_valued} AS n_valued,
                    count(*)   AS n_wells
                    {cov_cols}
             {_box_from(econ)}
-            LEFT JOIN curated.intel_pad_member pm ON pm.stick_id = el.stick_id
             WHERE {POPULATION} {filt_sql}
-            GROUP BY pm.pad_key
+            GROUP BY el.pad_id
         ),
+        -- the DSU polygons of the basin's record stick set (raw_novi_intel.pads at its vintage)
+        dsu AS ({dsu_polygons_sql()}),
         joined AS (
-            SELECT a.pad_key, p.pad_name, p.n_parts, p.geom_source, {final_value} AS value,
+            -- one polygon per DSU, always Novi's own: n_parts / geom_source are constants kept
+            -- for the response shape (the [k/n] splits and stick hulls of sql/67 are gone)
+            SELECT a.pad_key, COALESCE(p.pad_name, a.stick_pad_name) AS pad_name, 1 AS n_parts,
+                   'novi_polygon'::text AS geom_source, {final_value} AS value,
                    a.n_valued, a.n_wells, p.acres, p.geom {sel}
             FROM agg a
-            LEFT JOIN curated.intel_pad_geom p ON p.basin = :basin AND p.pad_key = a.pad_key
+            LEFT JOIN dsu p ON p.pad_id::text = a.pad_key
             WHERE a.pad_key IS NOT NULL
         )
         SELECT json_build_object(
             'pad_count',         count(*) FILTER (WHERE geom IS NOT NULL),
             'pads_missing_geom', count(*) FILTER (WHERE geom IS NULL),
-            -- Novi pad names drawn as >1 polygon (same-name strays, sql/67)
+            -- always 0 since the BOX sticks cutover (one Novi polygon per DSU); kept for the shape
             'names_split',       count(DISTINCT pad_name) FILTER (WHERE n_parts > 1),
             'pads_hull',         count(*) FILTER (WHERE geom IS NOT NULL AND geom_source = 'stick_hull_330ft'),
             'well_count',        COALESCE(sum(n_wells), 0),
@@ -450,7 +461,7 @@ def pads(body: PadsBody, session: Session = Depends(get_session)) -> dict:
 # ---------------------------------------------------------------------------
 class GunbarrelBody(BaseModel):
     basin: Literal["delaware", "midland"]
-    pad_key: str  # curated.intel_pad_geom (basin, pad_key) — sql/67
+    pad_key: str  # the DSU: curated.erebor_locations.pad_id (= raw_novi_intel.pads.pad_id) as text
     filters: HighgradeFilters = Field(default_factory=HighgradeFilters)
     metric: Metric = "oil_eur_per_kft"
     deck: str | None = Field(None, max_length=64)
@@ -458,38 +469,39 @@ class GunbarrelBody(BaseModel):
 
 def gb_columns(metric_expr: str, in_filter: str, box: bool) -> list[str]:
     """Select list shared by both gunbarrel arms (UNION ALL: same columns, same order).
-    The PDP arm carries NULL BOX values — producing context, never forecast (rule 8)."""
+    The PDP arm carries NULL BOX values — producing context, never forecast (rule 8).
+    The location arm is one row per LEG of a BOX stick (box_locations.leg_join: a U-turn
+    stick has two); a producing well is its own one leg."""
     eur_ft = (f"round((bs{s[0]}.eur_per_kft / 1000.0)::numeric, 1)::float8" if box else "NULL::float8" for s in EUR_STREAMS)
     return ([
         "el.stick_id", "el.unique_id",
         f"{kind_sql('el')} AS category" if box else "'PDP' AS category",
         "UPPER(el.formation) AS formation", "el.formation_blueox", "el.basin AS basin_blueox",
-        "el.formation_blueox_source", "el.tvd", "el.ll_ft",
+        "el.formation_blueox_source", "el.tvd", "el.ll_ft", "el.pad_name",
         f"{in_filter} AS in_filter",
         f"{metric_expr} AS metric_value",
         f"{map_coverage_sql('el')} AS coverage" if box else "NULL::text AS coverage",
         *(f"{e} AS {s}_eur_ft" for e, s in zip(eur_ft, EUR_STREAMS)),
         "bpp.outcome AS prox_outcome" if box else "NULL::text AS prox_outcome",
-        "ST_X(ST_LineInterpolatePoint(el.wellstick_geom, 0.5)) AS mx",
-        "ST_Y(ST_LineInterpolatePoint(el.wellstick_geom, 0.5)) AS my",
-        "ST_X(ST_StartPoint(el.wellstick_geom)) AS sx", "ST_Y(ST_StartPoint(el.wellstick_geom)) AS sy",
-        "ST_X(ST_EndPoint(el.wellstick_geom)) AS ex", "ST_Y(ST_EndPoint(el.wellstick_geom)) AS ey",
+        LEG_COLUMNS if box else "1 AS leg_no, 1 AS n_legs, " + line_columns("el.wellstick_geom"),
     ])
 
 
 def gunbarrel_sql(metric: str, where: list[str], econ: bool) -> str:
-    """Two arms. Locations: the screened population in the pad (pad membership), each
-    tagged in_filter = passes the current screen. PDP: producing horizontals whose lateral
-    midpoint lies in the pad polygon (PDP has no pad membership) — always muted context."""
+    """Two arms. Locations: the screened population in the DSU (el.pad_id), one row per
+    leg, each tagged in_filter = passes the current screen. PDP: producing horizontals whose
+    lateral midpoint lies in the DSU polygon (PDP has no pad_id) — always muted context;
+    without a polygon for the DSU that arm is empty."""
     in_filter = "(" + " AND ".join(where) + ")" if where else "true"
     return f"""
         WITH pad AS (
-            SELECT geom FROM curated.intel_pad_geom WHERE basin = :basin AND pad_key = :pad_key
+            SELECT d.geom FROM ({dsu_polygons_sql()}) d WHERE d.pad_id::text = :pad_key
         )
         SELECT {', '.join(gb_columns(row_value_sql(metric), in_filter, True))}
         {_box_from(econ)}
-        JOIN curated.intel_pad_member pm ON pm.stick_id = el.stick_id AND pm.pad_key = :pad_key
-        WHERE {POPULATION} AND el.wellstick_geom IS NOT NULL AND el.tvd IS NOT NULL
+        {leg_join('el')}
+        WHERE {POPULATION} AND el.pad_id::text = :pad_key
+          AND el.wellstick_geom IS NOT NULL AND el.tvd IS NOT NULL
 
         UNION ALL
 
@@ -509,8 +521,9 @@ def _f(v: Any) -> float | None:
 @router.post("/gunbarrel")
 def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> dict:
     """Gunbarrel cross-section for ONE DSU: every screened location + PDP in the unit,
-    projecting each lateral's midpoint onto the axis perpendicular to the pad's mean
-    azimuth (offset, ft) paired with TVD — same math as /api/gunbarrel. Nothing is hidden:
+    projecting each leg's midpoint onto the axis perpendicular to the pad's (axial) mean
+    azimuth (offset, ft) paired with TVD — same math as /api/gunbarrel, one point per leg
+    of a U-turn stick. Nothing is hidden:
     each location carries `in_filter` (passes the current Highgrade screen) and
     `metric_value` (the screen metric; NULL = no BOX forecast / unpriced, never zero)."""
     run = record_run(session, body.basin)
@@ -525,7 +538,7 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
         sql = sql.bindparams(*expanding)
     ws = session.execute(sql, params).mappings().all()
     if not ws:
-        return {"pad_name": body.pad_key, "well_count": 0, "wells": []}
+        return {"pad_name": body.pad_key, "well_count": 0, "stick_count": 0, "wells": []}
 
     lat0 = sum(w["my"] for w in ws) / len(ws)
     lon0 = sum(w["mx"] for w in ws) / len(ws)
@@ -534,14 +547,22 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
     def to_m(lon, lat):
         return ((lon - lon0) * M_PER_DEG_LON * k, (lat - lat0) * M_PER_DEG_LAT)
 
-    # Pad mean lateral direction (sum of heel->toe vectors) -> perpendicular axis.
+    # Pad mean lateral direction -> perpendicular axis. AXIAL sum: the two legs of a U-turn
+    # stick run opposite ways (and producers are drilled both ways), so each heel->toe vector
+    # is turned to agree with the first before summing — opposite vectors would cancel.
     dx = dy = 0.0
     mids = []
+    ref = None
     for w in ws:
         sxm, sym = to_m(w["sx"], w["sy"])
         exm, eym = to_m(w["ex"], w["ey"])
-        dx += exm - sxm
-        dy += eym - sym
+        vx, vy = exm - sxm, eym - sym
+        if ref is None:
+            ref = (vx, vy)
+        elif vx * ref[0] + vy * ref[1] < 0:
+            vx, vy = -vx, -vy
+        dx += vx
+        dy += vy
         mids.append(to_m(w["mx"], w["my"]))
     norm = math.hypot(dx, dy)
     perp = (1.0, 0.0) if norm < 1e-9 else (-(dy / norm), dx / norm)
@@ -559,15 +580,20 @@ def gunbarrel(body: GunbarrelBody, session: Session = Depends(get_session)) -> d
             "basin_blueox": w["basin_blueox"],
             "formation_blueox_source": w["formation_blueox_source"],
             "tvd": float(w["tvd"]), "ll_ft": _f(w["ll_ft"]),
+            "leg_no": int(w["leg_no"]), "n_legs": int(w["n_legs"]),
             "offset_ft": round(offset_ft, 1), "in_filter": bool(w["in_filter"]),
             "metric_value": _f(w["metric_value"]),
             "coverage": w["coverage"],
             **{f"{s}_eur_ft": _f(w[f"{s}_eur_ft"]) for s in EUR_STREAMS},
             "prox_outcome": w["prox_outcome"],
         })
-    wells.sort(key=lambda x: x["offset_ft"])
+    wells.sort(key=lambda x: (x["offset_ft"], x["stick_id"], x["leg_no"]))
+    # the DSU's name from its sticks (a producing well carries none); the key when it has none
+    name = next((w["pad_name"] for w in ws if w["pad_name"]), None) or body.pad_key
     return {
-        "pad_name": body.pad_key, "well_count": len(wells),
+        # well_count = points (one per leg); stick_count = distinct sticks / wells
+        "pad_name": name, "pad_key": body.pad_key, "well_count": len(wells),
+        "stick_count": len({w["stick_id"] for w in wells}),
         "axis_left": axis_left, "axis_right": axis_right,
         "wells": wells,
     }

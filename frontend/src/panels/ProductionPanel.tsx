@@ -115,7 +115,10 @@ export function ProductionView(_props: { width?: number; height?: number }) {
   const box = overlay?.box ?? null;
   const boxCovered = box != null && isForecastClass(box.coverage); // validated or provisional tier (D105)
   const boxProv = box?.coverage === "covered_provisional";
-  const src: WellSource = boxCovered ? wellSource : "novi";
+  // A BOX stick has no Novi comparison curve (Novi forecasts its own sticks, by Novi name): the
+  // BOX forecast is drawn alone and the Novi / BOX / both toggle is not offered.
+  const noNovi = overlay?.has_forecast === false;
+  const src: WellSource = boxCovered ? (noNovi ? "box" : wellSource) : "novi";
   const boxStream = box?.streams[phase]; // water since sql/62 (its own tier: box.water_tier)
   const boxWaterProv = phase === "water" && box?.water_tier === "provisional";
   if (overlay && src !== "novi" && boxStream) {
@@ -124,7 +127,7 @@ export function ProductionView(_props: { width?: number; height?: number }) {
       ? { label, color: "#2563eb", xs: yrs(boxStream.rate_day), ys: boxStream.rate, width: 2 }
       : { label, color: "#2563eb", xs: yrs(boxStream.cum_day), ys: boxStream.cum, width: 2 });
   }
-  if (overlay && src !== "box") {
+  if (overlay && src !== "box" && !noNovi) {
     const fcDays = overlay.forecast.ip_day, fcVals = overlay.forecast[phase];
     const tDays = overlay.arps_tail.ip_day, tVals = overlay.arps_tail[phase];
     if (mode === "rate") {
@@ -151,7 +154,7 @@ export function ProductionView(_props: { width?: number; height?: number }) {
           Production —{" "}
           {prod ? `AOI: BOX run ${prod.box_run.run_id} ${agg === "avg" ? "mean per 1,000 ft" : "field total"}` : ""}
           {prod && overlay ? " · " : ""}
-          {overlay ? `well: ${src === "novi" ? "Novi" : src === "box" ? "BOX" : "BOX vs Novi"}` : ""}
+          {overlay ? `well: ${noNovi && !boxCovered ? "no forecast" : src === "novi" ? "Novi" : src === "box" ? "BOX" : "BOX vs Novi"}` : ""}
         </strong>
         <div className="seg sm">
           {PHASES.map((p) => (
@@ -170,7 +173,7 @@ export function ProductionView(_props: { width?: number; height?: number }) {
         {prod && (stale || screenStale) && (
           <button className="link" onClick={() => void load()}>↻ {stale ? "culls" : "screen"} changed — reload</button>
         )}
-        {overlay && boxCovered && (
+        {overlay && boxCovered && !noNovi && (
           <div className="seg sm">
             {(["novi", "box", "both"] as WellSource[]).map((s) => (
               <button key={s} className={src === s ? "active" : ""}
@@ -181,7 +184,7 @@ export function ProductionView(_props: { width?: number; height?: number }) {
         {overlay && (
           <span className="well-tag">
             ● {overlay.name}
-            {overlay.has_forecast === false ? " (PDP — no Novi forecast)" : ""}
+            {noNovi ? (box ? " (BOX stick — no Novi curve)" : " (PDP — no Novi forecast)") : ""}
             {box && !boxCovered ? ` · BOX: not covered (${COVERAGE_LABELS[box.coverage] ?? box.coverage})` : ""}
             {boxCovered && src !== "novi" && box.eur_per_kft.oil != null
               ? ` · BOX oil ${Math.round(box.eur_per_kft.oil).toLocaleString()} bbl/kft` : ""}
@@ -203,7 +206,7 @@ export function ProductionView(_props: { width?: number; height?: number }) {
                     ? <span className="box-prov-badge">WATER PROVISIONAL</span>
                     : <span>Water tier: validated (WCA / BS2_S holdout, D110).</span>}</>
               : "This BOX run carries no water.")
-            : `BOX = analog cohort P50 × walk-forward haircut, uptime-free (apply F(k) or a downtime factor, never both); production through ${box.data_through}. Novi = Novi's own forecast.`}
+            : `BOX = analog cohort P50 × walk-forward haircut, uptime-free (apply F(k) or a downtime factor, never both); production through ${box.data_through}. ${noNovi ? "No Novi curve: Novi forecasts its own sticks, not a BOX stick." : "Novi = Novi's own forecast."}`}
         </div>
       )}
       {prod || overlay ? (
@@ -223,7 +226,7 @@ export function ProductionView(_props: { width?: number; height?: number }) {
           <button disabled={loading} onClick={() => void load()}>
             {loading ? "Loading… (a few seconds)" : "Load BOX profiles (by bench)"}
           </button>
-          <span className="count">or click a stick on the map to overlay a single well (BOX vs Novi)</span>
+          <span className="count">or click a stick on the map to overlay its BOX forecast</span>
         </div>
       )}
     </div>

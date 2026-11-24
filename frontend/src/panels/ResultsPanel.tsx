@@ -17,7 +17,7 @@ import { useMapStore, type SelectionStick } from "../store";
 // locations (validated / PROVISIONAL), EUR totals, lateral-weighted EUR per ft, and
 // Steven's econ for the chosen deck — summed (PV, capex) or as a median (IRR, breakeven),
 // display only (D13): erebor computes no economics. Locations without a BOX forecast are
-// counted by class, never valued. Novi supplies only geometry: no Novi tags or values here.
+// counted by class, never valued. Locations are BOX sticks: no Novi tags or values here.
 
 type BenchRow = {
   bench: string; n: number; nV: number; nP: number;

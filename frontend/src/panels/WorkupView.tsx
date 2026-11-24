@@ -69,7 +69,7 @@ export function WorkupView() {
   };
 
   if (stickId == null) {
-    return <div className="count">Click a Novi stick location on the map to see how its BOX forecast was built.</div>;
+    return <div className="count">Click a BOX stick location on the map to see how its BOX forecast was built.</div>;
   }
   if (err) return <div className="caveat">Workup failed: {err}</div>;
   if (!wk || loading) return <div className="count">Loading the BOX workup…</div>;
@@ -83,8 +83,9 @@ export function WorkupView() {
       <div className="wk-head">
         <strong>{L.unique_id}</strong>
         <span className="count" style={{ margin: 0 }}>
-          {" "}· {L.formation_blueox ?? "(unmapped)"} · {L.operator ?? "—"} · lateral {n0(L.lateral_ft ?? L.ll_ft)} ft
-          {L.tvd ? ` · TVD ${n0(L.tvd)} ft` : ""} · BOX run {wk.run.run_id} (production through {wk.run.data_through})
+          {" "}· BOX stick · {L.formation_blueox ?? "(unmapped)"}{L.operator ? ` · ${L.operator}` : ""}
+          {L.pad_name ? ` · DSU ${L.pad_name}` : ""} · lateral {n0(L.lateral_ft ?? L.ll_ft)} ft
+          {L.tvd ? ` · landing TVD ${n0(L.tvd)} ft` : ""}{L.recon_status ? ` · nightly: ${L.recon_status}` : ""} · BOX run {wk.run.run_id} (production through {wk.run.data_through})
         </span>
         {L.tier === "provisional" && <span className="box-prov-badge">PROVISIONAL</span>}
         {L.tier === "validated" && <span className="wk-valid">validated</span>}

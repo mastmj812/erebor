@@ -2,10 +2,10 @@
 
 Overhaul plan (docs/overhaul_plan.md): every BOX attribute is read by `location_id`
 through this module (box.pud_forecast joins to its stream / proximity / econ rows on
-(run_id, location_id)). Today a BOX location IS a Novi stick, so the entry point is
-`box.pud_forecast.stick_id` (UNIQUE per run); when BOX-derived locations replace the
-Novi sticks (DSU infill), this module and the tile geometry source change, not every
-panel.
+(run_id, location_id)). A location is a BOX stick (the record BOX stick set, since the
+BOX sticks cutover; before it, a Novi stick): curated.erebor_locations.stick_id = its BOX
+location id, and the entry point stays `box.pud_forecast.stick_id` (UNIQUE per run). The
+leg / DSU fragments at the bottom of this module read the stick set itself.
 
 Shared by the Map tiles (api/tiles.py), Highgrade (api/highgrade.py) and the BOX
 workup (api/box.py) so all three class every PUD the same way:
@@ -14,7 +14,7 @@ workup (api/box.py) so all three class every PUD the same way:
     BASIN — sql/70, D130). A basin with no record of its own yet (Midland until BOX step 23)
     reads the Delaware record: none of its sticks carries a forecast there, which is what
     erebor showed before D130 (stated not-covered classes, the "not forecast yet" banner);
-  * coverage classes: box.pud_forecast's own values + derived ones for a Novi stick
+  * coverage classes: box.pud_forecast's own values + derived ones for a stick
     with no row in the record run. NOT covered is a stated class, never a zero (D2/D67);
   * the econ case: Steven's box_econ.box_pud_econ for the RECORD run only — display-only
     with provenance (D13); erebor computes no economics and never shows another run's
@@ -44,7 +44,8 @@ from sqlalchemy.orm import Session
 #                        the Midland 21a gates (pattern / spacing) land here too
 #   not_covered_conflict  (D145, sql/71) our reconciliation calls the stick a CONFLICT: not a
 #                        drillable location — no search, no forecast (a stated class, never
-#                        a zero). Only on runs stored with D145 (step 23 on)
+#                        a zero). Only on runs stored with D145 (step 23 on). On BOX sticks
+#                        the nightly's `conflict` and `crowded` statuses both land here
 #   bench_not_in_box  its bench is in no box.bench_scope pool (not part of BOX v1)
 #   not_screened      on a BOX bench, not reconciled away, yet no row in the record run:
 #                     Novi-RES sticks inside a BOX pool (D117 step 3 parked), and any
@@ -66,8 +67,8 @@ COVERAGE_CLASSES: tuple[str, ...] = (
     "bench_not_in_box",
     "realized",
 )
-# Novi supplies only the stick GEOMETRY (Michael, 2026-10-21: Novi's own tags — PUD / RES,
-# depletion tiers — are not used anywhere; classification is ours). So a Novi stick with no
+# Classification is ours (Michael, 2026-10-21: no Novi tag — PUD / RES, depletion tiers — is
+# used anywhere; since the BOX sticks cutover the sticks are ours too). So a stick with no
 # row in the record run is classed by OUR facts only: realized (our reconciliation), on a
 # BOX bench but never screened by the record run, or on a bench BOX does not cover. The Map
 # and the workup use the same classes (MAP_COVERAGE_CLASSES is kept as the tiles' name).
@@ -130,7 +131,7 @@ DEFAULT_ECON_METRIC = "pv10"
 
 
 def box_joins(a: str, bench: str = "fb.formation_blueox") -> str:
-    """BOX record-run joins onto a Novi PUD alias `a` (needs param :box_run).
+    """BOX record-run joins onto a location alias `a` (needs param :box_run).
     box.pud_forecast is UNIQUE on (run_id, stick_id) and the stream rows on
     (run_id, location_id, stream), so no join multiplies rows. `bench` = the
     expression holding the PUD's formation_blueox (the `fb` join by default)."""
@@ -161,9 +162,9 @@ def econ_join() -> str:
 
 
 def coverage_sql(a: str) -> str:  # noqa: ARG001 — alias kept for call-site symmetry
-    """Coverage class of a Novi stick row from curated.intel_locations (aliases from
-    box_joins: `bp`, `bsm`; plus `rec` reconciliation) — the pad workup's twin of
-    map_coverage_sql (same classes; this one reads reconciliation from `rec`)."""
+    """Coverage class of a row whose reconciliation comes from a `rec` join (aliases from
+    box_joins: `bp`, `bsm`) — map_coverage_sql's twin, same classes. No endpoint reads it
+    since the BOX sticks cutover (every reader is on curated.erebor_locations)."""
     return (
         "(CASE WHEN bp.coverage IS NOT NULL THEN bp.coverage "
         "WHEN rec.status IN ('realized_drift', 'realized_phantom') THEN 'realized' "
@@ -176,7 +177,7 @@ def map_coverage_sql(a: str) -> str:
     """Coverage class of a curated.erebor_locations row (`a`) for the Map tiles: NULL on
     PDP (producing context, never forecast — rule 8); otherwise BOX's own class, else
     realized (our reconciliation, sql/20), else NOT_SCREENED on a BOX bench, else
-    bench_not_in_box. Novi's PUD / RES category is deliberately not read."""
+    bench_not_in_box. Only PDP vs not-PDP is read from `category`."""
     return (
         f"(CASE WHEN {a}.category = 'PDP' THEN NULL "
         "WHEN bp.coverage IS NOT NULL THEN bp.coverage "
@@ -207,8 +208,8 @@ def tile_columns(a: str, econ_metrics: tuple[str, ...] = ()) -> str:
 
 
 def kind_sql(a: str) -> str:
-    """PDP vs a Novi stick location. Novi's own PUD / RES tag is never shipped to the
-    client (Michael 2026-10-21: only the stick geometry comes from Novi)."""
+    """PDP vs a stick location (a BOX stick since the cutover). The warehouse category
+    itself (BOX; before the cutover Novi's PUD / RES) is never shipped to the client."""
     return f"CASE WHEN {a}.category = 'PDP' THEN 'PDP' ELSE 'LOCATION' END"
 
 
@@ -327,79 +328,59 @@ def econ_case(session: Session, run_id: int, deck: str | None) -> dict[str, Any]
     return pick_econ_case(econ_cases(session, run_id), deck)
 
 
-# --- BOX sticks preview (engineering_db docs/box_sticks_plan.md, phase 5e) ------------------
-# Geometry only. The record BOX stick set of a basin (box.location_set.is_record, engineering_db
-# sql/73) with the nightly reconciliation status (curated.box_location_status, sql/74). A BOX
-# stick is NOT a location of the record forecast run: it has no forecast and no econ, and
-# nothing above this line reads it. Ids are box.location.location_id (>= 10,000,001): they
-# never collide with a Novi stick_id (about 1.5 to 1.8 million) or a PDP row (negative).
-BOX_STICK_MIN_Z = 10          # below this a tile carries the whole basin: > 1 MB for an unreadable picture
-BOX_STICK_LAYER = "box_sticks"
-BOX_STICK_STATUSES: tuple[str, ...] = ("open", "permitted", "pending", "producing", "conflict")
-
-# k = box.location_stick, s = curated.box_location_status (LEFT: a stick the nightly has not
-# judged yet carries NULL status, never a guessed one).
-_BOX_STICK_FROM = """
-  FROM box.location_stick k
-  JOIN box.location_set t ON t.set_id = k.set_id AND t.is_record AND t.basin = :basin
-  LEFT JOIN curated.box_location_status s ON s.location_id = k.location_id AND s.set_id = k.set_id"""
-_BOX_STICK_COLS = """k.location_id AS stick_id, k.well_name, k.formation_blueox, k.pad_id, k.n_legs,
-         k.target_tvd_ft, k.tvd_rung, k.tvd_err_median_ft, k.spacing_ft, k.completed_lateral_ft AS ll_ft,
-         s.status, s.crowded, s.matched_api10"""
-# The tile carries what the layer paints and the hover shows, in whole feet: a worst-case zoom-10
-# tile holds ~7,000 sticks, and names + full-precision doubles put it past 500 KiB.
-_BOX_STICK_TILE_COLS = """k.location_id AS stick_id, k.formation_blueox, k.pad_id,
-         round(k.target_tvd_ft)::int AS target_tvd_ft, k.tvd_rung, round(k.tvd_err_median_ft)::int AS tvd_err_median_ft,
-         round(k.spacing_ft)::int AS spacing_ft, round(k.completed_lateral_ft)::int AS ll_ft,
-         s.status, s.crowded, s.matched_api10"""
-# What the map draws for a stick: its producing legs plus, on a U-turn stick, the non-producing
-# turn arc between them (box.location_stick.turn_geom; NULL on a single). One feature, every part
-# a line. The tile's spatial filter stays on legs_geom (the indexed column): a tile that holds
-# only the arc of a stick, and neither leg, does not draw it.
-_BOX_STICK_DRAWN = ("CASE WHEN k.turn_geom IS NULL THEN k.legs_geom "
-                    "ELSE ST_CollectionExtract(ST_Collect(k.legs_geom, k.turn_geom), 2) END")
-_BOX_STICK_PRED = {
-    "intersects": "ST_Intersects(k.legs_geom, aoi.g)",
-    "midpoint": "ST_Intersects(k.legs_geom, aoi.g) AND ST_Contains(aoi.g, ST_LineInterpolatePoint(g.geom, 0.5))",
-}
+# --- BOX sticks ARE the locations (engineering_db docs/box_sticks_plan.md, phase 6) ----------
+# Since the cutover every non-PDP row of curated.erebor_locations is a stick of the basin's
+# record BOX stick set (box.location_set.is_record, one per basin): stick_id =
+# box.location.location_id (>= 10,000,001, positive; a PDP row stays -(api10)), wellstick_geom =
+# ONE LineString per stick (a U-turn stick: leg + turn arc + leg), recon_status = the nightly
+# reconciliation, pad_id = the Novi DSU the stick was generated in. The fragments below are the
+# two things the spine row does not carry: a stick's producing LEGS and its DSU polygon.
+BOX_STICK_STATUSES: tuple[str, ...] = ("open", "permitted", "pending", "conflict", "crowded")
 
 
-def record_set_id(session: Session, basin: str) -> int | None:
-    """set_id of `basin`'s record BOX stick set (None when none is marked), cached for _TTL_S."""
-    return _cached(("record_set_id", basin), lambda: session.execute(
-        text("SELECT set_id FROM box.location_set WHERE is_record AND basin = :b"), {"b": basin}).scalar())
+def leg_join(a: str) -> str:
+    """One row per producing LEG of a curated.erebor_locations row `a` (binds :basin).
+
+    A BOX stick's legs are box.location_stick.legs_geom of the basin's record set (a U-turn
+    stick has two, running opposite ways; the turn arc is not a leg). A PDP row, or a stick
+    with no row in the record set, falls back to its own wellstick_geom as its one leg.
+    Aliases: `k` (box.location_stick, NULL on the fallback), `t` (the record set), `g`
+    (ST_Dump: g.geom = the leg LineString, g.path[1] = its number). A row whose geometry is
+    NULL yields no leg."""
+    return (
+        "LEFT JOIN (box.location_stick k JOIN box.location_set t "
+        "ON t.set_id = k.set_id AND t.is_record AND t.basin = :basin) "
+        f"ON k.location_id = {a}.stick_id AND {a}.category <> 'PDP' "
+        f"CROSS JOIN LATERAL ST_Dump(COALESCE(k.legs_geom, ST_Multi({a}.wellstick_geom))) g"
+    )
 
 
-def box_stick_tile_sql() -> str:
-    """One MVT layer (BOX_STICK_LAYER) of the basin's record sticks: every leg, the turn arc of
-    a U-turn stick, every status (the client fades what the nightly took out).
-    Binds :z :x :y :basin."""
-    return f"""
-WITH bounds AS (SELECT ST_TileEnvelope(:z, :x, :y) AS env)
-, mvtgeom AS (
-  SELECT {_BOX_STICK_TILE_COLS},
-         NULLIF(array_to_string(k.flags, ','), '') AS flags,
-         ST_AsMVTGeom(ST_Transform({_BOX_STICK_DRAWN}, 3857), (SELECT env FROM bounds), 4096, 64, true) AS geom{_BOX_STICK_FROM}
-  -- the envelope goes to 4326, not the column to 3857: keeps the GiST index on legs_geom in play
-  WHERE ST_Intersects(k.legs_geom, ST_Transform((SELECT env FROM bounds), 4326))
-)
-SELECT ST_AsMVT(mvtgeom.*, '{BOX_STICK_LAYER}', 4096, 'geom')
-FROM mvtgeom WHERE geom IS NOT NULL
-"""
+def line_columns(geom: str) -> str:
+    """Midpoint and both ends (lon / lat) of the LineString expression `geom`: what a
+    gunbarrel projects (mx, my) and builds its frame from (sx, sy -> ex, ey)."""
+    return (
+        f"ST_X(ST_LineInterpolatePoint({geom}, 0.5)) AS mx, ST_Y(ST_LineInterpolatePoint({geom}, 0.5)) AS my, "
+        f"ST_X(ST_StartPoint({geom})) AS sx, ST_Y(ST_StartPoint({geom})) AS sy, "
+        f"ST_X(ST_EndPoint({geom})) AS ex, ST_Y(ST_EndPoint({geom})) AS ey"
+    )
 
 
-def box_stick_gunbarrel_sql(rule: str) -> str:
-    """The basin's record sticks in an AOI, ONE ROW PER LEG (a U-turn stick has two, running
-    opposite ways), with the leg's ends and midpoint for the caller's projection.
-    Binds :aoi :basin. `rule` is the selection rule of api/gunbarrel.py."""
-    return f"""
-            WITH aoi AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326) AS g)
-            SELECT {_BOX_STICK_COLS}, k.flags, g.path[1] AS leg_no,
-                   ST_X(ST_LineInterpolatePoint(g.geom, 0.5)) AS mx, ST_Y(ST_LineInterpolatePoint(g.geom, 0.5)) AS my,
-                   ST_X(ST_StartPoint(g.geom)) AS sx, ST_Y(ST_StartPoint(g.geom)) AS sy,
-                   ST_X(ST_EndPoint(g.geom))   AS ex, ST_Y(ST_EndPoint(g.geom))   AS ey{_BOX_STICK_FROM}
-            CROSS JOIN aoi
-            CROSS JOIN LATERAL ST_Dump(k.legs_geom) g
-            WHERE {_BOX_STICK_PRED[rule]}
-            ORDER BY k.location_id, g.path[1]
-        """
+# Select-list fragment over leg_join's aliases: the leg number, the stick's leg count (1 on
+# the fallback) and the leg's own midpoint / ends.
+LEG_COLUMNS = "g.path[1] AS leg_no, COALESCE(k.n_legs, 1) AS n_legs, " + line_columns("g.geom")
+
+M2_PER_ACRE = "4046.8564224"
+
+
+def dsu_polygons_sql() -> str:
+    """The Novi DSU polygons the basin's record BOX stick set was generated in (binds :basin):
+    raw_novi_intel.pads at that set's vintage (box.location_set.dsu_vintage). pad_id is the
+    key curated.erebor_locations.pad_id carries; acres from the polygon itself. A basin with
+    no record set has no rows (its sticks then have no drawn DSU, which the screen counts)."""
+    return (
+        "SELECT q.pad_id, q.pad_name, q.geom, "
+        f"ST_Area(q.geom::geography) / {M2_PER_ACRE} AS acres "
+        "FROM raw_novi_intel.pads q "
+        "JOIN box.location_set t ON t.is_record AND t.basin = :basin AND t.dsu_vintage = q.report_version "
+        "WHERE q.basin = :basin"
+    )

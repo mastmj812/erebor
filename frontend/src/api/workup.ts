@@ -48,7 +48,9 @@ export interface LocationWorkup {
   run: { run_id: number; report_version: string; data_through: string };
   location: {
     stick_id: number; unique_id: string; formation_blueox: string | null; operator: string | null; ll_ft: number | null;
-    tvd: number | null; pad_name: string | null; coverage: string; tier: "validated" | "provisional" | null;
+    tvd: number | null; pad_name: string | null; pad_id?: number | null;
+    recon_status?: string | null; // the nightly reconciliation: open / permitted / pending / conflict / crowded
+    coverage: string; tier: "validated" | "provisional" | null;
     group: string | null; location_id: number | null; lateral_ft: number | null; planned_spacing_ft: number | null;
     spacing_source: string | null; search_mode: string | null; radius_mi: number | null; radius_class: string | null;
     n_analogs: number | null; flags: string[] | null;

@@ -36,7 +36,7 @@ engine = create_engine(
     future=True,
     connect_args={
         # SSL required by hosted Postgres (Supabase).
-        "sslmode": "require",
+        "sslmode": settings.db_sslmode,
         # Disable psycopg3 prepared statements — the transaction pooler can't reuse
         # them across its multiplexed server connection.
         "prepare_threshold": None,

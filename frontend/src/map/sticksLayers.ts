@@ -22,6 +22,8 @@ import { forecastScreenExpr, type ScreenOpts } from "./screen";
 export const INTEL_SOURCE = "intel";
 export const POINTS_LAYER = "intel-points";
 export const LINES_LAYER = "intel-lines";
+export const LINES_NOBOX_LAYER = "intel-lines-nobox"; // dashed: locations without a BOX forecast
+export const STICK_LAYERS = [POINTS_LAYER, LINES_LAYER, LINES_NOBOX_LAYER];
 export const POINTS_SRC_LAYER = "intel_points";
 export const LINES_SRC_LAYER = "intel_lines";
 
@@ -35,6 +37,19 @@ const SELECTED = ["boolean", ["feature-state", "selected"], false];
 
 const IS_PDP = ["==", ["get", "category"], "PDP"];
 const IS_FORECAST = ["in", ["coalesce", ["get", "coverage"], ""], ["literal", FORECAST_COVERAGE]];
+// A location WITHOUT a BOX forecast (any not-covered class): drawn dashed (lines) / as an open
+// ring (points) in every color mode, so its darker grey never reads as a PDP well.
+const IS_NO_BOX = ["all", ["!", IS_PDP], ["!", IS_FORECAST]];
+
+// line-dasharray cannot be data-driven in maplibre 4.7, so the dashed sticks are their own
+// layer: the solid layer takes PDP + forecast locations, the dashed one the rest. Both get
+// the same stickFilter through here.
+export function splitLineFilters(f: FilterSpecification): { solid: FilterSpecification; dashed: FilterSpecification } {
+  return {
+    solid: ["all", f, ["!", IS_NO_BOX]] as unknown as FilterSpecification,
+    dashed: ["all", f, IS_NO_BOX] as unknown as FilterSpecification,
+  };
+}
 
 // The tile property a value color mode reads: `<stream>_eur_ft` or `econ_<metric>`.
 export function valueProp(mode: ColorMode, stream: EurStream, econ: EconMetric): string | null {
@@ -74,6 +89,12 @@ export function colorExpr(mode: ColorMode, opts: ColorOpts): ExpressionSpecifica
 }
 
 const colorOrSelected = colorExpr("bench", { stream: "oil", econ: "pv10", legend: null }); // initial paint; MapView swaps it
+
+// Point outline: the selection's brown rim, else the point's own color (only a no-BOX ring
+// has a stroke width, so this is what colors the ring).
+export function pointStrokeExpr(color: ExpressionSpecification): ExpressionSpecification {
+  return ["case", SELECTED, "#a16207", color] as unknown as ExpressionSpecification;
+}
 
 export interface StickFilterOpts extends ScreenOpts {
   showPdp: boolean;            // producing context
@@ -136,14 +157,34 @@ export const pointsLayer: CircleLayerSpecification = {
   "source-layer": POINTS_SRC_LAYER,
   paint: {
     "circle-color": colorOrSelected,
-    "circle-opacity": 0.85,
+    // no BOX forecast = open ring (the stroke takes the color; MapView keeps it in step)
+    "circle-opacity": ["case", SELECTED, 0.85, IS_NO_BOX, 0, 0.85] as unknown as ExpressionSpecification,
     "circle-radius": [
       "interpolate", ["linear"], ["zoom"],
       3, 1.4,
       8, 3.5,
     ],
-    "circle-stroke-color": "#a16207",
-    "circle-stroke-width": ["case", SELECTED, 1.2, 0] as unknown as ExpressionSpecification,
+    "circle-stroke-color": pointStrokeExpr(colorOrSelected),
+    "circle-stroke-width": ["case", SELECTED, 1.2, IS_NO_BOX, 1.1, 0] as unknown as ExpressionSpecification,
+  },
+};
+
+const LINE_WIDTH = [
+  "interpolate", ["linear"], ["zoom"],
+  9, ["case", SELECTED, 3.0, 1.2],
+  14, ["case", SELECTED, 4.5, 3.0],
+] as unknown as ExpressionSpecification;
+
+export const linesNoBoxLayer: LineLayerSpecification = {
+  id: LINES_NOBOX_LAYER,
+  type: "line",
+  source: INTEL_SOURCE,
+  "source-layer": LINES_SRC_LAYER,
+  paint: {
+    "line-color": colorOrSelected,
+    "line-opacity": 0.9,
+    "line-width": LINE_WIDTH,
+    "line-dasharray": [3, 2],
   },
 };
 
@@ -158,11 +199,7 @@ export const linesLayer: LineLayerSpecification = {
     // Zoom interpolation MUST be the outermost expression (MapLibre rejects a
     // zoom expression nested inside `case`); the selected-width bump goes at the
     // interpolate stops instead.
-    "line-width": [
-      "interpolate", ["linear"], ["zoom"],
-      9, ["case", SELECTED, 3.0, 1.2],
-      14, ["case", SELECTED, 4.5, 3.0],
-    ] as unknown as ExpressionSpecification,
+    "line-width": LINE_WIDTH,
   },
 };
 

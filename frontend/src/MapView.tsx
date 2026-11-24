@@ -12,12 +12,17 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import {
   INTEL_SOURCE,
   LINES_LAYER,
+  LINES_NOBOX_LAYER,
   LINES_SRC_LAYER,
   POINTS_LAYER,
   POINTS_SRC_LAYER,
+  STICK_LAYERS,
   colorExpr,
   linesLayer,
+  linesNoBoxLayer,
+  pointStrokeExpr,
   pointsLayer,
+  splitLineFilters,
   stickFilter,
   tileUrl,
 } from "./map/sticksLayers";
@@ -269,6 +274,7 @@ export function MapView() {
         promoteId: { intel_points: "stick_id", intel_lines: "stick_id" },
       });
       map.addLayer(linesLayer);
+      map.addLayer(linesNoBoxLayer);
       map.addLayer(pointsLayer);
 
       // Committed AOI (drawn) outline.
@@ -453,7 +459,7 @@ export function MapView() {
         map.getCanvas().style.cursor = "";
         popupRef.current?.remove();
       };
-      for (const id of [POINTS_LAYER, LINES_LAYER]) {
+      for (const id of STICK_LAYERS) {
         map.on("mousemove", id, onMove);
         map.on("mouseleave", id, onLeave);
       }
@@ -464,7 +470,7 @@ export function MapView() {
         const { x, y } = e.point;
         const feats = map.queryRenderedFeatures(
           [[x - 6, y - 6], [x + 6, y + 6]],
-          { layers: [POINTS_LAYER, LINES_LAYER] },
+          { layers: STICK_LAYERS },
         );
         const name = feats[0]?.properties?.unique_id as string | undefined;
         if (!name) return;
@@ -612,9 +618,10 @@ export function MapView() {
       showPdp, notCovered: notCoveredShown, tiers: tierFilter, prox: proxFilter, ranges: mapRanges,
       excludedFormations, units: unitFilter, formationFilter,
     });
-    for (const id of [POINTS_LAYER, LINES_LAYER]) {
-      if (map.getLayer(id)) map.setFilter(id, filt);
-    }
+    const { solid, dashed } = splitLineFilters(filt);
+    if (map.getLayer(POINTS_LAYER)) map.setFilter(POINTS_LAYER, filt);
+    if (map.getLayer(LINES_LAYER)) map.setFilter(LINES_LAYER, solid);
+    if (map.getLayer(LINES_NOBOX_LAYER)) map.setFilter(LINES_NOBOX_LAYER, dashed);
   }, [showPdp, notCoveredShown, tierFilter, proxFilter, mapRanges,
       excludedFormations, formationFilter, unitFilter, styleLoaded]);
 
@@ -624,8 +631,13 @@ export function MapView() {
     const map = mapRef.current;
     if (!map) return;
     const expr = colorExpr(colorMode, { stream: eurStream, econ: econMetric, legend: mapLegend });
-    if (map.getLayer(POINTS_LAYER)) map.setPaintProperty(POINTS_LAYER, "circle-color", expr);
-    if (map.getLayer(LINES_LAYER)) map.setPaintProperty(LINES_LAYER, "line-color", expr);
+    if (map.getLayer(POINTS_LAYER)) {
+      map.setPaintProperty(POINTS_LAYER, "circle-color", expr);
+      map.setPaintProperty(POINTS_LAYER, "circle-stroke-color", pointStrokeExpr(expr));
+    }
+    for (const id of [LINES_LAYER, LINES_NOBOX_LAYER]) {
+      if (map.getLayer(id)) map.setPaintProperty(id, "line-color", expr);
+    }
   }, [colorMode, eurStream, econMetric, mapLegend, styleLoaded]);
 
   // -------- overlay toggles --------
@@ -649,7 +661,7 @@ export function MapView() {
         if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
       }
     };
-    show([POINTS_LAYER, LINES_LAYER], appMode === "map");
+    show(STICK_LAYERS, appMode === "map");
     show([HG_FILL, HG_LINE], appMode === "highgrade");
     show([ACC_LINE, ACC_HIT], appMode === "accuracy" && accMapView === "wells");
     show([ACC_GRID_FILL, ACC_GRID_LINE], appMode === "accuracy" && accMapView === "grid");

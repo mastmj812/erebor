@@ -21,23 +21,29 @@ export function App() {
       <TabSwitcher />
       {appMode === "map" && (
         <>
-          <Controls />
-          <Legend />
+          <div className="left-col">
+            <Controls />
+            <Legend />
+          </div>
           <ResultsPanel />
           <BottomPanel />
         </>
       )}
       {appMode === "highgrade" && (
         <>
-          <HighgradePanel />
-          <HighgradeLegend />
+          <div className="left-col">
+            <HighgradePanel />
+            <HighgradeLegend />
+          </div>
           <HighgradeGunbarrelModal />
         </>
       )}
       {appMode === "accuracy" && (
         <>
-          <AccuracyPanel />
-          <AccuracyLegend />
+          <div className="left-col">
+            <AccuracyPanel />
+            <AccuracyLegend />
+          </div>
           <AccuracySelectionModal />
           <AccuracyWellModal />
         </>

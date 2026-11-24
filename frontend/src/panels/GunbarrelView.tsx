@@ -23,6 +23,7 @@ import { useMapStore, type GunbarrelPad, type GunbarrelWell } from "../store";
 
 const M = { l: 46, r: 10, t: 18, b: 26 };
 const MUTED_GREY = "#9ca3af";
+const MARKER_R = 5;
 
 // Shape = category: a location (a BOX stick: LOCATION; the Accuracy modals: PUD) = outline
 // circle, PDP = solid circle, RES (Accuracy modals only) = outline triangle. One marker per
@@ -33,7 +34,7 @@ function Marker({ cat, cx, cy, color, muted, onClick, onHover, onLeave }: {
   cat: string; cx: number; cy: number; color: string; muted: boolean;
   onClick?: () => void; onHover: (e: React.MouseEvent) => void; onLeave: () => void;
 }) {
-  const r = 5;
+  const r = MARKER_R;
   // Locations render hollow (colored outline, no fill); PDP is solid.
   const hollow = cat !== "PDP";
   const handlers = {
@@ -140,6 +141,12 @@ export function PadChart({ pad, exForm, isMuted, onToggle, width, height, metric
   const iw = width - M.l - M.r, ih = height - M.t - M.b;
   const sx = (o: number) => M.l + (((o - xmin) / xr) * 0.9 + 0.05) * iw;
   const sy = (t: number) => M.t + (((t - ymin) / yr) * 0.9 + 0.05) * ih; // deeper = lower
+  // U-turn sticks with BOTH legs on this chart (the AOI can hold just one leg: no tie then)
+  const byStick = new Map<number, GunbarrelWell[]>();
+  for (const w of wells) {
+    if ((w.n_legs ?? 1) > 1) byStick.set(w.stick_id, [...(byStick.get(w.stick_id) ?? []), w]);
+  }
+  const uturnLinks = [...byStick.values()].filter((legs) => legs.length === 2);
 
   return (
     <div className="gb-chart" style={{ position: "relative", width, height }}>
@@ -160,6 +167,20 @@ export function PadChart({ pad, exForm, isMuted, onToggle, width, height, metric
         {pad.axis_right && (
           <text x={width - M.r - 4} y={height - 6} textAnchor="end" fontSize="9" fill="#52525b">{pad.axis_right} →</text>
         )}
+        {uturnLinks.map(([a, b]) => {
+          // dotted tie between the two legs of one U-turn stick, stopped at the marker rims
+          // (the markers are hollow, so a line through the centre would show inside them)
+          const x1 = sx(a.offset_ft), y1 = sy(a.tvd), x2 = sx(b.offset_ft), y2 = sy(b.tvd);
+          const d = Math.hypot(x2 - x1, y2 - y1);
+          if (d <= 2 * MARKER_R) return null;
+          const ux = ((x2 - x1) / d) * MARKER_R, uy = ((y2 - y1) / d) * MARKER_R;
+          const muted = isMuted(a);
+          return (
+            <line key={`uturn-${a.stick_id}`} x1={x1 + ux} y1={y1 + uy} x2={x2 - ux} y2={y2 - uy}
+              stroke={muted ? MUTED_GREY : colorFn(a)} strokeWidth={1.4} strokeDasharray="1 3"
+              strokeLinecap="round" opacity={muted ? 0.5 : 1} pointerEvents="none" />
+          );
+        })}
         {wells.map((w) => {
           const cx = sx(w.offset_ft), cy = sy(w.tvd);
           return (
@@ -336,7 +357,7 @@ export function GunbarrelView({ width, height }: { width?: number; height?: numb
           <button style={modeBtn(colorMode === "source")} onClick={() => setColorMode("source")}>bench source</button>
         </span>
         <span className="gb-legend">
-          <span>○ BOX stick (one per leg)</span> <span>● PDP</span> <span>dashed = culled</span>
+          <span>○ BOX stick (one per leg)</span> <span>○┄○ U-turn legs</span> <span>● PDP</span> <span>dashed = culled</span>
         </span>
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 10px", padding: "4px 6px", fontSize: 10, color: "#52525b" }}>

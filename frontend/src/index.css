@@ -19,6 +19,22 @@ body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 .controls { top: 12px; left: 12px; width: 230px; }
 .legend { bottom: 12px; left: 12px; max-height: 46vh; overflow-y: auto; width: 230px; }
 
+/* Left column: the tab's control panel on top, its legend at the bottom. One flex column
+   the height of the window, so the two can never overlap on a short screen: the legend keeps
+   its own height (capped at 40% of the column) and the control panel takes the rest and
+   scrolls. The column itself lets map clicks through the gap between them. */
+.left-col {
+  position: absolute; top: 12px; bottom: 12px; left: 12px; z-index: 5;
+  display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start;
+  gap: 8px; pointer-events: none;
+}
+.left-col > .panel {
+  position: relative; inset: auto; z-index: auto; pointer-events: auto;
+  min-height: 0; overflow-y: auto;
+}
+.left-col > .panel:first-child { flex: 0 1 auto; max-height: none; }
+.left-col > .panel:last-child:not(:first-child) { flex: 0 0 auto; max-height: 40%; }
+
 .panel h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: #52525b; }
 .panel .row { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
 .panel label { cursor: pointer; user-select: none; }
@@ -33,6 +49,8 @@ body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 .legend-group { margin-bottom: 8px; }
 .legend-group > div:first-child { font-weight: 600; margin: 4px 0 2px; color: #3f3f46; }
 .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+/* a location without a BOX forecast: drawn dashed on the map, so its swatch is a dashed box */
+.swatch.dashed { background: none; border: 2px dashed; }
 .legend .item { font-size: 11.5px; line-height: 1.5; color: #3f3f46; }
 .legend .item:has(.legend-count) { display: flex; align-items: center; }
 .legend-label { flex: 1; }
@@ -89,7 +107,20 @@ body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   padding: 6px 10px; cursor: move; user-select: none;
   background: #f4f4f5; border-bottom: 1px solid #e4e4e7; border-radius: 8px 8px 0 0;
 }
-.win-title { font-size: 12px; font-weight: 600; color: #3f3f46; }
+.win-title { font-size: 12px; font-weight: 600; color: #3f3f46; flex: 1; }
+.win-head .tabs { margin-bottom: 0; }
+.win-close {
+  background: none; border: none; font-size: 20px; line-height: 1;
+  color: #71717a; cursor: pointer; padding: 0 4px;
+}
+.win-close:hover { color: #27272a; }
+/* the closed window's handle: bottom centre, brings it back as it was */
+.win-reopen {
+  position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 6;
+  background: rgba(255, 255, 255, 0.95); border: 1px solid #d4d4d8; border-radius: 6px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15); padding: 5px 12px; font-size: 12px;
+  color: #3f3f46; cursor: pointer;
+}
 .win-body { flex: 1; overflow: auto; padding: 8px 12px; }
 .prod-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
 .prod-head strong { font-size: 12px; }

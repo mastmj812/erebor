@@ -59,7 +59,21 @@ export function BottomPanel() {
     e.preventDefault();
   };
 
+  // Closing only hides the window: the selection, its rollup and the loaded charts stay. It
+  // comes back on its own when there is something new to show (a new AOI, a clicked stick, a
+  // workup), or from the handle at the bottom of the map.
+  const [closed, setClosed] = useState(false);
+  useEffect(() => { setClosed(false); }, [sel, overlay, workupStick]);
+
   if (!sel && !overlay && workupStick == null) return null;
+
+  if (closed) {
+    return (
+      <button className="win-reopen" onClick={() => setClosed(false)}>
+        ▴ Production / Gunbarrel / Workup
+      </button>
+    );
+  }
 
   return (
     <div className="floatwin" style={{ left: pos.x, top: pos.y }}>
@@ -70,6 +84,8 @@ export function BottomPanel() {
           <button className={tab === "gunbarrel" ? "active" : ""} onClick={() => setTab("gunbarrel")}>Gunbarrel</button>
           <button className={tab === "workup" ? "active" : ""} onClick={() => setTab("workup")}>Workup</button>
         </div>
+        <button className="win-close" title="Close (the selection stays)" aria-label="Close"
+          onMouseDown={(e) => e.stopPropagation()} onClick={() => setClosed(true)}>×</button>
       </div>
       <div className="win-body" ref={bodyRef}>
         {tab === "production" ? (

@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import {
   COVERAGE_COLORS,
   EUR_UNIT,
+  FORECAST_COVERAGE,
   MAP_COVERAGE_LABELS,
   MAP_COVERAGE_ORDER,
   NOT_COVERED_COLOR,
@@ -74,7 +75,9 @@ export function Legend() {
         <h3>BOX coverage (record run{boxMeta ? ` ${boxMeta.run.run_id}` : ""})</h3>
         {MAP_COVERAGE_ORDER.filter((k) => k in counts || k === "covered" || k === "covered_provisional" || k === NOT_SCREENED || k === "bench_not_in_box").map((k) => (
           <div className="item" key={k}>
-            <span className="swatch" style={{ background: COVERAGE_COLORS[k] }} />
+            {FORECAST_COVERAGE.includes(k)
+              ? <span className="swatch" style={{ background: COVERAGE_COLORS[k] }} />
+              : <span className="swatch dashed" style={{ borderColor: COVERAGE_COLORS[k] }} />}
             <span className="legend-label">{MAP_COVERAGE_LABELS[k] ?? k}</span>
             {k in counts && <span className="legend-count">{_fmt.format(counts[k])}</span>}
           </div>
@@ -82,7 +85,7 @@ export function Legend() {
         <div className="item"><span className="swatch" style={{ background: PDP_COLOR }} /><span className="legend-label">PDP (producing context)</span></div>
         <div style={{ fontSize: 11, color: "#71717a", marginTop: 4 }}>
           Counts = the basin&rsquo;s locations in BOX&rsquo;s record run (sticks BOX never screened carry no count).
-          Grey classes carry no BOX forecast — never a zero. Classes are BOX&rsquo;s and our reconciliation&rsquo;s, never Novi&rsquo;s tags.
+          Dashed classes carry no BOX forecast — never a zero. Classes are BOX&rsquo;s and our reconciliation&rsquo;s, never Novi&rsquo;s tags.
         </div>
       </div>
     );
@@ -128,7 +131,7 @@ export function Legend() {
       )}
       <div className="item" style={{ marginTop: 6 }}><span className="swatch" style={{ background: PDP_COLOR }} /><span className="legend-label">PDP (producing context)</span></div>
       {isEcon && <div className="item"><span className="swatch" style={{ background: UNPRICED_COLOR }} /><span className="legend-label">BOX forecast, not priced</span></div>}
-      <div className="item"><span className="swatch" style={{ background: NOT_COVERED_COLOR }} /><span className="legend-label">no BOX forecast (hidden unless its class is shown under &ldquo;No BOX forecast&rdquo;)</span></div>
+      <div className="item"><span className="swatch dashed" style={{ borderColor: NOT_COVERED_COLOR }} /><span className="legend-label">no BOX forecast, dashed (hidden unless its class is shown under &ldquo;No BOX forecast&rdquo;)</span></div>
       {isEcon && legend?.case && (
         <div style={{ fontSize: 11, color: "#71717a", marginTop: 4 }}>
           Steven&rsquo;s econ, display only (D13): {deckLabel(legend.case.deck_id, deckRow?.wti, deckRow?.hh)} ·

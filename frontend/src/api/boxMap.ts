@@ -56,17 +56,19 @@ export const COVERAGE_COLORS: Record<string, string> = {
   covered_provisional: "#f59e0b",
   not_covered_no_precedent: "#a78bfa",
   not_covered_no_analogs: "#f9a8d4",
-  not_covered_outside_extent: "#cbd5e1",
-  not_covered_emerging: "#94a3b8",
-  not_covered_wcxy: "#cbd5e1",
-  not_covered_unvalidated: "#cbd5e1",
-  not_covered_conflict: "#fca5a5", // D145: conflict or crowded per the nightly reconciliation, not drillable
-  bench_not_in_box: "#d4d4d8",
-  realized: "#e7e5e4",
-  [NOT_SCREENED]: "#e4e4e7",
+  not_covered_outside_extent: "#94a3b8",
+  not_covered_emerging: "#64748b",
+  not_covered_wcxy: "#94a3b8",
+  not_covered_unvalidated: "#94a3b8",
+  not_covered_conflict: "#f87171", // D145: conflict or crowded per the nightly reconciliation, not drillable
+  bench_not_in_box: "#71717a",
+  realized: "#a8a29e",
+  [NOT_SCREENED]: "#a1a1aa",
 };
 export const PDP_COLOR = "#475569";          // producing context in the BOX color modes
-export const NOT_COVERED_COLOR = "#d4d4d8";  // value modes: no BOX forecast
+// value modes: no BOX forecast. Dark enough to read on the basemap; the map draws these
+// locations DASHED (lines) / as open rings (points), which is what tells them from PDP.
+export const NOT_COVERED_COLOR = "#71717a";
 export const UNPRICED_COLOR = "#a8a29e";     // econ mode: forecast-carrying but not priced
 
 export const PROX_FILTER_GROUPS: ProxGroup[] = ["as_is", "haircut"]; // no_precedent = not covered

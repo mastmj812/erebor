@@ -137,7 +137,7 @@ export function HighgradeGunbarrelModal() {
         )}
       </div>
       <div className="hg-gb-foot">
-        ○ BOX stick (one per leg of a U-turn) &nbsp; ● PDP &nbsp; color = bench &nbsp;·&nbsp; grey/dashed = PDP or off the current screen
+        ○ BOX stick (one per leg of a U-turn, legs tied ○┄○) &nbsp; ● PDP &nbsp; color = bench &nbsp;·&nbsp; grey/dashed = PDP or off the current screen
         &nbsp;·&nbsp; BOX value blank = no BOX forecast (never zero)
         {data && data.wells.length > 0 && (
           <> &nbsp;·&nbsp; {colored} of {total} match the screen</>
